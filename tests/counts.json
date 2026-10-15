@@ -193,6 +193,9 @@
     "tr-send-after-check.mjs": {
       "assertions": 36
     },
+    "tr-yes-check.mjs": {
+      "assertions": 89
+    },
     "test-trade-cut.mjs": {
       "assertions": 1642
     },

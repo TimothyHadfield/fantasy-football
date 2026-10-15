@@ -203,12 +203,62 @@ export function slotChangeSpec({
  * The goal cell in three lines: you now → with, him now → with, and the chance
  * he says yes.
  */
-export function goalSpec({ chance = 'title chance', partner = '', mine = null, theirs = null, accept = null, href = null, hrefLabel = null } = {}) {
+export function goalSpec({ chance = 'title chance', partner = '', mine = null, theirs = null, accept = null, word = null, href = null, hrefLabel = null } = {}) {
   const line = (s) => (s && finite(s.before) && finite(s.after) ? `${pct(s.before)} → ${pct(s.after)}` : '—');
   const rows = [{ label: 'You', note: 'now → with', value: line(mine) }];
   if (theirs && finite(theirs.before)) rows.push({ label: partner || 'Him', note: 'now → with', value: line(theirs) });
-  if (finite(accept)) rows.push({ label: 'Chance he says yes', value: `${Math.round(accept * 100)}%` });
+  if (finite(accept)) rows.push({ label: 'Chance he says yes', value: yesText(word, accept) });
   return { title: chance.charAt(0).toUpperCase() + chance.slice(1), sub: partner ? `with ${partner}` : '', rows, href, hrefLabel };
+}
+
+/** "maybe (44%)" — the word the page prints, and the percentage behind it. */
+const yesText = (word, p) => (word ? `${word} (${Math.round(p * 100)}%)` : `${Math.round(p * 100)}%`);
+
+// ------------------------------------------------------- will he say yes?
+
+/**
+ * The yes-word's preview (trade audit Phase 3; Tim, 2026-10-14: "Rebuild, show
+ * words"). One manager: each part of js/accept.js's verdict with what it adds,
+ * in points a week as the deal feels to him, ADDING UP to "In all" (a
+ * "Rounding" row when the tenths do not), then the word and its percentage —
+ * the cell's own word, last. Several managers (a packing): each one's word and
+ * percentage, then the chance they all say yes.
+ *
+ * @param {Object} o
+ * @param {string} o.partner
+ * @param {Array<{partner?: string, v: {p, word, why, feel, parts}}>} o.verdicts
+ * @param {number} [o.p]     the chance they all say yes (several managers)
+ * @param {string} [o.word]  that chance as the page words it
+ */
+export function yesSpec({ partner = '', verdicts = [], p = null, word = null, href = null, hrefLabel = null } = {}) {
+  const title = 'Will he say yes?';
+  const list = (verdicts || []).filter((x) => x && x.v && finite(x.v.p));
+  if (list.length > 1 || (!list.length && finite(p))) {
+    return {
+      title: 'Will they say yes?',
+      rows: list.map((x) => ({ label: x.partner || 'He', value: yesText(x.v.word, x.v.p) })),
+      total: finite(p) ? { label: 'All of them', value: yesText(word, p) } : null,
+      foot: 'The packing happens only if every one of them says yes.',
+      href, hrefLabel,
+    };
+  }
+  if (!list.length) return { title, sub: partner, rows: [], foot: 'No estimate yet.', href, hrefLabel };
+  const v = list[0].v;
+  const parts = Array.isArray(v.parts) ? v.parts : [];
+  const rows = parts.map((x) => ({ label: x.text.charAt(0).toUpperCase() + x.text.slice(1), html: signed(x.v) }));
+  const sum = round1(parts.reduce((a, x) => a + round1(x.v), 0));
+  const feel = finite(v.feel) ? round1(v.feel) : sum;
+  if (!rows.length) rows.push({ label: 'Nothing for or against it', html: signed(0) });
+  else if (Math.abs(round1(feel - sum)) >= 0.05) rows.push({ label: 'Rounding', html: signed(round1(feel - sum)) });
+  return {
+    title, sub: partner || list[0].partner || '',
+    rows,
+    totals: [{ label: 'In all', html: signed(feel) }],
+    total: { label: 'Chance he says yes', value: yesText(v.word, v.p) },
+    foot: 'Points a week, as the deal feels to him; 0 in all is 50%.' +
+      (v.why ? ` Mostly: ${v.why}.` : ''),
+    href, hrefLabel,
+  };
 }
 
 /** The preview column's goal: yours only, and it ranks nothing. */

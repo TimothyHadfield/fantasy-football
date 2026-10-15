@@ -169,7 +169,7 @@ import { slotRows, fillSlots } from './lineup-slots.js';
 import { statCard, clearPops, wirePops, hidePop, teamWeekSpec } from './pop.js';
 import { teamHref, weekHref, readParam } from './links.js';
 import {
-  zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, altGoalSpec, oppSpec, depthSpec,
+  zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, yesSpec, altGoalSpec, oppSpec, depthSpec,
   teamSpec, recordOf, meetSpec,
 } from './trade-cards.js';
 
@@ -4312,7 +4312,10 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
     goal = `${capFirst(g.chance)} (my goal, ${GOAL_RUNS.toLocaleString('en-US')} simulated seasons): ` +
       `${pct(s.mine.before)} → ${pct(s.mine.after)} (${pctChange(s.mine.before, s.mine.after)} ±${bandText()})` +
       (fin(s.theirs.before) && fin(s.theirs.after) ? `; his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
-      (fin(s.accept) ? `; app estimates ${Math.round(s.accept * 100)}% he accepts` : '');
+      (fin(s.accept)
+        ? `; app's guess whether he accepts: ${yesWordOf(s.verdict || { p: s.accept })}` +
+          (s.verdict && s.verdict.why ? ` (${s.verdict.why})` : '')
+        : '');
   }
   let altGoal = null;
   const a = offer.altGoal;
@@ -5277,7 +5280,7 @@ function runSearch({ keepDeal = false } = {}) {
       rankBy: state.benchValue
         ? (o) => { o.benchGain = benchGainOf(o, myPlayers, benchBefore); return o.benchGain; }
         : W
-        ? (o) => { const h = hisSideOf(o, weeks); return o.goalPoints * (acceptFor(h.gain, o.send, o.receive, weeks, h.weeks) ?? 1); }
+        ? (o) => { const v = verdictOf(o, weeks); return o.goalPoints * (v ? v.p : 1); }
         : null,
       myMin: state.benchValue ? 0 : null,
       // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
@@ -5830,7 +5833,10 @@ function rosOf(p, span) {
 // code that uses it, because the import block at the top of this file is shared
 // with other work in flight (ES imports are hoisted, so where it sits changes
 // nothing).
-import { acceptVerdict, SCALE as ACCEPT_CURVE_SCALE } from './accept.js';
+import {
+  acceptVerdict, SCALE as ACCEPT_CURVE_SCALE,
+  LIKELY_AT as ACCEPT_LIKELY_AT, UNLIKELY_BELOW as ACCEPT_UNLIKELY_BELOW,
+} from './accept.js';
 
 /**
  * WHAT HE SEES, GATHERED ONCE. Everything the yes-chance reads beyond the deal's
@@ -5964,11 +5970,10 @@ function standingOf(team, memo) {
  * one deal, from HIS side: `toHim` the men he receives, `fromHim` the men he
  * gives up. The same arguments as `acceptFor`, which is this verdict's `p`.
  *
- * His lineup change is `theirGain` over the weeks he is expected to play
- * (`hisSideOf`), a week. NOT YET FLAT as the plan asks (a manager does not
- * discount his own playoff weeks): the callers hand in his reach-weighted,
- * netted gain and not his week-by-week change, and changing what they hand in
- * is outside this step.
+ * His lineup change is `theirGain` ÷ `theirWeeks`, a week. FLAT (plan Phase 3,
+ * 2026-10-15: "a manager does not discount his own playoff weeks"): callers go
+ * through `verdictOf`, which hands in `hisFlatOf` — his own lineup's change,
+ * every week of the span counted once, not reach-weighted and not netted.
  */
 function acceptVerdictFor(theirGain, toHim, fromHim, span, theirWeeks = span.length) {
   const memo = acceptInputs();
@@ -6011,6 +6016,59 @@ function acceptFor(theirGain, toHim, fromHim, span, theirWeeks = span.length) {
   const v = acceptVerdictFor(theirGain, toHim, fromHim, span, theirWeeks);
   return v ? v.p : null;
 }
+
+/**
+ * HIS LINEUP CHANGE, FLAT — what he sees on his own team: `{gain, weeks}`, his
+ * lineup's change over the span with every week counted once, and how many
+ * weeks that is. Not reach-weighted (`hisOwnSideOf`) and not netted
+ * (`hisSideOf`): those are what the deal is worth to YOUR goal, and "He gains"
+ * prints them; a manager does not discount his own playoff weeks. The finder's
+ * offer carries the figure as `theirPoints`; a combo partner as `delta`; a
+ * custom deal adds up `theirByWeek`.
+ */
+function hisFlatOf(offer, span = weeklySpan()) {
+  const by = offer && Array.isArray(offer.theirByWeek)
+    ? offer.theirByWeek.filter((w) => w && Number.isFinite(w.delta)) : [];
+  const weeks = by.length || span.length || 1;
+  if (!offer) return { gain: null, weeks };
+  if (Number.isFinite(offer.theirPoints)) return { gain: offer.theirPoints, weeks };
+  if (by.length) return { gain: Math.round(by.reduce((a, w) => a + w.delta, 0) * 10) / 10, weeks };
+  // No week-by-week figures: his gain is flat unless it was reach-weighted.
+  return { gain: Number.isFinite(offer.theirWeeks) ? null : offer.theirGain ?? null, weeks };
+}
+
+/** The yes-chance in full for one deal, on his flat lineup change (`hisFlatOf`). */
+function verdictOf(offer, span = weeklySpan()) {
+  if (!offer) return null;
+  const flat = hisFlatOf(offer, span);
+  return acceptVerdictFor(flat.gain, offer.send || [], offer.receive || [], span, flat.weeks);
+}
+
+/**
+ * THE YES-CHANCE AS WORDS (Tim, 2026-10-14: "Rebuild, show words"). `v` is an
+ * `acceptVerdict` — or, for a packing with several managers, `{p}` alone: the
+ * chance they ALL say yes, worded on the same cut-offs. The percentage and the
+ * parts are in the word's own preview (`yesSpec`, kind `yes`); `key` is what
+ * that preview is looked up by (`rowCardSpec`). Likely is green, unlikely red,
+ * on the page's own `pos` / `neg`.
+ */
+const yesWordOf = (v) => (!v || !Number.isFinite(v.p) ? null
+  : v.word || (v.p >= ACCEPT_LIKELY_AT ? 'likely' : v.p < ACCEPT_UNLIKELY_BELOW ? 'unlikely' : 'maybe'));
+
+function yesWordHtml(v, key = null) {
+  const word = yesWordOf(v);
+  if (!word) return '';
+  const cls = word === 'likely' ? 'pos' : word === 'unlikely' ? 'neg' : '';
+  return `<span class="yes-word${cls ? ` ${cls}` : ''}" data-rc="yes"${key ? ` data-key="${esc(key)}"` : ''} tabindex="0">${word}</span>`;
+}
+
+/**
+ * What each yes-word's preview shows, by the key its span carries when it is
+ * not a row's own (`cu-yes` the custom box, `deal-yes` the pop-up, `combo-yes`
+ * the packing): `{partner, verdicts: [{partner, v}], p}`. Written as each one
+ * is drawn, so the preview is always the figure on screen.
+ */
+const yesShown = new Map();
 
 /**
  * The chance `partnerId` plays in each week of `span` — 1 in the regular
@@ -6090,12 +6148,14 @@ function scoreGoal(offer, mineId, span) {
   if (!ctx.base) return null;
   const deltas = offerDeltas(offer, mineId);
   const after = simulateWith(ctx.inputs, deltas);
-  const his = hisSideOf(offer, span);
-  const accept = acceptFor(his.gain, offer.send || [], offer.receive || [], span, his.weeks);
+  const verdict = verdictOf(offer, span);
+  const accept = verdict ? verdict.p : null;
   return {
     ...scoreOffer({ base: ctx.base, after, myTeamId: mineId, partnerId: offer.partner && offer.partner.id,
       goal: state.goal, accept }),
     goal: state.goal,
+    // The yes-chance in full — its word, why and parts — for the display.
+    verdict,
     // The OTHER goal's reading off this same run, and the deltas it was run on
     // — kept so the preview column can use it when, and only when, it is
     // exactly what a run of that goal would give (`altScore`).
@@ -6165,7 +6225,9 @@ function goalCellHtml(offer) {
     return `<td class="goal-cell goal-wait" data-v="-1" data-rc="goal" data-why="${esc(why)}">${r.running ? '…' : '—'}</td>`;
   }
   const good = s.mine.gain > 0.0005 ? ' pos' : s.mine.gain < -0.0005 ? ' neg' : '';
-  const yes = Number.isFinite(s.accept) ? Math.round(s.accept * 100) : null;
+  // "yes: likely" where "62% yes" was (Tim, 2026-10-14: "show words"); the
+  // percentage, the parts and the why are in the word's own preview.
+  const yes = Number.isFinite(s.accept) ? yesWordHtml(s.verdict || { p: s.accept }) : '';
   // THE RANK, AND THE EQUALS SIGN. A tie group's rows all print the group's
   // number with an "=" after it, which is how a results table has said "level"
   // for a century, and they keep the strict order the comparator gave them.
@@ -6181,7 +6243,7 @@ function goalCellHtml(offer) {
     `<td class="goal-cell${good}" data-v="${s.value}" data-rc="goal">` +
     `${place}${pctChange(s.mine.before, s.mine.after)}<span class="band"> ±${bandText()}</span>` +
     `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
-    (yes === null ? '' : ` · ${yes}% yes`) +
+    (yes ? ` · yes: ${yes}` : '') +
     `</span></td>`
   );
 }
@@ -6887,6 +6949,18 @@ function goalFor(offer) {
   return null;
 }
 
+/**
+ * " · he says yes: maybe — he loses 2 a week": the word and its one-line why,
+ * where "44% he says yes" was (the pop-up and the custom box, which have the
+ * room a row does not). Records what the word's preview shows under `key`.
+ */
+function yesLineHtml(s, offer, key, lead = ' · he says yes: ') {
+  if (!s || !Number.isFinite(s.accept)) { yesShown.delete(key); return ''; }
+  const v = s.verdict || { p: s.accept };
+  yesShown.set(key, { partner: offer && offer.partner ? offer.partner.name : '', verdicts: [{ v }] });
+  return `${lead}${yesWordHtml(v, key)}` + (v.why ? ` — ${esc(v.why)}` : '');
+}
+
 function dealGoalHtml(offer) {
   const s = goalFor(offer);
   if (!s || !Number.isFinite(s.mine.gain)) return '';
@@ -6901,7 +6975,7 @@ function dealGoalHtml(offer) {
     `<span class="band"> ±${bandText()}</span> ` +
     `<span class="sub-inline">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
     (Number.isFinite(s.theirs.before) ? ` · his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
-    (Number.isFinite(s.accept) ? ` · ${Math.round(s.accept * 100)}% he says yes` : '') +
+    yesLineHtml(s, offer, 'deal-yes') +
     `</span>` +
     // The goal you are not on, as the table's preview column gives it.
     altInlineHtml(offer.altGoal !== undefined && offer.altGoal !== null && !offer.custom
@@ -7936,17 +8010,22 @@ function comboGoal(entry) {
   };
   put(me, entry.pricing.byWeek);
   let accept = 1;
+  const verdicts = [];
   for (const p of entry.partners || []) {
     if (!p.partner) continue;
     put(p.partner.id, p.byWeek);
     const deals = entry.combo.filter((o) => o.partner && o.partner.id === p.partner.id);
-    const his = hisSideOf({ partner: p.partner, theirGain: p.delta, theirByWeek: p.byWeek }, span);
-    const a = acceptFor(his.gain, deals.flatMap((o) => o.send), deals.flatMap((o) => o.receive), span, his.weeks);
-    if (Number.isFinite(a)) accept *= a;
+    // His lineup change FLAT (`hisFlatOf`): `p.delta` is his own, unweighted.
+    const v = verdictOf({
+      partner: p.partner, theirPoints: p.delta, theirByWeek: p.byWeek,
+      send: deals.flatMap((o) => o.send), receive: deals.flatMap((o) => o.receive),
+    }, span);
+    if (v && Number.isFinite(v.p)) { accept *= v.p; verdicts.push({ partner: p.partner.name, v }); }
   }
   const after = simulateWith(ctx.inputs, deltas);
   const out = scoreOffer({ base: ctx.base, after, myTeamId: me, partnerId: null, goal: state.goal, accept });
   out.offSame = sameRunReading(ctx.base, after, me, deltas);
+  out.verdicts = verdicts;
   ctx.scores.set(key, out);
   return out;
 }
@@ -7989,9 +8068,19 @@ function comboGoalLine(entry) {
   const g = goalOf(state.goal);
   const cls = s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : '';
   const managers = new Set(entry.combo.map((o) => o.partner && o.partner.id)).size;
-  const yes = !Number.isFinite(s.accept) ? ''
-    : managers > 1 ? ` · all ${managers} managers say yes: ${Math.round(s.accept * 100)}%`
-      : ` · ${Math.round(s.accept * 100)}% yes`;
+  // The word, its parts and the % in its preview (`yesShown`, 'combo-yes').
+  // Several managers: the chance they ALL say yes, worded on the same cut-offs.
+  let yes = '';
+  const key = 'combo-yes:' + entry.combo.map((o) =>
+    `${o.partner && o.partner.id}:${o.send.map((p) => p.playerId).join('.')}>${o.receive.map((p) => p.playerId).join('.')}`).join(';');
+  if (Number.isFinite(s.accept)) {
+    const one = managers === 1 && s.verdicts && s.verdicts.length === 1 ? s.verdicts[0].v : null;
+    const v = one || { p: s.accept };
+    yesShown.set(key, { partner: '', verdicts: s.verdicts || [], p: s.accept });
+    yes = managers > 1
+      ? ` · all ${managers} managers say yes: ${yesWordHtml(v, key)}`
+      : ` · yes: ${yesWordHtml(v, key)}`;
+  }
   return (
     `<div class="combo-goal"><span class="lbl">Your ${esc(g.chance)}</span> ` +
     `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong>` +
@@ -9768,9 +9857,13 @@ function renderCustomPreviewAt(priced) {
     ? ` · <span class="${s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : ''}">` +
       `${esc(goalOf(state.goal).chance)} <strong>${pctChange(s.mine.before, s.mine.after)}</strong>` +
       `<span class="band"> ±${bandText()}</span></span> ` +
-      `(${pct(s.mine.before)} → ${pct(s.mine.after)}` +
-      (Number.isFinite(s.accept) ? `, ${Math.round(s.accept * 100)}% he says yes` : '') + `)`
+      `(${pct(s.mine.before)} → ${pct(s.mine.after)})`
     : '';
+  // WILL HE SAY YES, under his own figure (trade audit Phase 3): the word and
+  // its one-line why, where "44% he says yes" sat in the sentence below.
+  const yes = s && Number.isFinite(s.mine.gain) ? yesLineHtml(s, { partner: priced.teamB }, 'cu-yes', 'Yes: ') : '';
+  if (yes) $('cuGainB').innerHTML = customGainHtml(f.his.gain, f.hisWeek) + `<span class="cu-sub cu-yes">${yes}</span>`;
+  else yesShown.delete('cu-yes');
   el.innerHTML =
     `<strong>${esc(priced.teamA.name)}</strong> sends ${customNames(priced.sendA)} · ` +
     `<strong>${esc(priced.teamB.name)}</strong> sends ${customNames(priced.sendB)} · ` +
@@ -11356,12 +11449,26 @@ const DEAL_HASH = '#deal=';
 /** The card behind one cell of an offer row (`data-rc`), or null for none. */
 function rowCardSpec(cell) {
   const tr = cell.closest('tr[data-key]');
+  const kind = cell.getAttribute('data-rc');
+  // WILL HE SAY YES (trade audit Phase 3): the word's own preview. Off the
+  // figure drawn — a row's goal score, or what the box, the pop-up or the
+  // packing recorded as it drew its word (`yesShown`).
+  if (kind === 'yes') {
+    const own = cell.getAttribute('data-key');
+    if (own && yesShown.has(own)) {
+      const y = yesShown.get(own);
+      return yesSpec({ ...y, word: yesWordOf({ p: y.p }) });
+    }
+    const o = tr ? offerByKey(tr.getAttribute('data-key')) : null;
+    const s = o && o.goalScore && o.goalScore.goal === state.goal ? o.goalScore : null;
+    if (!s || !Number.isFinite(s.accept)) return null;
+    return yesSpec({ partner: o.partner ? o.partner.name : '', verdicts: [{ v: s.verdict || { p: s.accept } }] });
+  }
   const key = tr ? tr.getAttribute('data-key') : cell.getAttribute('data-key');
   // The box's two big figures are the row's when the deal is a row (`rowTwinOf`),
   // so their cards are that row's cards too.
   const offer = (key === 'cu-build' && rowTwinOf(state.custom)) || offerByKey(key);
   if (!offer) return null;
-  const kind = cell.getAttribute('data-rc');
   const why = cell.getAttribute('data-why') || '';
   const partner = offer.partner ? offer.partner.name : '';
   const sub = partner ? `with ${partner}` : '';
@@ -11426,7 +11533,8 @@ function rowCardSpec(cell) {
     const s = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore : null;
     if (why || !s) return { title: cap(g.chance), sub, rows: [], foot: why, ...link };
     return {
-      ...goalSpec({ chance: g.chance, partner, mine: s.mine, theirs: s.theirs, accept: s.accept }),
+      ...goalSpec({ chance: g.chance, partner, mine: s.mine, theirs: s.theirs, accept: s.accept,
+        word: yesWordOf(s.verdict || { p: s.accept }) }),
       foot: offer.goalLevel
         ? `Level with ${plural(offer.goalTieSize - 1, 'other offer')}: too close to rank apart.` : '',
       ...link,
@@ -11481,6 +11589,8 @@ function wireAllTeamCards() {
 /** Every preview on the page, wired once at boot: the containers outlive their repaints. */
 function wirePreviews() {
   for (const id of ['tradeTable', 'comboPanel', 'customPanel', 'assumedPanel']) wireRowCards($(id));
+  // The pop-up's yes-word (`yesLineHtml`, key 'deal-yes') — its only `data-rc`.
+  if ($('dealBody')) wirePops($('dealBody'), { selector: '[data-rc="yes"]', card: rowCardSpec });
   wireAllTeamCards();
   for (const id of ['depthTable', 'depthBars']) if ($(id)) wirePops($(id));
   if ($('depthBars')) wireTips($('depthBars'));
