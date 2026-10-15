@@ -1188,7 +1188,7 @@ function* findTradesSteps({
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
   meetWeeks = null, exhaustive = false, myMin = null,
   partnerId = null, mustSend = null, mustReceive = null, complete = false,
-  distinct = false, skip = null,
+  distinct = false, skip = null, barred = null,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -1249,7 +1249,11 @@ function* findTradesSteps({
     }
   }
   if (complete && weekly) {
-    const picked = pickCompletions(offers.slice().sort(compareOffers), gates);
+    // `barred`: completions the page will not suggest at all (Tim, 2026-10-15:
+    // a Total below -5, a Value gap over 5, undoing a trade made), left out
+    // BEFORE the picking so the list's minimum is made of ones it can show.
+    const pool = typeof barred === 'function' ? offers.filter((o) => !barred(o)) : offers;
+    const picked = pickCompletions(pool.slice().sort(compareOffers), gates);
     for (const o of picked) { finishOffer(o); yield; }
     for (const o of offers) delete o.finish;
     return { offers: picked, mine, considered, basis: 'weeks' };

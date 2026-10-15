@@ -5023,7 +5023,8 @@ function loadPastTrades() {
   pastTrades.moves = null;
   pastTrades.bars = new Map();
   if (!key) return;
-  season.fetchDecisionWorld().then((world) => {
+  // Through a promise, so a read that throws at once costs only the bars.
+  Promise.resolve().then(() => season.fetchDecisionWorld()).then((world) => {
     if (pastTrades.key !== key) return;
     pastTrades.moves = (world && world.moves) || [];
     pastTrades.bars = new Map();
@@ -9445,13 +9446,14 @@ function findSuggestions() {
     mustSend: c.sendA,
     mustReceive: c.sendB,
     complete: true,
+    // The finder's rules: no Total below -5, no Value gap over 5, no undoing a
+    // trade made — applied before the list's minimum is picked.
+    barred: (o) => !totalOk(o) || !valueGapOk(o) || pastTradeBarred(o, c.a),
   });
   const ticked = c.sendA.length + c.sendB.length;
   // Nothing can be added (the ticks are at the package limits): no list.
   if (!result.offers.some((o) => o.send.length + o.receive.length > ticked)) return [];
-  // The finder's rules: no Total below -5, no Value gap over 5, no undoing a
-  // trade made.
-  const offers = result.offers.filter((o) => totalOk(o) && valueGapOk(o) && !pastTradeBarred(o, c.a));
+  const offers = result.offers;
   // Played out in the season simulation, as the finder's rows are, and put in
   // the finder's final order — only these few, so it costs a few runs.
   for (const o of offers) {
