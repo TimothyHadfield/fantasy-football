@@ -199,6 +199,9 @@
     "test-value-measure.mjs": {
       "assertions": 48
     },
+    "test-past-trades.mjs": {
+      "assertions": 11
+    },
     "test-trade-bench.mjs": {
       "assertions": 16
     },

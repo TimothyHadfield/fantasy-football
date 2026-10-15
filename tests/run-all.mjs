@@ -84,6 +84,7 @@ const SUITES = [
   ['test-trade-cut.mjs', 'the forced cut: the man whose loss costs the priced weeks least goes, so receiving never lowers a week'],
   ['test-trade-moves.mjs', 'what a trade makes a manager do: who he must drop, what he must add, and giving a kicker away is never a gain'],
   ['test-out-for-season.mjs', 'ESPN\'s own out-for-season flag: the kona_playercard decoder and the rule the Trade page bars a man by'],
+  ['test-past-trades.mjs', 'no undoing a trade already made: a man you sent a manager is not bought back from him, nor a man you got sent back'],
   ['test-trade-bench.mjs', 'the bench-value switch: a deal that leaves your lineup level is kept on request, and every offer names your forced cut'],
   ['test-trade-net.mjs', 'net gain: your change minus his in the weeks you play him, and the pruned finder keeps what an exhaustive one does'],
   ['test-trade-suggest.mjs', 'the Suggested list under the custom builder: every completion of the ticked men, against a brute force'],

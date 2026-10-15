@@ -90,6 +90,7 @@ import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
 import { movesFor } from './trade-moves.js';
+import { pastTradeBars, undoesPastTrade } from './past-trades.js';
 import { acceptBy } from './accept-by.js';
 // "Ask AI" (2026-09-30): the text a row copies for an AI chat. Pure.
 import { askAiText } from './ask-ai.js';
@@ -4977,6 +4978,55 @@ const breathe = (() => {
 /** How many rows the finder shows, and the least a suggested trade must gain YOU a week. */
 const FINDER_ROWS = 40;
 const MIN_MY_PER_WEEK = 1;
+
+/**
+ * NO TOTAL BELOW -5 (Tim, 2026-10-15: "could you also not suggest trades with a
+ * total of less than -5?"): the row's own Total (`totalOfOffer`) as printed. A
+ * deal with no Total (no Appeal to add up) is not held to it.
+ */
+const MIN_TOTAL = -5;
+function totalOk(offer) {
+  const t = totalOfOffer(offer);
+  return t === null || !Number.isFinite(t) || t >= MIN_TOTAL;
+}
+
+/**
+ * NO UNDOING A TRADE ALREADY MADE (Tim, 2026-10-15: "don't suggest trades from
+ * players that you've already traded with that user? Ex: I give away saquon
+ * Barkely, so don't suggest I buy him back from the same user, or vice
+ * versa."): js/past-trades.js, on the season's trades as the Decisions page
+ * reads them (`season.fetchDecisionWorld`, ESPN's records plus the trades the
+ * rosters show). The read starts with the first search; until it lands, or when
+ * it cannot be had (the sample league, a copy not synced), nothing is barred.
+ * When it lands and a row on show undoes a trade, the lists are searched again.
+ */
+const pastTrades = { key: null, moves: null, bars: new Map() };
+function loadPastTrades() {
+  const cfg = state.isDemo ? null : savedConfig();
+  const key = cfg ? `${cfg.leagueId}|${cfg.season}` : null;
+  if (key === pastTrades.key) return;
+  pastTrades.key = key;
+  pastTrades.moves = null;
+  pastTrades.bars = new Map();
+  if (!key) return;
+  season.fetchDecisionWorld().then((world) => {
+    if (pastTrades.key !== key) return;
+    pastTrades.moves = (world && world.moves) || [];
+    pastTrades.bars = new Map();
+    if ((state.rows || []).some((o) => pastTradeBarred(o))) runSearch({ keepDeal: true });
+    if ((cuSug.rows || []).some((o) => pastTradeBarred(o, state.custom.a))) {
+      cuSug.key = null;
+      renderCustomSuggest();
+    }
+  }).catch(() => { /* no trades read: nothing barred */ });
+}
+function pastTradeBarred(offer, teamId = state.myTeamId) {
+  if (!pastTrades.moves || !pastTrades.moves.length || !offer || offer.combined || offer.custom) return false;
+  const mine = offer.mineTeamId != null ? offer.mineTeamId : teamId;
+  if (mine == null) return false;
+  if (!pastTrades.bars.has(String(mine))) pastTrades.bars.set(String(mine), pastTradeBars(pastTrades.moves, mine));
+  return undoesPastTrade(offer, pastTrades.bars.get(String(mine)));
+}
 /** A finder offer's "You" gain a week, to the tenth it is printed at. */
 function myPerWeekShown(offer, weeks) {
   const net = netGainOf(offer);
@@ -5057,6 +5107,7 @@ function runSearch({ keepDeal = false } = {}) {
   state.goalRank.running = false;
   state.goalRank.altRunning = false;
 
+  loadPastTrades();
   if (!teams.length || state.myTeamId === null) {
     state.deal = null;
     state.search = null;
@@ -5159,7 +5210,7 @@ function runSearch({ keepDeal = false } = {}) {
     // figure the row prints as Him.
     const hisMin = W && !state.bothWin ? (o) => THEIR_MIN_PER_WEEK * hisSideOf(o, weeks || undefined).weeks : () => 0.1;
     const hisOk = (o) => { const h = hisSideOf(o, weeks || undefined); return !Number.isFinite(h.gain) || h.gain >= hisMin(o) - 0.05; };
-    result.offers = result.offers.filter((o) => hisOk(o) && (state.benchValue
+    result.offers = result.offers.filter((o) => hisOk(o) && totalOk(o) && !pastTradeBarred(o) && (state.benchValue
       ? Number.isFinite(o.benchGain) && o.benchGain >= 0.1 && myPerWeekShown(o, weeks) >= 0
       : myPerWeekShown(o, weeks) >= MIN_MY_PER_WEEK)).slice(0, FINDER_ROWS);
     // The bench gains kept, on the table, for a test (invisible; nothing reads it).
@@ -9384,7 +9435,8 @@ function findSuggestions() {
   const ticked = c.sendA.length + c.sendB.length;
   // Nothing can be added (the ticks are at the package limits): no list.
   if (!result.offers.some((o) => o.send.length + o.receive.length > ticked)) return [];
-  const offers = result.offers;
+  // The finder's two rules: no Total below -5, no undoing a trade made.
+  const offers = result.offers.filter((o) => totalOk(o) && !pastTradeBarred(o, c.a));
   // Played out in the season simulation, as the finder's rows are, and put in
   // the finder's final order — only these few, so it costs a few runs.
   for (const o of offers) {
