@@ -1495,6 +1495,72 @@
       border-radius: var(--r-4) var(--r-4) 0 0;
       box-shadow: 0 -16px 40px -12px rgba(0, 0, 0, 0.85);
     }
+
+    /* THE FINDER AS CARDS (trade audit finding 25; Tim, 2026-10-15: "whatever
+       you reccommend"). The table was 1,088px wide in a 363px box (WebKit 393, demo), so only
+       Manager and Chance showed. The SAME rows are restyled — one <tr> per
+       card, its cells wrapped — so sorting, filters, the tie "=" and the tap
+       that opens a deal are the table's own. Above 760px nothing here applies.
+       The card frame is the Schedule page's `.game`. The labels are the column
+       heads' words; the heads stay above the cards as the sort controls. */
+    #tradeWrap { overflow-x: hidden; }
+    #tradeTable, #tradeTable thead, #tradeTable tbody { display: block; }
+    #tradeTable thead tr {
+      display: flex; flex-wrap: wrap; gap: 0 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    #tradeTable thead th {
+      position: static; border: 0; padding: 6px 0; background-color: transparent;
+      box-shadow: none; max-width: none;
+    }
+    /* ESPN is a link, not a sort. */
+    #tradeTable thead th:not([data-sort]) { display: none; }
+    #tradeTable tbody tr.offer {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+      margin-top: 8px;
+      padding: 9px 12px;
+      background-color: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: var(--r-3);
+    }
+    #tradeTable tbody tr.offer.picked { border-color: var(--accent); }
+    #tradeTable tbody tr.offer > td {
+      display: block; padding: 0; border: 0; text-align: left;
+      position: static; max-width: none; box-shadow: none;
+      background-color: transparent; white-space: normal;
+    }
+    #tradeTable tbody tr.offer > td.name,
+    #tradeTable tbody tr.offer > td.split,
+    #tradeTable tbody tr.offer > td.espn { flex: 1 1 100%; }
+    #tradeTable tbody tr.offer > td.name { font-size: 14px; }
+    /* A split cell: the column's word on the left, its two halves beside it. */
+    #tradeTable tbody tr.offer > td.split {
+      display: grid; grid-template-columns: 50px minmax(0, 1fr); column-gap: 6px;
+    }
+    #tradeTable td.split > .sp { grid-column: 2; min-width: 0; }
+    #tradeTable td.split::before { grid-row: 1 / span 2; padding-top: 2px; }
+    #tradeTable td.split .hv { min-width: 0; padding-left: 0; }
+    #tradeTable td.split .pkg .man { margin-right: 8px; }
+    #tradeTable td.split::before,
+    #tradeTable td.value::before, #tradeTable td.appeal::before,
+    #tradeTable td.total::before, #tradeTable td.opp-proj::before {
+      color: var(--dim); font-size: 10.5px; font-weight: 600;
+      letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    #tradeTable td.value::before, #tradeTable td.appeal::before,
+    #tradeTable td.total::before, #tradeTable td.opp-proj::before { margin-right: 5px; }
+    #tradeTable td.chance::before { content: "Chance"; }
+    #tradeTable td.deal::before { content: "Send"; }
+    #tradeTable td.gains::before { content: "Gain"; }
+    #tradeTable td.value::before { content: "Value"; }
+    #tradeTable td.appeal::before { content: "Appeal"; }
+    #tradeTable td.total::before { content: "Total"; }
+    #tradeTable td.opp-proj::before { content: "His proj vs you"; }
+    #tradeTable td.opp-proj .sub { display: inline; margin-left: 5px; }
+    #tradeTable tbody tr.offer > td.espn {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+    }
+    #tradeTable td.espn .ask-ai { margin: 0; }
   }
 </style>
 </head>

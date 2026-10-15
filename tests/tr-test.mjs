@@ -4936,6 +4936,39 @@ const eq = (a, b, msg) => ok(msg, Object.is(a, b), `got ${JSON.stringify(a)}, wa
       Number.isFinite(cols) && buttons.length === 5 && x === 0,
       `cols=${cols}, buttons=${buttons.length}, last row filled to ${x || cols} of ${cols}`);
   }
+
+  // FINDING 25 (2026-10-15): on a phone the finder's rows are CARDS. The table
+  // was 1,088px wide in a 363px box (measured, WebKit 393, demo), so only Manager and
+  // Chance showed. The same rows are restyled under 760px; above it nothing
+  // may change. Measured layout (WebKit 393: card 337px wide in a 363px box,
+  // no sideways scroll; 1440: every cell of the first 8 rows at the same
+  // place as before) is in the commit; these pin the rules that make it.
+  {
+    const PHONE = 'max-width: 760px';
+    eq(decl('#tradeTable tbody tr.offer', 'display', PHONE), 'flex',
+      'on a phone each finder row is a card (a wrapping box, not a table row)');
+    eq(decl('#tradeWrap', 'overflow-x', PHONE), 'hidden',
+      'and the finder never scrolls sideways on a phone');
+    const unboxed = ['#tradeTable', '#tradeTable thead', '#tradeTable tbody']
+      .every((s) => decl(s, 'display', PHONE) === 'block');
+    ok('the table, its head and body are blocks on a phone, so no column sets a width', unboxed);
+    eq(decl('#tradeTable tbody tr.offer > td.split', 'display', PHONE), 'grid',
+      'a split cell keeps its two halves beside its column word');
+    // Every column a card shows is LABELLED with its head's own word.
+    const heads = [...html.matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
+    const finderHeads = (html.match(/<table id="tradeTable">[\s\S]*?<\/thead>/) || [''])[0];
+    for (const [cls, word] of [['chance', 'Chance'], ['deal', 'Send'], ['gains', 'Gain'],
+      ['value', 'Value'], ['appeal', 'Appeal'], ['total', 'Total'], ['opp-proj', 'His proj vs you']]) {
+      const c = decl(`#tradeTable td.${cls}::before`, 'content', PHONE);
+      ok(`the phone card labels ${cls} "${word}", the column head's word`,
+        c === `"${word}"` && finderHeads.includes(`>${word}</th>`) && heads.includes(word), `content=${c}`);
+    }
+    // THE LAPTOP IS UNTOUCHED: no rule outside the phone block draws a card.
+    const leaks = rules.filter((r) => !(r.media || '').includes(PHONE) &&
+      r.selectors.some((s) => /#tradeTable[^,]*(tr\.offer|::before)|#tradeWrap/.test(s)));
+    ok('no finder card rule applies above 760px (the laptop table is unchanged)', leaks.length === 0,
+      leaks.map((r) => r.selectors.join(', ')).join(' | '));
+  }
 }
 
 const fresh = run('fresh');
