@@ -1808,6 +1808,16 @@
           <label for="cuTeamB">Trades with</label>
           <select id="cuTeamB"></select>
         </div>
+        <!-- SEND NOW, OR AFTER WEEK N (Tim, 2026-10-15: "a button at the top of
+             the custom trade menu that says "send ___" that says now, but can
+             be changed so that it says "after week ___" so that it only
+             considers the difference in proj if the trade is sent after that
+             time"). Every figure in this box is then the deal sent after that
+             week (js/trade-page.js, SEND AFTER WEEK N). -->
+        <div class="form-select">
+          <label for="cuSendAfter">Send</label>
+          <select id="cuSendAfter"><option value="" selected>now</option></select>
+        </div>
         <div class="cu-meet-box">
           <span class="src-label">You play him</span>
           <p class="cu-you" id="cuMeet"></p>

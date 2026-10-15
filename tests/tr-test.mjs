@@ -4473,6 +4473,120 @@ SCENARIOS.dealLink = async function dealLink() {
   return { errors, opened, afterRepaint, afterChange };
 };
 
+/**
+ * SEND: NOW, OR AFTER WEEK N (Tim, 2026-10-15: "make a button at the top of the
+ * custom trade menu that says "send ___" that says now, but can be changed so
+ * that it says "after week ___" ... Adjust all data so it behaves as if the
+ * trade is actually sent after that date").
+ *
+ * Demo, wide. Builds one deal, reads every figure the box prints with Send on
+ * "now", moves the real `#cuSendAfter` to a later week and reads them again;
+ * then saves it, clears the box, puts Send back on now and clicks the saved
+ * row, which must bring its send week back. Asserted in
+ * tests/tr-send-after-check.mjs.
+ */
+SCENARIOS.sendAfter = async function sendAfter() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type = 'change') => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+  const sel = () => $('cuSendAfter');
+  const options = () => (sel() ? [...sel().querySelectorAll('option')].map((o) => ({ value: o.getAttribute('value'), text: text(o) })) : []);
+  const selected = () => {
+    const s = sel();
+    const on = s && [...s.querySelectorAll('option')].find((o) => o.hasAttribute('selected'));
+    return on ? on.getAttribute('value') : null;
+  };
+  const max = scaledBudget(30000, machineFactor());
+  const waitSug = async () => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < max) {
+      const h = $('cuSug');
+      if (!h || h.hidden || h.getAttribute('data-rows')) break;
+      await settle(50);
+    }
+    await settle(100);
+  };
+  const weekRows = (scope) => [...document.querySelectorAll(`${scope} table.weeks tbody tr`)].map((tr) => ({
+    cls: tr.getAttribute('class') || '',
+    wk: tr.getAttribute('data-wk'),
+    cells: [...tr.children].map((td) => text(td)),
+    delta: tr.querySelector('td.delta') ? text(tr.querySelector('td.delta')).split(' ')[0] : null,
+  }));
+  const read = () => ({
+    selected: selected(),
+    options: options(),
+    gainA: { num: text($('cuGainA').querySelector('.cu-num')), sub: text($('cuGainA').querySelector('.cu-sub')) },
+    gainB: { num: text($('cuGainB').querySelector('.cu-num')), sub: text($('cuGainB').querySelector('.cu-sub')) },
+    top: text($('cuTop')),
+    preview: text($('cuPreview')),
+    inline: weekRows('#cuInline'),
+    inlineB: weekRows('#cuInlineB'),
+    season: [...document.querySelectorAll('#cuSeason table.sbw-table[data-box="after"] thead th[data-hw]')].map((th) => th.getAttribute('data-hw')),
+    sug: (() => {
+      const h = $('cuSug');
+      return {
+        hidden: !h || !!h.hidden,
+        rows: readOfferRows($('cuSugTable')).map((r) => ({ gainText: r.gainText, theirText: r.theirText, goal: r.goal && r.goal.head })),
+      };
+    })(),
+  });
+
+  const out = { errors, present: !!sel(), label: text(document.querySelector('label[for="cuSendAfter"]')) };
+  out.optionsAtFirst = options();
+  out.selectedAtFirst = selected();
+
+  // One man each way, as the `custom` scenario builds it (not QB for QB).
+  const a = boxes('cuListA')[0];
+  a.checked = true; fire(a);
+  const bIndex = boxes('cuListB').length > 1 ? 1 : 0;
+  const b = boxes('cuListB')[bIndex];
+  b.checked = true; fire(b);
+  await waitSug();
+  await settle(400);
+  out.now = read();
+
+  // Send after the SECOND week still to play, so two weeks are before it.
+  const choices = options().filter((o) => o.value !== '').map((o) => Number(o.value));
+  out.choices = choices;
+  const n = choices.length > 1 ? choices[1] : choices[0];
+  out.n = n;
+  if (sel() && Number.isFinite(n)) {
+    sel().value = String(n);
+    fire(sel());
+  }
+  await waitSug();
+  await settle(400);
+  out.later = read();
+
+  // The pop-up of the deal being built, under the same send week.
+  fire($('cuOpen'), 'click');
+  await settle(600);
+  out.pop = { open: !$('dealModal').hidden, rows: weekRows('#dealBody') };
+  fire($('dealClose'), 'click');
+  await settle(300);
+
+  // Saved: the entry carries the week, and its row is priced under it.
+  fire($('cuSave'), 'click');
+  await settle(800);
+  try { out.stored = JSON.parse(window.localStorage.getItem('ff.prefs') || '{}')['trade.custom'] || []; } catch { out.stored = null; }
+  const savedRow = () => $('cuRows').querySelector('tr[data-cu]');
+  out.savedRow = readOfferRows($('cuTable')).map((r) => ({ gainText: r.gainText, theirText: r.theirText }));
+
+  // Clear, Send back on now, then click the saved row: its week comes back.
+  fire($('cuClear'), 'click');
+  if (sel()) { sel().value = ''; fire(sel()); }
+  await settle(400);
+  out.clearedSelected = selected();
+  fire(savedRow(), 'click');
+  await settle(800);
+  const ticked = (id) => boxes(id).filter((x) => x.hasAttribute('checked') || x.checked).map((x) => String(x.value)).sort();
+  out.reopened = { selected: selected(), a: ticked('cuListA'), b: ticked('cuListB'), men: [String(a.value), String(b.value)],
+    gainA: text($('cuGainA').querySelector('.cu-num')) };
+  return out;
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);

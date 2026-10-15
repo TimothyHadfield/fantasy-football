@@ -568,3 +568,9 @@ export async function fetchPlayerValues() {
   };
   return { base: (v && v.base) || null, weeks: (v && v.weeks) || [], byId, lookup };
 }
+
+// The league's trades so far, which the Trade page reads to bar a suggestion
+// that undoes one (loadPastTrades). This hand-built league has made none.
+export async function fetchDecisionWorld() {
+  return { moves: [] };
+}
