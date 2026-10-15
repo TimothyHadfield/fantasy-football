@@ -4970,7 +4970,7 @@ function renderFinderNote(scales = finderScales) {
       : '') +
     `<br><br>` +
     `<strong>Two-for-ones.</strong> A <strong>two-for-one</strong> forces the side receiving two ` +
-    `to drop somebody, and that cut is modelled — the man with the lowest Value goes — because it is what makes ` +
+    `to drop somebody, and that cut is modelled — the man whose loss costs the fewest points goes, the lowest Value between equally cheap ones — because it is what makes ` +
     `lopsided packages worse than they look. ` +
     // THE EMPTIED SPOT (2026-09-21). This sentence used to say the short side
     // was "not credited with a waiver claim", which stopped being true the day

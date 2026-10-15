@@ -407,5 +407,165 @@ const round1 = (x) => Math.round(x * 10) / 10;
   T.setIrSlots?.(null);
 }
 
+// ===========================================================================
+// 5. Free cut first, Value breaks ties (Tim, 2026-10-15)
+// ===========================================================================
+//
+// Trade audit finding 18: with Values on, the lowest Value went first, so a
+// starter worth 0.3 (Diggs) was cut while an idle man (Lloyd) could go for free
+// — 0.37 a week lost. Tim: "Free cut first, Value breaks ties". The rule now:
+// least cost to the priced weeks; among equally cheap men the lowest Value as
+// printed; then the lower season total; then roster order.
+{
+  const T = await imp('js/trade.js');
+  const WEEKS = [1, 2, 3];
+  const SLOTS = [0, 2, 4];                     // QB, RB, WR
+  const table = new Map();
+  let id = 52000;
+  const man = (name, position, weekly) => {
+    const p = { playerId: id++, name, position, lineupSlotId: 20 };
+    weekly.forEach((v, i) => table.set(`${p.playerId}:${WEEKS[i]}`, v));
+    return p;
+  };
+  const projFor = (p, w) => { const v = table.get(`${p.playerId}:${w}`); return Number.isFinite(v) ? v : null; };
+  const VALUES = new Map();
+  const price = (players, receive, floors = null) =>
+    T.priceTradeAcrossWeeks({ players, send: [], receive, slots: SLOTS, weeks: WEEKS, projFor, floors });
+  const names = (r) => r.cut.map((p) => p.name);
+
+  // DIGGS / LLOYD. Diggs starts every week at WR (10) and is worth 0.3; Lloyd
+  // (6) sits behind him, worth 1.0. Receive a RB: the old RB now sits too
+  // (worth 2.5). Two free cuts — Lloyd and the old RB — and Diggs costs 4 a week.
+  const qb = man('Qb', 'QB', [20, 20, 20]);
+  const rb = man('Rb', 'RB', [12, 12, 12]);
+  const diggs = man('Diggs', 'WR', [10, 10, 10]);
+  const lloyd = man('Lloyd', 'WR', [6, 6, 6]);
+  const newRb = man('New RB', 'RB', [13, 13, 13]);
+  for (const [p, v] of [[qb, 6], [rb, 2.5], [diggs, 0.3], [lloyd, 1.0], [newRb, 4]]) VALUES.set(p.playerId, v);
+  T.setCutValue((pid) => VALUES.get(pid) ?? null);
+  const dl = price([qb, rb, diggs, lloyd], [newRb]);
+  eq(names(dl), ['Lloyd'], 'free cut first: idle Lloyd goes, not Diggs (a starter, though his Value 0.3 is the lowest)');
+  ok(dl.byWeek.every((r) => r.delta >= 0), 'and no week falls (Diggs kept)', dl.byWeek.map((r) => r.delta).join(', '));
+
+  // TWO FREE CUTS, VALUE DECIDES. Make the old RB worth less than Lloyd but
+  // with the higher season total (36 vs 18): Value breaks the tie, not the total.
+  VALUES.set(rb.playerId, 0.5);
+  eq(names(price([qb, rb, diggs, lloyd], [newRb])), ['Rb'], 'two free cuts: the lower Value goes (Rb 0.5 over Lloyd 1.0), though his season total is higher');
+  // Level as printed (0.54 and 0.5 both print 0.5): the lower season total.
+  VALUES.set(rb.playerId, 0.54);
+  VALUES.set(lloyd.playerId, 0.5);
+  eq(names(price([qb, rb, diggs, lloyd], [newRb])), ['Lloyd'], 'free cuts level on printed Value: the lower season total goes');
+  // Level on Value AND total: roster order.
+  const twin = man('Twin', 'WR', [6, 6, 6]);
+  VALUES.set(twin.playerId, 0.5);
+  VALUES.set(rb.playerId, 3);
+  eq(names(price([qb, rb, diggs, twin, lloyd], [newRb, man('New WR', 'WR', [1, 1, 1])])).length, 2, 'two over: two cuts');
+  eq(names(price([qb, rb, diggs, twin, lloyd], [newRb])), ['Twin'], 'level on cost, Value and season total: roster order (Twin listed first)');
+
+  // A STARTER WHO COSTS 0 TIES THE IDLE MAN, AND VALUE DECIDES. Under the floor
+  // (WR floor 8), Weak (5 a week) starts but his slot is assessed at 8 with him
+  // or with Lloyd (4) — so cutting him is free too. Weak is worth 0.2, Lloyd
+  // 1.0, and Weak's season total is the HIGHER — so the old shortcut (cost a
+  // starter only if his total is lower than the idle man's) must not skip him.
+  const wire = ['A', 'B', 'C', 'D'].map((s, i) => ({ playerId: `wf-${s}`, name: s, position: 'WR', projected: 9 - i * 0.5, injuryStatus: 'ACTIVE' }));
+  const floors = positionFloors(wire, { week: WEEKS[0] });
+  const weak = man('Weak', 'WR', [5, 5, 5]);
+  const low = man('Low', 'WR', [4, 4, 4]);
+  VALUES.set(weak.playerId, 0.2);
+  VALUES.set(low.playerId, 1.0);
+  VALUES.set(rb.playerId, 2.5);
+  const fl = price([qb, rb, weak, low], [newRb], floors);
+  eq(names(fl), ['Weak'], 'a starter costing 0 under the floor ties the idle men; the lower Value (Weak 0.2) goes');
+  ok(fl.byWeek.every((r) => r.delta >= 0), 'and no week falls', fl.byWeek.map((r) => r.delta).join(', '));
+  T.setCutValue(null);
+  eq(names(price([qb, rb, weak, low], [newRb], floors)), ['Low'], 'with no Values: the lower season total among the free cuts (Low), as before');
+
+  // ONE-POSITION GUARD still holds: your only kicker (Value 0, idle in no week)
+  // is never the cut while someone else can go.
+  const SLOTS_K = [0, 2, 4, 17];
+  const k = man('Only K', 'K', [0, 0, 0]);          // projects 0: costs nothing, worth nothing
+  VALUES.set(k.playerId, 0);
+  T.setCutValue((pid) => VALUES.get(pid) ?? null);
+  const gk = T.priceTradeAcrossWeeks({ players: [qb, rb, diggs, lloyd, k], send: [], receive: [newRb], slots: SLOTS_K, weeks: WEEKS, projFor });
+  ok(gk.cut.length === 1 && gk.cut[0].name !== 'Only K', 'the only kicker is never the cut, though he is free and worth 0', names(gk).join());
+  T.setCutValue(null);
+}
+
+// Brute force with Values: the cut is the cheapest man the guard allows; among
+// equally cheap, the lowest printed Value; then the lowest season total.
+{
+  const T = await imp('js/trade.js');
+  const { SLOT_ELIGIBILITY } = await imp('js/espn.js');
+  const WEEKS = [5, 6, 7, 8];
+  const SLOTS = [0, 2, 2, 4, 4, 23, 16, 17];
+  const POS = ['QB', 'RB', 'RB', 'WR', 'WR', 'WR', 'TE', 'DST', 'K', 'RB', 'QB', 'DST', 'K'];
+  const BASE = { QB: 17, RB: 11, WR: 11, TE: 8, DST: 7, K: 8 };
+  const wire = [];
+  for (const [pos, top] of [['QB', 15], ['RB', 9], ['WR', 9], ['TE', 7], ['DST', 7], ['K', 8]])
+    for (let i = 0; i < 4; i++) wire.push({ playerId: `vw-${pos}-${i}`, name: `W${pos}${i}`, position: pos, projected: top - i * 0.5, injuryStatus: 'ACTIVE' });
+  const FLOORS = positionFloors(wire, { week: WEEKS[0] });
+  const single = new Map();
+  for (const s of SLOTS) { const el = SLOT_ELIGIBILITY[s]; if (el && el.length === 1) single.set(el[0], (single.get(el[0]) || 0) + 1); }
+  let id = 60000;
+  let checked = 0;
+  let paid = 0;          // trials where the cheapest allowed man was not the lowest Value (the rule changed the answer)
+  const trials = 400;
+  for (let t = 0; t < trials; t++) {
+    const table = new Map();
+    const VAL = new Map();
+    const projFor = (p, w) => { const v = table.get(`${p.playerId}:${w}`); return Number.isFinite(v) ? v : null; };
+    const make = (position) => {
+      const p = { playerId: id++, name: `V${id}`, position, lineupSlotId: 20 };
+      const bye = rnd() < 0.35 ? pick(WEEKS) : null;
+      const level = BASE[position] * (0.3 + rnd() * 1.1);
+      for (const w of WEEKS) table.set(`${p.playerId}:${w}`, w === bye ? 0 : round1(level * (0.6 + rnd() * 0.8)));
+      // Values on a coarse grid so printed ties happen often.
+      VAL.set(p.playerId, rnd() < 0.15 ? null : Math.floor(rnd() * 6) / 10);
+      return p;
+    };
+    const size = 9 + Math.floor(rnd() * 3);
+    const mine = POS.slice(0, size).map(make);
+    const theirs = Array.from({ length: 4 }, () => make(pick(['QB', 'RB', 'WR', 'TE', 'DST', 'K'])));
+    const send = rnd() < 0.4 ? [pick(mine)] : [];
+    const receive = send.length ? [theirs[0], theirs[1]] : [theirs[0]];
+    const floors = t % 2 ? FLOORS : null;
+    T.setCutValue((pid) => VAL.get(pid));
+    const priced = T.priceTradeAcrossWeeks({ players: mine, send, receive, slots: SLOTS, weeks: WEEKS, projFor, floors });
+    T.setCutValue(null);
+    if (priced.cut.length !== 1) { ok(false, `value trial ${t}: one cut`, priced.cut.length); continue; }
+
+    const gone = new Set(send.map((p) => p.playerId));
+    const pre = mine.filter((p) => !gone.has(p.playerId)).concat(receive);
+    const held = new Map();
+    for (const p of pre) held.set(p.position, (held.get(p.position) || 0) + 1);
+    const spare = pre.filter((p) => (held.get(p.position) || 0) > (single.get(p.position) || 0));
+    const pool = spare.length ? spare : pre;
+    const weekTotal = (roster, w) => {
+      const ps = roster.map((p) => ({ ...p, projected: projFor(p, w) }));
+      return assessLineup(optimalLineup(ps, SLOTS).starters, SLOTS, floors).total;
+    };
+    const base = WEEKS.map((w) => weekTotal(pre, w));
+    const cost = (c) => { const rest = pre.filter((p) => p !== c); return WEEKS.reduce((a, w, i) => a + base[i] - weekTotal(rest, w), 0); };
+    const costs = pool.map(cost);
+    const min = Math.min(...costs);
+    const vt = (p) => { const v = VAL.get(p.playerId); return Number.isFinite(v) ? Math.round(round1(v) * 10) : 0; };
+    const ros = (p) => WEEKS.reduce((a, w) => a + (projFor(p, w) ?? 0), 0);
+    const cheapest = pool.filter((p, i) => costs[i] <= min + 1e-6);
+    const lowV = Math.min(...cheapest.map(vt));
+    const ci = pool.findIndex((p) => p.playerId === priced.cut[0].playerId);
+    ok(ci >= 0, `value trial ${t}: the cut man is one the guard allows`);
+    ok(costs[ci] <= min + 1e-6, `value trial ${t}${floors ? ' (floors)' : ''}: the cut is the cheapest allowed`,
+      `chose ${priced.cut[0].position} cost ${round1(costs[ci])}, cheapest ${round1(min)}`);
+    ok(vt(pool[ci]) === lowV, `value trial ${t}: among the cheapest, the lowest printed Value`, `${vt(pool[ci])} vs ${lowV}`);
+    const lowRos = Math.min(...cheapest.filter((p) => vt(p) === lowV).map(ros));
+    ok(ros(pool[ci]) <= lowRos + 0.05, `value trial ${t}: then the lowest season total`);
+    if (Math.min(...pool.map(vt)) < lowV) paid++;
+    checked++;
+  }
+  ok(checked === trials, 'every value trial checked', `${checked}/${trials}`);
+  ok(paid >= 10, 'enough value trials where the lowest Value was not a cheapest cut (so the rule is exercised)', paid);
+  console.log(`value brute force: ${checked} trials, ${paid} where a lower-Value man cost points and was kept`);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

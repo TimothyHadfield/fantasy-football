@@ -167,7 +167,10 @@ for (const done of [true, false, null]) {
   VALUES.set(got[0].playerId, 0.8);
   eq(dropOf(got), old, 'level Values (0.84 and 0.8 both print 0.8): the old rule settles it');
   VALUES.set(got[0].playerId, 0);
-  eq(dropOf(got), String(got[0].playerId), 'the man just received goes, when his is the lowest Value');
+  // Tim, 2026-10-15: "Free cut first, Value breaks ties". The man just received
+  // starts, so cutting him costs points while idle men go free: he stays.
+  ok(dropOf(got) !== String(got[0].playerId), 'the man just received is kept when he starts, though his Value is the lowest (free cut first)', dropOf(got));
+  eq(dropOf(got), old, 'and the free cuts, level on Value, fall to the old rule');
   setCutValue(() => { throw new Error('no'); });
   eq(dropOf(got), old, 'a lookup that throws is no Value, not a crash');
   setCutValue(null);
