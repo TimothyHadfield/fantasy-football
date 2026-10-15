@@ -5726,20 +5726,191 @@ function rosOf(p, span) {
   return s;
 }
 
+// THE REBUILT YES-CHANCE (trade audit Phase 3, 2026-10-15; Tim: "Rebuild, show
+// words"). The model is js/accept.js; this import sits here, beside the only
+// code that uses it, because the import block at the top of this file is shared
+// with other work in flight (ES imports are hoisted, so where it sits changes
+// nothing).
+import { acceptVerdict } from './accept.js';
+
 /**
- * The chance the other side says yes, from the two things he can see — his
- * lineup gain and the ESPN projections in against out — a week. Measured here
- * from the page's own week data, so a custom deal and a combo get exactly the
- * arithmetic a finder row gets.
+ * WHAT HE SEES, GATHERED ONCE. Everything the yes-chance reads beyond the deal's
+ * own numbers comes off data the page already holds — no ESPN request, so the
+ * phone's synced copy is untouched (rule 20):
+ *
+ *   - each man as ESPN's app shows him: AVG, positional rank and PROJ off the
+ *     card's glance line (`glanceFor`), his LAST game off the played weeks the
+ *     page holds (`lastGameOf`), his injury tag off the roster;
+ *   - each manager's thin and empty starting spots off the depth map
+ *     (js/trade.js `depthTable`, the Depth panel's own arithmetic);
+ *   - each manager's standing: his playoff chance off the base simulation when
+ *     it has run, else his win share off the league's played games.
+ *
+ * `acceptFor` runs inside the search's ranking for every candidate, so this is
+ * memoised and thrown away whenever the page's week data (`weekly.means`, a new
+ * Map on every reload), the rosters, the measure, the slots or the base run
+ * change.
+ */
+let acceptMemo = null;
+function acceptInputs() {
+  const k = [weekly.means, state.data, basis(), state.slots, goalCtx && goalCtx.base, state.league];
+  if (acceptMemo && acceptMemo.k.every((v, i) => v === k[i])) return acceptMemo;
+  const owner = new Map();
+  const roster = new Map();
+  for (const t of (state.data ? state.data.teams : [])) {
+    for (const p of (t.players || [])) {
+      owner.set(String(p.playerId), t);
+      roster.set(String(p.playerId), p);
+    }
+  }
+  acceptMemo = { k, owner, roster, men: new Map(), holes: null, standing: new Map() };
+  return acceptMemo;
+}
+
+/**
+ * His LAST game, as ESPN's app prints it: the latest played week the page holds
+ * in which he had a finished score — his bye and a week he sat out (tagged out)
+ * are skipped. Null when the page holds none (the played weeks load for the
+ * card; until they do, ESPN's look reads AVG alone).
+ */
+function lastGameOf(p) {
+  const bye = byeWeekOf(p, state.byes);
+  const played = playedWeeks().slice().sort((a, b) => b - a);
+  for (const w of played) {
+    if (Number.isFinite(bye) && Number(bye) === Number(w)) continue;
+    const e = weekly.byWeek.get(w)?.get(p.playerId);
+    if (!e || e.done === false || typeof e.actual !== 'number' || !Number.isFinite(e.actual)) continue;
+    if (e.injuryStatus && injuryClass(String(e.injuryStatus)) === 'out' && e.actual === 0) continue;
+    return e.actual;
+  }
+  return null;
+}
+
+/** One man as js/accept.js reads him (`{name, pos, avg, last, rank, proj, status}`). */
+function acceptManOf(m, memo) {
+  const id = m && m.playerId !== null && m.playerId !== undefined ? String(m.playerId) : null;
+  if (id !== null && memo.men.has(id)) return memo.men.get(id);
+  const p = (id !== null && memo.roster.get(id)) || m || {};
+  const g = glanceFor(p);
+  const man = {
+    playerId: p.playerId ?? null,
+    name: p.name || '',
+    pos: p.position || null,
+    avg: g.avg,
+    last: lastGameOf(p),
+    rank: g.rank,
+    proj: g.proj,
+    status: healthy(p.injuryStatus) ? null : String(p.injuryStatus),
+  };
+  if (id !== null) memo.men.set(id, man);
+  return man;
+}
+
+/**
+ * Each manager's holes: teamId -> position -> {kind: 'empty' | 'weak', bar}.
+ * EMPTY: fewer starters there than the league makes him field. WEAK (thin): his
+ * starters there are among the league's weakest — the bottom quarter of the
+ * Depth column (at least the single weakest), or below the waiver bar. `bar` is
+ * the value of the starter an arrival would replace. Judgement: "bottom quarter".
+ */
+function holesOf(memo) {
+  if (memo.holes) return memo.holes;
+  memo.holes = new Map();
+  const teams = state.data ? state.data.teams : [];
+  if (!teams.length || !state.slots) return memo.holes;
+  const map = depthTable(teams, state.slots, measureFn());
+  const worst = Math.max(1, Math.floor(map.rows.length / 4));
+  for (const pos of map.positions) {
+    const col = map.rows
+      .map((r) => ({ id: String(r.team.id), c: r.cells.get(pos) }))
+      .filter((x) => x.c && Number.isFinite(x.c.startersEdge))
+      .sort((a, b) => a.c.startersEdge - b.c.startersEdge);
+    const low = new Set(col.slice(0, worst).map((x) => x.id));
+    for (const r of map.rows) {
+      const c = r.cells.get(pos);
+      if (!c) continue;
+      const id = String(r.team.id);
+      let kind = null;
+      if (c.starting < (map.required[pos] || 0)) kind = 'empty';
+      else if (low.has(id) || (Number.isFinite(c.startersEdge) && c.startersEdge < 0)) kind = 'weak';
+      if (!kind) continue;
+      if (!memo.holes.has(id)) memo.holes.set(id, new Map());
+      memo.holes.get(id).set(pos, { kind, bar: kind === 'empty' ? null : (c.weakest ? c.weakest.v : null) });
+    }
+  }
+  return memo.holes;
+}
+
+/** His standing, 0–1: playoff chance off the base run, else his win share. */
+function standingOf(team, memo) {
+  if (!team) return null;
+  const id = String(team.id);
+  if (memo.standing.has(id)) return memo.standing.get(id);
+  let s = null;
+  const row = goalCtx && goalCtx.base && goalCtx.base.teams
+    ? goalCtx.base.teams.find((t) => String(t.teamId) === id) : null;
+  if (row && Number.isFinite(row.pPlayoffs)) s = row.pPlayoffs;
+  else {
+    const games = state.league && state.league.games ? state.league.games : [];
+    const rec = recordOf(games, team.id, (g) => capture.gameState(g) === 'final');
+    // Two games at least, or a week-one result is a standing.
+    if (rec.games >= 2) s = (rec.w + rec.t / 2) / rec.games;
+  }
+  memo.standing.set(id, s);
+  return s;
+}
+
+/**
+ * The yes-chance in full — `{ p, word, why, feel, parts }` (js/accept.js) — for
+ * one deal, from HIS side: `toHim` the men he receives, `fromHim` the men he
+ * gives up. The same arguments as `acceptFor`, which is this verdict's `p`.
+ *
+ * His lineup change is `theirGain` over the weeks he is expected to play
+ * (`hisSideOf`), a week. NOT YET FLAT as the plan asks (a manager does not
+ * discount his own playoff weeks): the callers hand in his reach-weighted,
+ * netted gain and not his week-by-week change, and changing what they hand in
+ * is outside this step.
+ */
+function acceptVerdictFor(theirGain, toHim, fromHim, span, theirWeeks = span.length) {
+  const memo = acceptInputs();
+  const gets = (toHim || []).map((m) => ({ ...acceptManOf(m, memo) }));
+  const sends = (fromHim || []).map((m) => acceptManOf(m, memo));
+  // He is whoever holds the men he gives up.
+  const first = (fromHim || []).find((m) => m && memo.owner.has(String(m.playerId)));
+  const team = first ? memo.owner.get(String(first.playerId)) : null;
+  if (team) {
+    const holes = holesOf(memo).get(String(team.id));
+    const measure = measureFn();
+    for (const g of gets) {
+      const h = holes && holes.get(g.pos);
+      if (!h) continue;
+      // He fills it only if he would start there: an empty spot, or better
+      // than the starter he would replace.
+      const v = measure(memo.roster.get(String(g.playerId)) || g);
+      if (h.kind === 'empty' || (Number.isFinite(v) && (!Number.isFinite(h.bar) || v > h.bar))) g.fills = h.kind;
+    }
+  }
+  // The fallback look — the old summed-projection one — only when a man has
+  // no AVG and no PROJ on ESPN's screen (js/accept.js prefers the men).
+  const look = espnLookPerWeek({ send: toHim, receive: fromHim }, span.length, (p) => rosOf(p, span));
+  const n = theirWeeks || 1;
+  return acceptVerdict({
+    lineupPerWeek: Number.isFinite(theirGain) ? theirGain / n : null,
+    lookPerWeek: look,
+    gets,
+    sends,
+    standing: standingOf(team, memo),
+  });
+}
+
+/**
+ * The chance the other side says yes, 0–1 — `acceptVerdictFor`'s `p`, for the
+ * callers that read a number (the ranking, the goal scores, the combo). The
+ * words and the why ride on `acceptVerdictFor` for the display step.
  */
 function acceptFor(theirGain, toHim, fromHim, span, theirWeeks = span.length) {
-  // How it looks on ESPN: js/trade-odds.js's one definition, fed this page's
-  // span totals. Over the whole span, because ESPN's screen weights nothing.
-  const look = espnLookPerWeek({ send: toHim, receive: fromHim }, span.length, (p) => rosOf(p, span));
-  // His lineup, per week HE IS EXPECTED TO PLAY: `theirGain` is priced over
-  // those weeks (`hisSideOf`), so it divides by them and not by the span.
-  const n = theirWeeks || 1;
-  return acceptChance({ lineupPerWeek: Number.isFinite(theirGain) ? theirGain / n : null, lookPerWeek: look });
+  const v = acceptVerdictFor(theirGain, toHim, fromHim, span, theirWeeks);
+  return v ? v.p : null;
 }
 
 /**

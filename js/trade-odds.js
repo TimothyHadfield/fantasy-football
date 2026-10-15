@@ -41,6 +41,7 @@
 // Pure: no DOM, no fetching. The page does the waiting.
 
 import { simulateSeason } from './forecast.js';
+import { acceptVerdict } from './accept.js';
 
 // ------------------------------------------------------------------ the goals
 
@@ -99,48 +100,34 @@ export function goalGain(before, after, goal) {
 
 // ---------------------------------------------------- will he say yes?
 //
-// THE ONE JUDGEMENT IN THIS FILE, and it is labelled as one on the page.
+// THE ONE JUDGEMENT IN THIS FILE, and it lives in js/accept.js (rebuilt
+// 2026-10-15, trade audit Phase 3 — Tim: "Rebuild, show words").
 //
-// Nothing ESPN publishes says whether a manager accepts a trade. What he can
-// see is two things, and the estimate is built from exactly those two:
-//
-//   1. what the deal does to HIS lineup — the finder's own "He gains", per
-//      week. A manager who looks at his lineup sees this.
-//   2. how the deal LOOKS on ESPN's trade screen — the ESPN projections of the
-//      men he receives against the men he sends, added up over the same weeks,
-//      per week. A manager who reads names and numbers and never re-fills a
-//      lineup sees this, and most of them are that manager.
-//
-// Weighted equally, because nothing measured says otherwise. Then a logistic
-// curve with a deliberately generous LEEWAY (Tim: "a good amount of leeway"):
-//
-//     perceived  = (his lineup gain + how it looks) / 2          points a week
-//     P(yes)     = 1 / (1 + e^−((perceived + LEEWAY) / SCALE))
-//
-// which reads, at the constants below:
-//
-//     he comes out +3 a week      98%
-//     dead even                   88%
-//     he gives up 3 a week        50%
-//     he gives up 6 a week        12%
-//
-// So an even deal is very likely, a mildly lopsided one in your favour is still
-// a coin flip, and only a clear fleece is marked down hard. Both constants are
-// named here and printed in the page's note, so the curve is checkable and
-// easy to change.
+// The old curve here weighed his lineup gain and the summed rest-of-season
+// projections equally, with a generous LEEWAY, and put a dead-even deal at
+// 88%. The rebuild reads what ESPN's app shows him (season AVG, LAST game,
+// positional rank, the injury tag), whether the deal fills a hole in his
+// lineup, his standing, and an ownership discount, centred so an even deal is
+// 50%; it also returns words (likely / maybe / unlikely) and a one-line why.
+// `acceptChance` below is its `p`, for every caller that reads a number.
 
 /**
  * The least HIS lineup may gain, a week, for a deal to be a candidate at all.
  * Below zero on purpose: a deal that costs him a little can still look good to
  * him on ESPN's screen and be accepted, and the yes-chance marks it down rather
  * than the finder hiding it. At −2 lineup and −2 on ESPN's numbers the chance
- * is 66%; the finder's list is ranked with that already applied.
+ * is 27% on the rebuilt estimate (66% on the old curve); the finder's list is
+ * ranked with that already applied.
  */
 export const THEIR_MIN_PER_WEEK = -2;
 
-/** Points a week a deal can go against him and still be a coin flip. */
+/**
+ * RETIRED 2026-10-15: the old curve's two constants. Nothing computes with them
+ * any more; they are still exported only because the Trade page's method note
+ * prints them (js/trade-page.js, "Will he say yes?"), and that note is rewritten
+ * in the later display step. Do not use them for anything new.
+ */
 export const ACCEPT_LEEWAY = 3;
-/** How quickly the chance falls away past that, in points a week. */
 export const ACCEPT_SCALE = 1.5;
 
 const projectedTotal = (p) => p?.projected;
@@ -226,15 +213,16 @@ export function playoffReach(base, inputs, teamId, weeks) {
 }
 
 /**
- * The chance he says yes, from the two things he can see.
- * Either may be missing; with neither there is nothing to say and it is null.
+ * The chance he says yes, 0–1 — js/accept.js `acceptVerdict`'s `p`.
+ * Takes the same inputs (`lineupPerWeek`, `lookPerWeek`, `gets`, `sends`,
+ * `standing`); with nothing to go on it is null.
  */
-export function acceptChance({ lineupPerWeek = null, lookPerWeek = null } = {}) {
-  const parts = [lineupPerWeek, lookPerWeek].filter((v) => Number.isFinite(v));
-  if (!parts.length) return null;
-  const perceived = parts.reduce((a, v) => a + v, 0) / parts.length;
-  return 1 / (1 + Math.exp(-(perceived + ACCEPT_LEEWAY) / ACCEPT_SCALE));
+export function acceptChance(inputs = {}) {
+  const v = acceptVerdict(inputs);
+  return v ? v.p : null;
 }
+
+export { acceptVerdict };
 
 // ------------------------------------------------ a deal, as a season
 
