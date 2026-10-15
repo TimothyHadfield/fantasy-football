@@ -8909,8 +8909,11 @@ if (!gt.boot) {
       T.trades.every((t) => !/[+−-]0\.0(?!\d)/.test(`${t.gainText} ${(t.opp || {}).head}`)),
       T.trades.map((t) => `${t.gainText} ${(t.opp || {}).head}`).filter((s) => /[+−-]0\.0(?!\d)/.test(s)).slice(0, 4).join(' | '));
   }
-  ok('the method prints the yes-curve with its two constants, so a row can be checked',
-    /Will he say yes\?/.test(T.note) && /3\) ÷ 1\.5/.test(T.note) && /88% at dead even/.test(T.note),
+  // The rebuilt estimate (trade audit Phase 3, js/accept.js): its curve, and
+  // nothing left of the old generous one.
+  ok('the method prints the yes-curve with its constant, so a row can be checked',
+    /Will he say yes\?/.test(T.note) && /total ÷ 2/.test(T.note) && /even deal is 50%/.test(T.note) &&
+      !/88% at dead even/.test(T.note),
     T.note.slice(T.note.indexOf('Will he'), T.note.indexOf('Will he') + 400));
 
   // -- RE-DERIVED: the top row's title chance, from nothing of the page's -----
@@ -8931,9 +8934,13 @@ if (!gt.boot) {
       !!re && !!shown && Math.abs(Number(shown[1]) - re.before * 100) <= 0.051 &&
         Math.abs(Number(shown[2]) - re.after * 100) <= 0.151,
       `page ${top && top.goal.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
-    ok('and so does the chance he says yes',
-      !!re && !!shown && Math.abs(Number(shown[3]) - re.accept * 100) <= 1.01,
-      `page ${shown && shown[3]}% vs engine ${re && (re.accept * 100).toFixed(1)}%`);
+    // Since 2026-10-15 (trade audit Phase 3) the yes-chance also reads each
+    // man's ESPN average, last game, rank, injury tag, his holes and standing
+    // (js/accept.js, pinned by test-accept.mjs) — not re-derivable from the
+    // engine alone, so this only holds the row to a real whole percent.
+    ok('and the row prints the chance he says yes as a whole percent',
+      !!shown && Number(shown[3]) >= 0 && Number(shown[3]) <= 100,
+      `page ${top && top.goal.sub}`);
   }
 
   // -- THE CANDIDATES FOLLOW THE GOAL ------------------------------------------

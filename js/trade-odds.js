@@ -41,6 +41,7 @@
 // Pure: no DOM, no fetching. The page does the waiting.
 
 import { simulateSeason } from './forecast.js';
+import { acceptVerdict } from './accept.js';
 
 // ------------------------------------------------------------------ the goals
 
@@ -99,48 +100,34 @@ export function goalGain(before, after, goal) {
 
 // ---------------------------------------------------- will he say yes?
 //
-// THE ONE JUDGEMENT IN THIS FILE, and it is labelled as one on the page.
+// THE ONE JUDGEMENT IN THIS FILE, and it lives in js/accept.js (rebuilt
+// 2026-10-15, trade audit Phase 3 — Tim: "Rebuild, show words").
 //
-// Nothing ESPN publishes says whether a manager accepts a trade. What he can
-// see is two things, and the estimate is built from exactly those two:
-//
-//   1. what the deal does to HIS lineup — the finder's own "He gains", per
-//      week. A manager who looks at his lineup sees this.
-//   2. how the deal LOOKS on ESPN's trade screen — the ESPN projections of the
-//      men he receives against the men he sends, added up over the same weeks,
-//      per week. A manager who reads names and numbers and never re-fills a
-//      lineup sees this, and most of them are that manager.
-//
-// Weighted equally, because nothing measured says otherwise. Then a logistic
-// curve with a deliberately generous LEEWAY (Tim: "a good amount of leeway"):
-//
-//     perceived  = (his lineup gain + how it looks) / 2          points a week
-//     P(yes)     = 1 / (1 + e^−((perceived + LEEWAY) / SCALE))
-//
-// which reads, at the constants below:
-//
-//     he comes out +3 a week      98%
-//     dead even                   88%
-//     he gives up 3 a week        50%
-//     he gives up 6 a week        12%
-//
-// So an even deal is very likely, a mildly lopsided one in your favour is still
-// a coin flip, and only a clear fleece is marked down hard. Both constants are
-// named here and printed in the page's note, so the curve is checkable and
-// easy to change.
+// The old curve here weighed his lineup gain and the summed rest-of-season
+// projections equally, with a generous LEEWAY, and put a dead-even deal at
+// 88%. The rebuild reads what ESPN's app shows him (season AVG, LAST game,
+// positional rank, the injury tag), whether the deal fills a hole in his
+// lineup, his standing, and an ownership discount, centred so an even deal is
+// 50%; it also returns words (likely / maybe / unlikely) and a one-line why.
+// `acceptChance` below is its `p`, for every caller that reads a number.
 
 /**
  * The least HIS lineup may gain, a week, for a deal to be a candidate at all.
  * Below zero on purpose: a deal that costs him a little can still look good to
  * him on ESPN's screen and be accepted, and the yes-chance marks it down rather
  * than the finder hiding it. At −2 lineup and −2 on ESPN's numbers the chance
- * is 66%; the finder's list is ranked with that already applied.
+ * is 27% on the rebuilt estimate (66% on the old curve); the finder's list is
+ * ranked with that already applied.
  */
 export const THEIR_MIN_PER_WEEK = -2;
 
-/** Points a week a deal can go against him and still be a coin flip. */
+/**
+ * RETIRED 2026-10-15: the old curve's two constants. Nothing computes with them
+ * any more; they are still exported only because the Trade page's method note
+ * prints them (js/trade-page.js, "Will he say yes?"), and that note is rewritten
+ * in the later display step. Do not use them for anything new.
+ */
 export const ACCEPT_LEEWAY = 3;
-/** How quickly the chance falls away past that, in points a week. */
 export const ACCEPT_SCALE = 1.5;
 
 const projectedTotal = (p) => p?.projected;
@@ -226,15 +213,16 @@ export function playoffReach(base, inputs, teamId, weeks) {
 }
 
 /**
- * The chance he says yes, from the two things he can see.
- * Either may be missing; with neither there is nothing to say and it is null.
+ * The chance he says yes, 0–1 — js/accept.js `acceptVerdict`'s `p`.
+ * Takes the same inputs (`lineupPerWeek`, `lookPerWeek`, `gets`, `sends`,
+ * `standing`); with nothing to go on it is null.
  */
-export function acceptChance({ lineupPerWeek = null, lookPerWeek = null } = {}) {
-  const parts = [lineupPerWeek, lookPerWeek].filter((v) => Number.isFinite(v));
-  if (!parts.length) return null;
-  const perceived = parts.reduce((a, v) => a + v, 0) / parts.length;
-  return 1 / (1 + Math.exp(-(perceived + ACCEPT_LEEWAY) / ACCEPT_SCALE));
+export function acceptChance(inputs = {}) {
+  const v = acceptVerdict(inputs);
+  return v ? v.p : null;
 }
+
+export { acceptVerdict };
 
 // ------------------------------------------------ a deal, as a season
 
@@ -555,6 +543,50 @@ export function tieGroups(offers, band = TIE_BAND) {
     m.level = m.size > 1;
   }
   return marks;
+}
+
+// ---------------------------------------------- a deal that lowers your chance
+//
+// Tim, 2026-10-14, asked "keep 'You + He gains' but never put a trade that
+// lowers your goal chance above one that raises it?": "Yes, add that guard".
+// And the +1 a week gate also needs the chance not to fall.
+//
+// "Lowers" means by more than the measured band: a change inside ±TIE_BAND is
+// one the simulation cannot tell from nothing (see TIE_BAND above), so it is
+// not a fall. A deal with no change yet (not played out, or the goal could not
+// be simulated) is judged on nothing here and keeps the order it had.
+//
+// THE GUARD IS A FUNCTION OF THE ROW ALONE — its own change against a fixed
+// band, never against another row — so the order is a plain two-key sort and
+// rule 19 (a tie is a grouping, never a sort key) still holds.
+
+/** Your goal change for a deal, or null when it has none yet. */
+const goalChangeOf = (offer) => {
+  const g = offer?.goalScore?.mine?.gain;
+  return Number.isFinite(g) ? g : null;
+};
+
+/** Does this deal lower your goal chance by more than the band? Unknown: no. */
+export function lowersGoal(offer, band = TIE_BAND) {
+  const g = goalChangeOf(offer);
+  return g !== null && g < -band;
+}
+
+/** The +1 a week gate's goal half: a known change must be above −band. Unknown: passes. */
+export function goalGateOk(offer, band = TIE_BAND) {
+  const g = goalChangeOf(offer);
+  return g === null || g > -band;
+}
+
+/**
+ * The finder's order: every deal that does not lower your chance first, then
+ * the ones that do; inside each, largest `keyOf` first. In place, and stable
+ * (equal deals keep the order they came in).
+ */
+export function orderWithGoalGuard(list, keyOf) {
+  const key = new Map(list.map((o) => [o, keyOf(o)]));
+  const low = new Map(list.map((o) => [o, lowersGoal(o) ? 1 : 0]));
+  return list.sort((a, b) => low.get(a) - low.get(b) || key.get(b) - key.get(a) || 0);
 }
 
 // ------------------------------------------------- weeks a trade cannot reach

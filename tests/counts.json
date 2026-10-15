@@ -86,6 +86,9 @@
     "test-trade-odds.mjs": {
       "assertions": 142
     },
+    "test-accept.mjs": {
+      "assertions": 35
+    },
     "test-trade-cards.mjs": {
       "assertions": 66
     },
@@ -210,6 +213,9 @@
     },
     "test-trade-bench.mjs": {
       "assertions": 16
+    },
+    "test-list-order.mjs": {
+      "assertions": 120
     },
     "test-trade-net.mjs": {
       "assertions": 49

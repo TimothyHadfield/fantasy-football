@@ -34,7 +34,7 @@ import {
   GOALS, goalOf, goalChance, goalGain, acceptChance, espnLookPerWeek, offerDeltas,
   shiftSeason, simulateWith, scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE,
   weekWeights, WEIGHT_FLOOR, TIE_BAND, tieGroups, lockedWeeks, playoffReach,
-  finishedWeeks, someoneFinished,
+  finishedWeeks, someoneFinished, acceptVerdict,
 } from '../js/trade-odds.js';
 import { generateDemoWeekRosters } from '../js/demo-rosters.js';
 import { slotCountsFromLineups } from '../js/projection.js';
@@ -106,19 +106,28 @@ ok('the title chance is pTitle and last is pLast',
 
 // ---------------------------------------------------- 2. will he say yes?
 //
-// The four points the page prints in its note. If the constants move, the
-// note must move with them, and this is what says so.
+// REBUILT 2026-10-15 (trade audit Phase 3, Tim: "Rebuild, show words"): the
+// model is js/accept.js and tests/test-accept.mjs pins its directions. These
+// were the old curve's four printed levels (98 / 88 / 50 / 12%); what is held
+// here now is what every caller of `acceptChance` relies on.
 
-ok('the constants are the ones the note quotes', ACCEPT_LEEWAY === 3 && ACCEPT_SCALE === 1.5);
-near(acceptChance({ lineupPerWeek: 3, lookPerWeek: 3 }), 0.982, 0.001, '+3 a week ahead → 98%');
-near(acceptChance({ lineupPerWeek: 0, lookPerWeek: 0 }), 0.881, 0.001, 'dead even → 88%');
-near(acceptChance({ lineupPerWeek: -3, lookPerWeek: -3 }), 0.5, 1e-9, 'giving up 3 a week → 50%');
-near(acceptChance({ lineupPerWeek: -6, lookPerWeek: -6 }), 0.119, 0.001, 'giving up 6 a week → 12%');
+near(acceptChance({ lineupPerWeek: 0, lookPerWeek: 0 }), 0.5, 1e-9, 'dead even → 50% (was 88%)');
+ok('ahead of even is better than even, behind is worse',
+  acceptChance({ lineupPerWeek: 3, lookPerWeek: 3 }) > 0.5 && acceptChance({ lineupPerWeek: -3, lookPerWeek: -3 }) < 0.5);
 near(acceptChance({ lineupPerWeek: 2, lookPerWeek: -8 }),
   acceptChance({ lineupPerWeek: -3, lookPerWeek: -3 }), 1e-12,
-  'the two halves are weighed equally: +2 and −8 reads as −3');
-near(acceptChance({ lineupPerWeek: -3 }), 0.5, 1e-9, 'one half alone stands for both');
+  'the two halves are weighed equally: +2 and −8 reads as −3 and −3');
+ok('one half alone counts only itself (the other is not assumed equal)',
+  acceptChance({ lineupPerWeek: -3 }) > acceptChance({ lineupPerWeek: -3, lookPerWeek: -3 }) &&
+    acceptChance({ lineupPerWeek: -3 }) < 0.5);
 ok('with nothing to go on it says nothing', acceptChance({}) === null);
+{
+  const v = acceptVerdict({ lineupPerWeek: -2, lookPerWeek: 1 });
+  near(acceptChance({ lineupPerWeek: -2, lookPerWeek: 1 }), v.p, 1e-12, 'acceptChance is the verdict’s p');
+  ok('the verdict carries a word and a one-line why', ['likely', 'maybe', 'unlikely'].includes(v.word) &&
+    typeof v.why === 'string' && v.why.length > 0, JSON.stringify(v));
+  ok('an even deal reads "maybe"', acceptVerdict({ lineupPerWeek: 0, lookPerWeek: 0 }).word === 'maybe');
+}
 ok('it never goes up as the deal gets worse for him',
   [-9, -6, -3, 0, 3, 6].map((v) => acceptChance({ lineupPerWeek: v, lookPerWeek: v }))
     .every((p, i, a) => i === 0 || p > a[i - 1]));
