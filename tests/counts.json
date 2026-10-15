@@ -172,7 +172,7 @@
       "assertions": 1263
     },
     "tr-value-check.mjs": {
-      "assertions": 79
+      "assertions": 81
     },
     "test-notify-trades.mjs": {
       "assertions": 72

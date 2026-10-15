@@ -598,9 +598,25 @@ if (!process.argv[2]) {
   // `finderValue` joins `valA`/`valB` (2026-10-12): the row's Value column is a
   // Value whichever view is on, so it is the one thing on a row that lines
   // change. It is held to its own claims in section 10.
-  const strip = (s) => ({ ...s, toolbar: 0, seasonSwitches: 0, seasonTop: 0, whoParent: 0, everySwitch: 0, note: 0, valA: 0, valB: 0, finderValue: 0 });
+  // THE FINDER'S ROWS FOLLOW VALUE since 2026-10-15 (Tim: "also don't suggest
+  // trades with a value dif of over 5"): with lines a row over 5 is left out
+  // and the next one comes in, and the heat glyphs (scaled over the rows shown)
+  // move with it. So the finder is held apart: a row both pages show is the
+  // same row, glyphs aside, most rows are on both, and none shown is over 5.
+  const strip = (s) => ({ ...s, toolbar: 0, seasonSwitches: 0, seasonTop: 0, whoParent: 0, everySwitch: 0, note: 0, valA: 0, valB: 0, finderValue: 0, finder: 0 });
   ok('lines, on Proj: every number on the page is what it is with no lines', same(strip(P), strip(none.first)),
     where(strip(P), strip(none.first)));
+  {
+    const rowsOf = (f) => String(f || '').split(' ¦ ').map((r) => r.replace(/ ?[▲▼]/g, ''));
+    const rP = rowsOf(P.finder);
+    const r0 = new Set(rowsOf(none.first.finder));
+    const both = rP.filter((r) => r0.has(r)).length;
+    ok('lines, on Proj: the finder rows are the rows with no lines, less any over a Value gap of 5',
+      rP.length >= 5 && both >= Math.ceil(rP.length * 0.6), `${both} of ${rP.length} rows on both`);
+    const over = (P.finderValue || []).filter((r) => Number.isFinite(r.v) && Math.abs(r.v) > 5);
+    ok('lines: no finder row has a Value change over 5 either way', (P.finderValue || []).length > 3 && over.length === 0,
+      JSON.stringify(over.slice(0, 2)));
+  }
   ok('lines: the tucked note says what Value is',
     /Value is points a week over the waiver line/.test(P.note) && /count half/.test(P.note) && /fixed for the season/.test(P.note),
     P.note.slice(0, 300));
