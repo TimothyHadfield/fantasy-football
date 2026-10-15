@@ -1038,6 +1038,14 @@
   .cu-drop:hover { color: var(--err); border-color: var(--err); }
   /* ASSUME (2026-09-30): beside Remove on a saved row. */
   .cu-drop.cu-assume:hover { color: var(--accent); border-color: var(--accent); }
+  /* SEND LATER (2026-10-15): a select in the same stack; lit once a week is set. */
+  .cu-drop.cu-later:hover, .cu-drop.cu-later.on { color: var(--accent); border-color: var(--accent); }
+  td.cu-remove select.cu-drop {
+    -webkit-appearance: none; appearance: none; background: none;
+    padding: 3px 2px; text-align-last: center;
+  }
+  /* 16px on touch: iOS zooms into a smaller field (css/app.css). */
+  @media (hover: none) { td.cu-remove select.cu-drop { font-size: 16px; width: auto; min-width: 4.8em; } }
   #assumedTable td.cu-remove { white-space: nowrap; }
   /* STACKED (Tim, 2026-10-01): Assume, Remove and Ask AI one above the other,
      one width, so the saved table fits a laptop without scrolling sideways. */

@@ -5022,7 +5022,8 @@ function loadPastTrades() {
   pastTrades.key = key;
   pastTrades.moves = null;
   pastTrades.bars = new Map();
-  if (!key) return;
+  // Guarded like the floor and bye reads: a stub season without it bars nothing.
+  if (!key || typeof season.fetchDecisionWorld !== 'function') return;
   season.fetchDecisionWorld().then((world) => {
     if (pastTrades.key !== key) return;
     pastTrades.moves = (world && world.moves) || [];
@@ -9289,6 +9290,40 @@ function renderCustomPreview(priced) {
  * a different deal. That row cannot go through `offerRow` at all — there is no
  * priced offer to hand it — so it spans the table and says what is wrong.
  */
+/**
+ * SEND LATER (Tim, 2026-10-15: "make a "send later" button near the other
+ * buttons on the trade slip with all the saved trades where you select after a
+ * future week so that you can get a notification in the notifications menu so
+ * that you know to send that trade that future week").
+ *
+ * One select under the row's other buttons: "Send later" until a week is
+ * picked, then "After wk N", with "Send now" to clear it. It writes the saved
+ * entry's `sendAfter` (absent = send now); js/notify.js `sendLaterNotes` reads
+ * it once week N has been played.
+ *
+ * The weeks offered: every week not yet finished (the week in progress
+ * included), except the last — nothing is left to send for after it. A week
+ * already picked stays listed after it is played, so the row still says it.
+ */
+function sendLaterWeeks() {
+  const weeks = (state.weeks || []).filter(Number.isFinite);
+  if (!weeks.length) return [];
+  const last = Math.max(...weeks);
+  // The sample league's season is all played; it pretends to be at `state.week`.
+  const done = new Set(state.isDemo ? weeks.filter((w) => w < state.week) : (state.playedWeeks || []));
+  return weeks.filter((w) => w < last && !done.has(w));
+}
+
+function sendLaterHtml(entry, i) {
+  const at = Number.isFinite(entry.sendAfter) ? entry.sendAfter : null;
+  const weeks = sendLaterWeeks();
+  if (at !== null && !weeks.includes(at)) weeks.unshift(at);
+  const opts = (at === null ? '<option value="" selected>Send later</option>' : '<option value="">Send now</option>') +
+    weeks.map((w) => `<option value="${w}"${w === at ? ' selected' : ''}>After wk ${w}</option>`).join('');
+  return `<select class="cu-drop cu-later${at === null ? '' : ' on'}" data-later="${i}"` +
+    ` aria-label="Send later">${opts}</select>`;
+}
+
 function renderCustomSaved() {
   const rows = state.customSaved;
   $('cuWrap').hidden = rows.length === 0;
@@ -9358,7 +9393,8 @@ function renderCustomSaved() {
     // THE ASSUMED TRADE.
     const tail = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop cu-assume" data-assume="${i}">Assume</button>` +
-      `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
+      `<button type="button" class="cu-drop" data-drop="${i}">Remove</button>` +
+      sendLaterHtml(entry, i) + `</td>`;
     const g = groupOf(i);
     const first = !seen.has(g);
     seen.add(g);
@@ -10432,6 +10468,9 @@ function loadCustomTrades() {
       b: Number(e.b),
       sendA: Array.isArray(e.sendA) ? e.sendA.map(String) : [],
       sendB: Array.isArray(e.sendB) ? e.sendB.map(String) : [],
+      // SEND LATER: the week after which to send it; absent = now.
+      ...(Number.isFinite(Number(e.sendAfter)) && e.sendAfter !== null && e.sendAfter !== ''
+        ? { sendAfter: Number(e.sendAfter) } : {}),
     }))
     .filter((e) => Number.isFinite(e.a) && Number.isFinite(e.b) && e.a !== e.b &&
       (e.sendA.length > 0 || e.sendB.length > 0));
@@ -11558,6 +11597,22 @@ $('cuOpen').addEventListener('click', (e) => {
   openDeal(customOffer(state.custom, priced), 'cu-build');
 });
 
+// SEND LATER: the picked week goes on the saved entry (see `sendLaterHtml`).
+$('cuRows').addEventListener('change', (e) => {
+  const sel = e.target && e.target.closest ? e.target.closest('select[data-later]') : null;
+  if (!sel) return;
+  const i = Number(sel.getAttribute('data-later'));
+  const entry = state.customSaved[i];
+  if (!entry) return;
+  const w = Number(sel.value);
+  const next = { ...entry };
+  if (sel.value !== '' && Number.isFinite(w)) next.sendAfter = w;
+  else delete next.sendAfter;
+  state.customSaved = state.customSaved.map((x, n) => (n === i ? next : x));
+  saveCustomTrades();
+  renderCustom();
+});
+
 $('cuRows').addEventListener('click', (e) => {
   const take = e.target.closest ? e.target.closest('button[data-assume]') : null;
   if (take) {
@@ -11579,7 +11634,7 @@ $('cuRows').addEventListener('click', (e) => {
   // player links and an ESPN link like any other — and those have to be left
   // alone, exactly as the finder's own click handler leaves them alone.
   if (clickIsPlayer(e)) return;
-  if (e.target.closest && e.target.closest('a, button[data-cu-load], button[data-ask-ai]')) return;
+  if (e.target.closest && e.target.closest('a, button[data-cu-load], button[data-ask-ai], select[data-later]')) return;
   if (clickIsPreview(e)) return;
 
   // A saved row opens the SAME pop-up the finder's rows open — the per-week

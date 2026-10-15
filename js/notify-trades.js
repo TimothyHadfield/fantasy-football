@@ -151,6 +151,29 @@ export function saveTradesNote(leagueId, season, note, storage = null) {
   }
 }
 
+/**
+ * SEND LATER (2026-10-15): the Trade page's saved custom trades that carry a
+ * `sendAfter` week, for js/notify.js `sendLaterNotes`. They live in
+ * `ff.prefs` → `trade.custom` (js/trade-page.js `saveCustomTrades`), and that
+ * slot holds ONE league-season's preferences at a time (js/prefs.js), marked
+ * `@league`: another league's mark → []. An unmarked slot is the open league's.
+ */
+export function readSendLater(leagueId, season, storage = null) {
+  try {
+    const s = storageOf(storage);
+    const p = s ? JSON.parse(s.getItem('ff.prefs') || 'null') : null;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return [];
+    const mark = p['@league'];
+    if (typeof mark === 'string' && mark !== `${leagueId}-${Number(season)}`) return [];
+    const list = p['trade.custom'];
+    return Array.isArray(list)
+      ? list.filter((e) => e && typeof e === 'object' && e.sendAfter !== null && e.sendAfter !== undefined)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 /** The note kept for a league-season, or null when there is none worth reading. */
 export function readTradesNote(leagueId, season, storage = null) {
   try {

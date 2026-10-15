@@ -17,6 +17,7 @@
 //   pickup     js/waiver-gain.js `gainOf`       the Players page's Gain column
 //   offer      season.fetchPendingTrades()      a trade offer waiting on ESPN
 //   trade      the deals the Trade page saved   its ranked list, with their age
+//   send-later a saved custom trade's "After wk N"  once week N is played
 //
 // A line is `{ id, kind, level, title, detail, suggest, action }`.
 //   suggest the SUGGESTED ACTION, drawn under the line (Tim, 2026-10-11: "could
@@ -477,6 +478,59 @@ function tradeNotes({ saved, teamId, now }) {
   });
 }
 
+// ------------------------------------------------------------- send-later
+
+/**
+ * SEND LATER (Tim, 2026-10-15: "… select after a future week so that you can
+ * get a notification in the notifications menu so that you know to send that
+ * trade that future week").
+ *
+ * The Trade page's saved custom trades (`ff.prefs` → `trade.custom`, entries
+ * `{ a, b, sendA, sendB, sendAfter? }`: squad ids, the men each squad sends as
+ * id strings, and the week after which to send it). One line per trade of
+ * YOURS whose week has been played — `week`, the week being played next, is
+ * past it. Before then nothing is listed.
+ *
+ * @param {Array} o.later  the saved entries, as stored
+ * @param {Array} o.teams  every squad this week (names)
+ */
+export function sendLaterNotes({ later = [], teamId, teams = [], week } = {}) {
+  if (!Array.isArray(later) || !has(teamId) || !Number.isFinite(Number(week))) return [];
+  const nameOf = new Map();
+  const teamName = new Map();
+  for (const t of teams || []) {
+    teamName.set(String(t.id), t.name);
+    for (const p of t.players || []) if (has(p.playerId)) nameOf.set(String(p.playerId), p.name);
+  }
+  const names = (ids) => ids.map((id) => nameOf.get(String(id))).filter(Boolean).join(', ');
+  const out = [];
+  for (const e of later) {
+    if (!e || typeof e !== 'object') continue;
+    const at = Number(e.sendAfter);
+    if (!has(e.sendAfter) || e.sendAfter === '' || !Number.isFinite(at) || !(Number(week) > at)) continue;
+    const meA = String(e.a) === String(teamId);
+    if (!meA && String(e.b) !== String(teamId)) continue;   // not a trade you can send
+    const partner = meA ? e.b : e.a;
+    const sendIds = ((meA ? e.sendA : e.sendB) || []).map(String);
+    const getIds = ((meA ? e.sendB : e.sendA) || []).map(String);
+    const send = names(sendIds);
+    const get = names(getIds);
+    out.push({
+      id: `later-${partner}-${sendIds.slice().sort().join('.')}-${getIds.slice().sort().join('.')}`,
+      kind: 'send-later',
+      level: 'now',
+      title: `Send your trade with ${teamName.get(String(partner)) || 'another team'}`,
+      detail: `Saved for after week ${at}`,
+      suggest: get && send ? `Offer ${send} for ${get}` : get ? `Ask for ${get}` : send ? `Offer ${send}` : null,
+      action: {
+        label: 'Open it',
+        href: dealHref({ with: partner, get: getIds, send: sendIds }) || 'trade.html',
+      },
+    });
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------- all
 
 /**
@@ -497,6 +551,7 @@ function tradeNotes({ saved, teamId, now }) {
  * @param {Array} [o.offers]    `season.fetchPendingTrades()`
  * @param {number|null} [o.offersAt]  when the offers were read, if that is not now (a synced copy)
  * @param {Object|null} [o.saved]  the Trade page's saved deals
+ * @param {Array} [o.later]     the Trade page's saved custom trades (see `sendLaterNotes`)
  * @param {number} [o.now]      epoch ms, for the ages
  * @param {Object|null} [o.fill]  `{ byWeek: Map<week, freeAgents>, weeks, projFor, floors }`:
  *                              the wire of the weeks that have a hole, for what to do about it
@@ -505,7 +560,7 @@ function tradeNotes({ saved, teamId, now }) {
 export function buildNotes({
   week, teamId, league = null, team = null, teams = [], slots = [],
   isLocked = hasPlayed, byes = null, coming = [], wire = null, fill = null,
-  offers = [], offersAt = null, saved = null, now = Date.now(),
+  offers = [], offersAt = null, saved = null, later = [], now = Date.now(),
 } = {}) {
   if (!team) return [];
   const start = startNotes({ week, teamId, league, team, slots, isLocked });
@@ -515,6 +570,7 @@ export function buildNotes({
     ...holeNotes({ coming, slots, byes, fill }),
     ...pickupNotes({ team, slots, wire }),
     ...offerNotes({ offers, teams, offersAt, now }),
+    ...sendLaterNotes({ later, teamId, teams, week }),
     ...tradeNotes({ saved, teamId, now }),
   ];
   // Stable: within a level the lines keep the order they were made in — swaps

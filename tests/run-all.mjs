@@ -97,7 +97,7 @@ const SUITES = [
   ['test-decisions.mjs', 'the decisions review: one decision undone and the season replayed, flips, records, noise'],
   ['test-draft-review.mjs', 'the draft looked back on: where each man went, what he is worth now, the bar at each position, on the real league’s draft'],
   ['test-start-sit.mjs', 'start A over B: the swaps to the best legal lineup, their points, their share of the win chance, who is locked'],
-  ['test-notify.mjs', 'the notification lines: a swap and its moves, a starter who is out or on bye, a coming week with a hole, pick-ups, trade offers, saved deals, their order'],
+  ['test-notify.mjs', 'the notification lines: a swap and its moves, a starter who is out or on bye, a coming week with a hole, pick-ups, trade offers, saved deals, a saved trade to send after a played week, their order'],
   ['notify-check.mjs', 'the Notifications page: one list under three headings, one button a line, the count it saves, the one-click lineup change believed only when the roster shows it, an earlier season, no team'],
   ['test-value-measure.mjs', 'the Value measurement search: a surname, an initial, dots and apostrophes left out, a slipped letter, a position; the sums'],
   ['test-outlook-mark.mjs', 'the diamond and the coin: projected 2 or more a week above / below his average, as printed; nothing when either number is missing'],

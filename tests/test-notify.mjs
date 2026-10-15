@@ -393,6 +393,45 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   eq(kind(notes({ team, saved: { ...saved, deals: [] } }), 'trade').map((n) => n.id), ['trade-look'], 'trade: an empty list is the one "look" line');
 }
 
+// ------------------------------------------------------------------ send-later
+// Tim, 2026-10-15: a saved custom trade set to "After wk N" is a line once week
+// N has been played. Entries in the Trade page's stored shape (`ff.prefs`
+// `trade.custom`): squad ids as numbers, the men each squad SENDS as id strings.
+{
+  const team = teamOf(squad());
+  const later = [
+    { a: ME, b: 3, sendA: ['105'], sendB: ['301'], sendAfter: 4 },          // due: week 4 is played
+    { a: 7, b: ME, sendA: ['701'], sendB: ['112', '111'], sendAfter: 3 },   // due, saved from his side
+    { a: ME, b: 3, sendA: ['110'], sendB: ['302'], sendAfter: 5 },          // week 5 is the one being played
+    { a: ME, b: 3, sendA: ['104'], sendB: ['302'] },                        // send now: no line
+    { a: 3, b: 7, sendA: ['301'], sendB: ['701'], sendAfter: 2 },           // not your trade
+  ];
+  const ns = kind(notes({ team, later }), 'send-later');
+  eq(ns, [
+    { id: 'later-3-105-301', kind: 'send-later', level: 'now', title: 'Send your trade with Team Three',
+      detail: 'Saved for after week 4', suggest: 'Offer Eli Ward for Quin Ashby',
+      action: { label: 'Open it', href: 'trade.html?with=3&get=301&send=105' } },
+    { id: 'later-7-111.112-701', kind: 'send-later', level: 'now', title: 'Send your trade with Team Seven',
+      detail: 'Saved for after week 3', suggest: 'Offer Lou Thorn, Kit West for Sol Vance',
+      action: { label: 'Open it', href: 'trade.html?with=7&get=701&send=112,111' } },
+  ], 'send-later: one line per trade of yours whose week is played, naming the men each way and opening that deal');
+  eq(kind(notes({ team, later: [later[2]] }), 'send-later'), [], 'send-later: not before the week is played');
+  eq(kind(notes({ team, later: [{ ...later[0], sendAfter: null }] }), 'send-later'), [], 'send-later: cleared back to now, no line');
+  eq(kind(notes({ team }), 'send-later'), [], 'send-later: nothing saved, no line');
+  eq(kind(notes({ team, later: 'junk' }), 'send-later'), [], 'send-later: a stored value of another shape is no line');
+  eq(countNotes(notes({ team, later })).now, 2, 'send-later: the bell counts them');
+
+  // Read off the Trade page's own preference slot, never another league's.
+  const T = await import(pathToFileURL(path.join(REPO, 'js/notify-trades.js')).href);
+  const box = (v) => ({ getItem: (k) => (k === 'ff.prefs' ? (typeof v === 'string' ? v : JSON.stringify(v)) : null) });
+  const prefs = { '@league': '99-2026', 'trade.week': 5, 'trade.custom': later };
+  eq(T.readSendLater('99', 2026, box(prefs)), later.filter((e) => e.sendAfter != null), 'send-later read: this league’s saved trades that carry a week');
+  eq(T.readSendLater('99', 2026, box({ ...prefs, '@league': '12-2026' })), [], 'send-later read: another league’s slot is not read');
+  eq(T.readSendLater('99', 2026, box({ 'trade.custom': later })).length, 4, 'send-later read: an unmarked slot is the open league’s');
+  eq(T.readSendLater('99', 2026, box('{not json')), [], 'send-later read: a broken slot is nothing');
+  eq(T.readSendLater('99', 2026, { getItem: () => { throw new Error('denied'); } }), [], 'send-later read: storage refused is nothing');
+}
+
 // --------------------------------------------------------------- order, counts
 {
   const s = squad({ bRb: { projected: 14.0 } });

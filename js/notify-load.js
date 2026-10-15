@@ -29,6 +29,7 @@
 // shows the bell's saved count loads none of them for it.
 
 import { savedConfig, pastSeason } from './connection.js';
+import { readSendLater } from './notify-trades.js';
 
 /** A saved count older than this is worked out again. */
 export const FRESH_MS = 3 * 60 * 60 * 1000;
@@ -285,6 +286,7 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
     // On the synced copy an offer is as old as the sync that carried it.
     offersAt: cloud && has('weekReadAt') ? season.weekReadAt(week) : null,
     saved: readJson(tradesKey(cfg.leagueId, cfg.season)),
+    later: readSendLater(cfg.leagueId, cfg.season),
     now,
   };
   emit({ ...state, notes: m.engine.buildNotes(base), pending: true });
