@@ -197,10 +197,10 @@
       "assertions": 89
     },
     "test-trade-cut.mjs": {
-      "assertions": 1642
+      "assertions": 3254
     },
     "test-trade-moves.mjs": {
-      "assertions": 57
+      "assertions": 58
     },
     "test-out-for-season.mjs": {
       "assertions": 18

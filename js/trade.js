@@ -529,8 +529,9 @@ function packages(list, max = MAX_PACKAGE) {
  * −0.6/week" on a WR/RB trade). Now the man whose removal costs the after-trade
  * lineups the FEWEST points over the priced weeks goes, each week assessed
  * exactly as the pricing assesses it (`optimalLineup`, then `assessLineup` with
- * the floors). A tie goes to the lower rest-of-season total, which was the
- * whole rule before; a further tie to roster order. Everyone on the after-trade
+ * the floors). A tie goes to the lower Value when the page knows Values (FREE
+ * CUT FIRST below, 2026-10-15), then the lower rest-of-season total, which was
+ * the whole rule before; a further tie to roster order. Everyone on the after-trade
  * roster is eligible, the men just received included — as before.
  *
  * CHEAP IN THE USUAL CASE. A man who starts in NO priced week costs exactly 0
@@ -644,23 +645,32 @@ function solveWeeks(roster, ctx) {
 const CUT_EPS = 1e-6;
 const seasonOf = (p) => (Number.isFinite(p.projected) ? p.projected : -Infinity);
 
-// VALUE DECIDES WHO IS DROPPED, WHEN THE PAGE KNOWS IT (Tim, 2026-10-12: "it
-// suggests me to drop Juwan Jhonson, the #3 TE avg 13pts and a value of 0.8 …
-// Value should probably be the biggest priority when choosing who to drop
-// because high value means you can probably trade for another player").
+// FREE CUT FIRST, VALUE BREAKS TIES (Tim, 2026-10-15: "Free cut first, Value
+// breaks ties"). The forced cut is, in order:
+//   1. the man whose loss costs the priced weeks the FEWEST points (a man who
+//      starts in no priced week costs 0);
+//   2. among men equally cheap (within CUT_EPS), the LOWEST VALUE, compared as
+//      printed (to the tenth; a man with none counts 0);
+//   3. then the lower season total;
+//   4. then roster order (an idle man ahead of an equally placed starter).
+// Value applies only when a page that holds the league's Values has handed the
+// lookup over (`setCutValue`); with no lookup step 2 is skipped, which is the
+// rule every caller without Values (and every test of the engine alone) gets.
 //
-// A page that holds the league's Values hands the lookup over once
-// (`setCutValue`), and from then on the forced cut is THE LOWEST VALUE on the
-// roster, compared as printed (to the tenth; a man with none counts 0). The
-// rule above — least cost to the priced weeks, then the lower season total —
-// only settles men level on Value. With no lookup it is the whole rule, as
-// before, which is what every caller without Values (and every test of the
-// engine alone) still gets.
+// HISTORY. 2026-10-12 Tim put Value FIRST ("it suggests me to drop Juwan
+// Jhonson, the #3 TE avg 13pts and a value of 0.8 … Value should probably be
+// the biggest priority when choosing who to drop because high value means you
+// can probably trade for another player"), and cost only settled men level on
+// Value. Trade audit finding 18 measured what that cost: 561 of 3,001
+// one-for-two deals on public league 1241838 cut a man who costs points when a
+// free cut existed — worst −0.37 a week (Diggs, Value 0.3, cut instead of idle
+// Lloyd). Asked, Tim chose 2026-10-15's order above. His 10-12 case still comes
+// out the same: both men sat, so the lower Value went.
 //
-// ONE GUARD: a man is not dropped if that leaves a one-position slot (QB, K,
-// D/ST…) with nobody to fill it. Dropping your only kicker — Value 0.0, like
-// most kickers — means adding one straight back, which frees no roster spot.
-// When every man is such a man, the guard is off.
+// ONE GUARD (with Values): a man is not dropped if that leaves a one-position
+// slot (QB, K, D/ST…) with nobody to fill it. Dropping your only kicker — Value
+// 0.0, like most kickers — means adding one straight back, which frees no
+// roster spot. When every man is such a man, the guard is off.
 let cutValue = null;
 
 /** @param {?function(*): (number|null)} fn playerId -> his Value; null to forget it */
@@ -675,7 +685,7 @@ const valueTenth = (p) => {
   return Number.isFinite(v) ? Math.round(round1(v) * 10) : 0;
 };
 
-/** The men Value says go first: the lowest Value among those the lineup can spare. */
+/** The men the one-position guard lets go (with Values on; everyone without). */
 function cutPool(roster, slots) {
   if (!cutValue) return roster;
   const starts = new Map();
@@ -686,10 +696,17 @@ function cutPool(roster, slots) {
   const held = new Map();
   for (const p of roster) held.set(p.position, (held.get(p.position) || 0) + 1);
   const spare = roster.filter((p) => (held.get(p.position) || 0) > (starts.get(p.position) || 0));
-  const from = spare.length ? spare : roster;
-  let low = Infinity;
-  for (const p of from) low = Math.min(low, valueTenth(p));
-  return from.filter((p) => valueTenth(p) === low);
+  return spare.length ? spare : roster;
+}
+
+/** Among equally cheap cuts, does `p` go ahead of `q`? Lower Value as printed, then lower season total. */
+function cutsBefore(p, q) {
+  if (cutValue) {
+    const a = valueTenth(p);
+    const b = valueTenth(q);
+    if (a !== b) return a < b;
+  }
+  return seasonOf(p) < seasonOf(q);
 }
 
 function forcedCut(kept, over, ctx, solved, reserve = null) {
@@ -706,23 +723,24 @@ function forcedCut(kept, over, ctx, solved, reserve = null) {
     let best = null;
     let bestCost = Infinity;
     let bestWeeks = null;
-    // Idle men first: cost 0, nothing to re-fill.
+    // Idle men first: cost 0, nothing to re-fill. Among them, the tiebreaks.
     for (const p of pool) {
       if (starting.has(p.playerId)) continue;
-      if (best === null || seasonOf(p) < seasonOf(best)) best = p;
+      if (best === null || cutsBefore(p, best)) best = p;
     }
     if (best) {
       bestCost = 0;
       bestWeeks = weeks;
     }
-    // Then the starters. With an idle man in hand only a starter with a LOWER
-    // season total can still win, and only by also costing 0 — which happens
-    // under the floor, when the slot he leaves is assessed at the floor either
-    // way (a bye-week backup projected below the wire's third man). So only
+    // Then the starters. With an idle man in hand a starter can still win only
+    // by ALSO costing 0 — which happens under the floor, when the slot he
+    // leaves is assessed at the floor either way (a bye-week backup projected
+    // below the wire's third man) — and by going ahead of the idle man on the
+    // tiebreaks (lower Value, or level Value and a lower season total). So only
     // those are costed; with nobody idle, everyone is.
     for (const p of pool) {
       if (!starting.has(p.playerId)) continue;
-      if (best !== null && bestCost <= CUT_EPS && !(seasonOf(p) < seasonOf(best))) continue;
+      if (best !== null && bestCost <= CUT_EPS && !cutsBefore(p, best)) continue;
       const rest = roster.filter((q) => q !== p);
       let cost = 0;
       const after = weeks.map((w, i) => {
@@ -732,7 +750,7 @@ function forcedCut(kept, over, ctx, solved, reserve = null) {
         return x;
       });
       if (cost < bestCost - CUT_EPS ||
-          (Math.abs(cost - bestCost) <= CUT_EPS && seasonOf(p) < seasonOf(best))) {
+          (Math.abs(cost - bestCost) <= CUT_EPS && cutsBefore(p, best))) {
         best = p;
         bestCost = cost;
         bestWeeks = after;
