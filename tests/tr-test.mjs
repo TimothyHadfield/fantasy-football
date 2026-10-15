@@ -5407,10 +5407,11 @@ for (const noApi of [false, true]) {
     !!ai.row.goal.yes && t.includes(`whether he accepts: ${ai.row.goal.yes}`) && t.includes(ai.row.goal.sub.split(' · ')[0]),
     `${JSON.stringify(ai.row.goal)} / ${(t.match(/chance \(my goal.*/) || [''])[0]}`);
   {
-    // "5.9% → 10.3% (+4.4% ±0.4)": the change it quotes is those two subtracted
-    // (2026-10-06), the same figure the row's goal cell prints.
-    const m = t.match(/(\d+\.\d)% → (\d+\.\d)% \(([+−]?\d+\.\d)% ±/);
-    const tenth = (s) => Math.round(num(s) * 10);
+    // "6% → 10% (+4% ±0.4)": the change it quotes is those two subtracted
+    // (2026-10-06), the same figure the row's goal cell prints. Whole percent
+    // since trade audit Phase 4 (2026-10-15).
+    const m = t.match(/(\d+)% → (\d+)% \(([+−]?\d+)% ±/);
+    const tenth = (s) => Math.round(num(s));
     ok(`the change it quotes is its own before → after subtracted, and the row's${tag}`,
       !!m && tenth(m[2]) - tenth(m[1]) === tenth(m[3]) && ai.row.goal.all.includes(`${m[3]}% ±`),
       `${(t.match(/chance \(my goal.*/) || [''])[0]} / ${ai.row.goal.all}`);
@@ -9000,7 +9001,7 @@ if (!gt.boot) {
     T.trades.some((t, i, a) => i > 0 && netOf(a[i - 1]) === netOf(t)) && netTiesKeepGoal(T.trades),
     T.trades.map((t) => `${netOf(t) / 10}:${t.goal.v.toFixed(4)}`).join(' '));
   ok('each cell says before → after and how likely he is to say yes',
-    scored.every((t) => /^\d+\.\d% → \d+\.\d% · yes: (likely|maybe|unlikely)$/.test(t.goal.sub)),
+    scored.every((t) => /^\d+% → \d+% · yes: (likely|maybe|unlikely)$/.test(t.goal.sub)),
     scored.slice(0, 3).map((t) => t.goal.sub).join(' | '));
   ok('and a green cell is one that helps, a red one one that hurts — by sign as well as hue',
     scored.every((t) => (/\bpos\b/.test(t.goal.cls) ? /^\+/.test(t.goal.head) : true) &&
@@ -9010,11 +9011,11 @@ if (!gt.boot) {
   // -- A PRINTED CHANGE IS ITS PRINTED ENDS SUBTRACTED (audit, 2026-10-06) -----
   // The live page printed "+2.7% · 2.1% → 4.7%": the change and each end were
   // rounded on their own. Every place a change sits beside its before → after
-  // is read here, under both goals.
-  const tenths = (s) => Math.round(Number(String(s).replace('−', '-').replace('+', '')) * 10);
+  // is read here, under both goals. (Whole percent since trade audit Phase 4.)
+  const tenths = (s) => Math.round(Number(String(s).replace('−', '-').replace('+', '')));
   /** '' when "Δ … a% → b%" adds up, the text when it does not, null when there is no trio. */
   const trioOff = (words) => {
-    const m = String(words || '').match(/([+−-]?\d+\.\d)% ±\d\.\d\D{0,4}?(\d+\.\d)% → (\d+\.\d)%/);
+    const m = String(words || '').match(/([+−-]?\d+)% ±\d\.\d\D{0,4}?(\d+)% → (\d+)%/);
     if (!m) return null;
     return tenths(m[3]) - tenths(m[2]) === tenths(m[1]) ? '' : m[0];
   };
@@ -9027,7 +9028,7 @@ if (!gt.boot) {
     ok(`${goalName} goal: in every cell the printed change is the printed after minus the printed before`,
       trios.every((x) => x === ''), trios.filter(Boolean).slice(0, 4).join(' | '));
     ok(`${goalName} goal: and no change is printed as a signed zero`,
-      page.trades.every((t) => !/^[+−-]0\.0%/.test(`${t.goal.head}`) && !/^[+−-]0\.0%/.test(`${(t.alt || {}).head}`)),
+      page.trades.every((t) => !/^[+−-]0%/.test(`${t.goal.head}`) && !/^[+−-]0%/.test(`${(t.alt || {}).head}`)),
       page.trades.map((t) => t.goal.head).join(' '));
   }
   // The sort key is NOT that display figure: it stays the exact expected change.
@@ -9082,10 +9083,12 @@ if (!gt.boot) {
     // "yes" is only within a point for a partner sure to reach the bracket).
     const top = scored.slice().sort((a, b) => b.goal.v - a.goal.v)[0];
     const re = top ? await rederiveGoal(T, top, 'title') : null;
-    const shown = top ? top.goal.sub.match(/^(\d+\.\d)% → (\d+\.\d)% · yes: (likely|maybe|unlikely)$/) : null;
+    const shown = top ? top.goal.sub.match(/^(\d+)% → (\d+)% · yes: (likely|maybe|unlikely)$/) : null;
+    // Whole percent since trade audit Phase 4: within half a point of rounding,
+    // plus the 0.1 the after was allowed before.
     ok('the top row’s title chance re-derives from the engine alone',
-      !!re && !!shown && Math.abs(Number(shown[1]) - re.before * 100) <= 0.051 &&
-        Math.abs(Number(shown[2]) - re.after * 100) <= 0.151,
+      !!re && !!shown && Math.abs(Number(shown[1]) - re.before * 100) <= 0.501 &&
+        Math.abs(Number(shown[2]) - re.after * 100) <= 0.601,
       `page ${top && top.goal.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
     // Since 2026-10-15 (trade audit Phase 3) the yes-chance also reads each
     // man's ESPN average, last game, rank, injury tag, his holes and standing
@@ -9222,7 +9225,7 @@ if (!gt.boot) {
   // (4) NO FALSE PRECISION. No chance is printed to two decimals anywhere, and a
   // stated change carries the measured band.
   ok('every goal cell prints the ± band beside the change it states',
-    scored.every((t) => t.goal.band === '±0.4' && /^[+−]?\d+\.\d% ±0\.4$/.test(t.goal.head)),
+    scored.every((t) => t.goal.band === '±0.4' && /^[+−]?\d+% ±0\.4$/.test(t.goal.head)),
     scored.slice(0, 4).map((t) => `"${t.goal.head}" band="${t.goal.band}"`).join(' | '));
   ok('and no chance is quoted to two decimal places — not in a cell, not in a tooltip',
     T.trades.every((t) => !/\d\.\d\d\s*%/.test(`${t.goal.head} ${t.goal.sub} ${t.goal.title}`)) &&
@@ -9260,7 +9263,7 @@ if (!gt.boot) {
     `${gt.dealGoal} vs ${scored[0] && `${scored[0].goal.head} ${scored[0].goal.sub}`}`);
   ok('a custom deal was built by ticking a man each side', gt.ticked);
   ok('the builder says what the deal does to the title chance as it is built',
-    /title chance [+−]?\d+\.\d%/.test(gt.cuPreview), gt.cuPreview);
+    /title chance [+−]?\d+%/.test(gt.cuPreview), gt.cuPreview);
   ok('and the saved row carries the goal column like a finder row',
     !!gt.cuRow && gt.cuRow.goal && /%/.test(gt.cuRow.goal.head) && gt.cuRow.goal.index === 1,
     JSON.stringify(gt.cuRow && gt.cuRow.goal));
@@ -9927,7 +9930,7 @@ if (!gl.boot) {
   ok('not yet in red, with more than a week to go', !gl.deadline.warn);
   // -- THE COMBO AND 2-FOR-2 --------------------------------------------------
   ok('the combo headline says what the whole slate does to the title chance',
-    /Your title chance [+−]?\d+\.\d%/.test(gl.combo) || /Nothing to combine|Making none/.test(gl.combo),
+    /Your title chance [+−]?\d+%/.test(gl.combo) || /Nothing to combine|Making none/.test(gl.combo),
     gl.combo.slice(0, 240));
   ok('the shape filter offers 2 for 2', gl.kinds.includes('2 for 2'), gl.kinds.join(' | '));
   ok('no console errors on the live title path', gl.errors.length === 0, gl.errors.slice(0, 2).join(' | '));
@@ -9968,8 +9971,9 @@ if (!gl.boot) {
     const B = tw.second;
     ok('no console errors with both goal columns', tw.errors.length === 0, tw.errors.slice(0, 2).join(' | '));
     ok('and demo still costs no request', tw.fetchCalls.length === 0, tw.fetchCalls.join(' | '));
-    const chanceRe = /^[+−]?\d+\.\d% ±0\.4$/;
-    const subRe = /^(\d+\.\d)% → (\d+\.\d)%$/;
+    // Whole percent since trade audit Phase 4 (2026-10-15).
+    const chanceRe = /^[+−]?\d+% ±0\.4$/;
+    const subRe = /^(\d+)% → (\d+)%$/;
     // A missing cell reads as blank, so an absent column fails its checks rather than throwing.
     const NA = { head: '', sub: '', cls: '', v: NaN, sign: '?' };
 
@@ -10071,7 +10075,7 @@ if (!gl.boot) {
       A.comboRows.length === 0 || (A.comboHeads.includes('His proj vs you') && A.comboRows.every((r) => r.opp)),
       A.comboHeads.join(' | '));
     ok('and its headline previews the other goal beside the ranked one',
-      A.comboRows.length === 0 || (/Your title chance/.test(A.comboGoal) && /last chance [+−]?\d+\.\d%/.test(A.comboGoal)),
+      A.comboRows.length === 0 || (/Your title chance/.test(A.comboGoal) && /last chance [+−]?\d+%/.test(A.comboGoal)),
       A.comboGoal);
 
     // -- (2) THE GOAL SWITCH ABOVE EVERY PANEL, acting as one -------------------
@@ -10198,7 +10202,7 @@ if (!gl.boot) {
 
     // -- the goal: three lines ----------------------------------------------
     ok('the goal cell: you now → with, him now → with, the chance he says yes',
-      /You now → with \d+\.\d% → \d+\.\d%/.test(F.goal.card) &&
+      /You now → with \d+% → \d+%/.test(F.goal.card) &&
       F.goal.card.includes(`${F.partner} now → with`) &&
       /Chance he says yes (likely|maybe|unlikely) \(\d+%\)/.test(F.goal.card), F.goal.card);
     ok('and not the long sentence about simulated seasons', !/simulated seasons/.test(F.goal.card) && F.goal.rawTitle === '',

@@ -178,9 +178,10 @@ const tableOf = (spec) => {
     theirs: { before: 0.154, after: 0.121 }, accept: 0.95,
   });
   eq(g.rows.length, 3, 'three lines');
-  eq(g.rows[0].value, '2.4% → 5.3%', 'you, now → with');
+  // Whole percent since trade audit Phase 4 (finding 10, 2026-10-15).
+  eq(g.rows[0].value, '2% → 5%', 'you, now → with');
   eq(g.rows[1].label, 'Luke', 'him, by name');
-  eq(g.rows[1].value, '15.4% → 12.1%', 'him, now → with');
+  eq(g.rows[1].value, '15% → 12%', 'him, now → with');
   ok('and the chance he says yes', g.rows[2].label === 'Chance he says yes' && g.rows[2].value === '95%');
   // Since 2026-10-15 (trade audit Phase 3, "show words") the page hands the word in.
   const gw = goalSpec({ mine: { before: 0.024, after: 0.053 }, accept: 0.2, word: 'unlikely' });
@@ -188,6 +189,29 @@ const tableOf = (spec) => {
   eq(g.title, 'Title chance', 'titled by the goal');
   const a = altGoalSpec({ chance: 'chance of finishing last', partner: 'Luke', before: 0.155, after: 0.098, weeks: 'weeks 5–14' });
   ok('the other goal: yours only, and it says it ranks nothing', a.rows.length === 1 && /does not rank/.test(a.foot), a.foot);
+  eq(a.rows[0].value, '16% → 10%', 'the other goal in whole percent too');
+}
+
+// ------------------------------------- 4a. a season-sim chance, printed whole
+//
+// Trade audit finding 10 (measured): 12 seeds × 10,000 seasons moved a title
+// change by 0.47 points, so "22.8% → 27.3%" claimed precision the run lacks.
+// The change beside two printed ends is those ends subtracted (house rule).
+{
+  const cards = await import('../js/trade-cards.js');
+  ok('chancePct is exported', typeof cards.chancePct === 'function' && typeof cards.chanceChange === 'function');
+  const P = cards.chancePct || (() => '');
+  const C = cards.chanceChange || (() => '');
+  eq(P(0.228), '23%', 'a chance prints whole: 22.8% is 23%');
+  eq(P(0.273), '27%', '27.3% is 27%');
+  eq(P(0), '0%', 'nothing is 0%');
+  eq(P(NaN), '—', 'not known is a dash');
+  eq(C(0.228, 0.273), '+4%', '"23% → 27%" reads +4%, its ends subtracted (the exact change is 4.5)');
+  eq(C(0.226, 0.274), '+4%', '22.6 → 27.4 is 23% → 27%: +4%, never +5%');
+  eq(C(0.224, 0.226), '+1%', '22.4 → 22.6 prints 22% → 23%, so +1%');
+  eq(C(0.221, 0.224), '0%', 'a change that prints the same both ends is a plain 0%, unsigned');
+  eq(C(0.30, 0.21), '−9%', 'a fall carries a real minus');
+  eq(C(null, 0.2), '—', 'an end not known: a dash');
 }
 
 // ------------------------------------------------- 4b. will he say yes?

@@ -1349,10 +1349,12 @@ function absorbWeek(players, week) {
         waiverClears: p.waiverClears ?? null,
         // ESPN's season average and position rank (the card's glance line).
         seasonAvg: typeof p.seasonAvg === 'number' ? p.seasonAvg : null,
+        seasonGames: typeof p.seasonGames === 'number' ? p.seasonGames : null,
         posRank: typeof p.posRank === 'number' ? p.posRank : null,
       });
     } else {
       if (typeof p.seasonAvg === 'number') known.seasonAvg = p.seasonAvg;
+      if (typeof p.seasonGames === 'number') known.seasonGames = p.seasonGames;
       if (typeof p.posRank === 'number') known.posRank = p.posRank;
       // The same player comes back in every week's payload. Later weeks carry
       // the fresher injury status and ownership, so let them win; the ordering
@@ -3995,8 +3997,10 @@ const trendMark = (p, rostered) => trend.trendHtml(
  * THE DIAMOND AND THE COIN (Tim, 2026-10-14: "in the players section show the
  * diamond or coin just like in the trade section by the player's name"). The
  * rule and markup are js/outlook-mark.js's, the Trade page's: his projection
- * for the weeks left 2 or more a week above (💎) or below (🪙) ESPN's season
- * average. The two numbers are his card's (`glanceFor`): Avg off ESPN, and
+ * for the weeks left well above (💎) or below (🪙) his season average — by
+ * 6.7 ÷ √(games played), never under 2 a week — the average leaving out a game
+ * cut short by injury (Trade audit Phase 4, 2026-10-15). The two numbers are
+ * his card's (`glanceFor`): Avg off ESPN, and
  * Proj = the rest of his season (`restProj`, else the arrows' `rosNow` over
  * the regular weeks to come). Null until those weeks are read — no mark rather
  * than one that would change. Not in the sample league, whose men are
@@ -4005,7 +4009,62 @@ const trendMark = (p, rostered) => trend.trendHtml(
 function outlookOfMan(p, wire) {
   if (!p || state.isDemo) return null;
   const proj = restProj(p, wire) ?? rosNow(p, !wire);
-  return outlook.outlookOf(proj, glanceNow(p, wire).avg);
+  const c = markAvgOf(p, wire, glanceNow(p, wire).avg);
+  return outlook.outlookOf(proj, c.avg, c.games, c.skipped);
+}
+
+/**
+ * His average for the mark, less a game cut short by injury, and how many games
+ * it is of (js/outlook-mark.js `cleanAvgOf`). Games: ESPN's count off the same
+ * read as his average. Weeks: the played weeks' reads (`pastOf`) — a score and
+ * ESPN's last projection for it — and each week still open's projection as it
+ * stood before kickoff.
+ */
+function markAvgOf(p, wire, avg) {
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  let games = wire ? num((state.pool.get(p.playerId) || p).seasonGames) : null;
+  if (!wire) games = rosterGamesOf(p.playerId);
+  if (games === null) games = num(p.seasonGames);
+  const weeks = [];
+  for (const w of state.playedWeeks) {
+    const got = pastOf(p, w, wire);
+    if (got && typeof got === 'object') weeks.push({ week: w, actual: got.actual, proj: num(got.projected) });
+  }
+  for (const w of state.seasonWeeks || []) {
+    if (state.playedWeeks.includes(w)) continue;
+    const done = doneFor(p.playerId, w, !wire);
+    const v = wire ? valueFor(p.playerId, w) : rosterValueFor(p.playerId, w);
+    const proj = done ? num(done.pregame) : num(v);
+    if (v !== undefined || done) weeks.push({ week: w, actual: null, proj });
+  }
+  const bye = byeWeekOf(p, state.byes);
+  return outlook.cleanAvgOf({ avg, games, weeks, bye: Number.isFinite(bye) ? Number(bye) : null });
+}
+
+/**
+ * playerId -> ESPN's games played, off the rosters held: the current week's
+ * read first, else the latest week that carries it. One pass per change in the
+ * weeks held, not one per man per paint (a scan per man made the first paint
+ * of a league without the field measurably slower).
+ */
+let gamesIx = { src: null, size: -1, now: null, map: new Map() };
+function rosterGamesOf(id) {
+  const now = state.rosterWeeks.get(state.currentWeek) || null;
+  if (gamesIx.src !== state.rosterWeeks || gamesIx.size !== state.rosterWeeks.size || gamesIx.now !== now) {
+    const map = new Map();
+    const order = [state.currentWeek, ...[...state.rosterWeeks.keys()].sort((a, b) => b - a)];
+    for (const w of order) {
+      for (const t of state.rosterWeeks.get(w) || []) {
+        for (const x of t.players || []) {
+          if (!map.has(x.playerId) && typeof x.seasonGames === 'number' && Number.isFinite(x.seasonGames)) {
+            map.set(x.playerId, x.seasonGames);
+          }
+        }
+      }
+    }
+    gamesIx = { src: state.rosterWeeks, size: state.rosterWeeks.size, now, map };
+  }
+  return gamesIx.map.has(id) ? gamesIx.map.get(id) : null;
 }
 const outlookMark = (p, wire) => outlook.outlookHtml(outlookOfMan(p, wire));
 
