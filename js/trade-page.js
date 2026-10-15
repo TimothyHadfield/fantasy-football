@@ -9313,11 +9313,16 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
         // 14 week preview … if the user hovers over the player's name"). Hover
         // only: a tap on the name still ticks him, and the number below is
         // still where a thumb opens the card (see the next comment).
-        return `<span class="nm"${tipAttr(key, { hoverOnly: true })}>` +
-          `${nameMarksHtml(p.name, byeMarkOf(p, dir, meet) || (mirror ? byePastMarkOf(p) : null), injuryMarkOf(p))}</span>` +
-          // The arrow opens the same card as the name it belongs to (hover).
-          trendMarkOf(p).replace('<span class="trend', `<span${tipAttr(key, { hoverOnly: true })} class="trend`) +
-          outlookMarkOf(p).replace('<span class="outlook', `<span${tipAttr(key, { hoverOnly: true })} class="outlook`);
+        const name = `<span class="nm"${tipAttr(key, { hoverOnly: true })}>` +
+          `${nameMarksHtml(p.name, byeMarkOf(p, dir, meet) || (mirror ? byePastMarkOf(p) : null), injuryMarkOf(p))}</span>`;
+        // The arrow opens the same card as the name it belongs to (hover).
+        const trend = trendMarkOf(p).replace('<span class="trend', `<span${tipAttr(key, { hoverOnly: true })} class="trend`);
+        const mark = outlookMarkOf(p).replace('<span class="outlook', `<span${tipAttr(key, { hoverOnly: true })} class="outlook`);
+        // MIRRORED ON THE RIGHT (Tim, 2026-10-15: "for the user on the right
+        // side, their player's symbols are on the left side of their name so
+        // that all the coins and diamonds look like their closer together in
+        // the middle"): 💎/🪙 and the arrow before the name there.
+        return mirror ? mark + trend + name : name + trend + mark;
       })(),
       // The position is still here and is still NOT the slot: a man in the FLEX
       // is a WR who happens to be there this week, and the two answer different
