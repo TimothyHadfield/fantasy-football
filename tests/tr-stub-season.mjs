@@ -357,8 +357,21 @@ function playersFor(team, week) {
     // the injury report; unset, everybody is ACTIVE as before.
     injuryStatus: injuredAs(playerId(team.id, i)) || 'ACTIVE',
     percentOwned: null,
+    // `TR_SEASON_AVG=1` gives every man his season average so far (the mean of
+    // the played weeks' results), which the page's Appeal and so its Total read.
+    // Unset, nobody has one, as before.
+    ...(seasonAvgOn() ? { seasonAvg: seasonAvgOf(spec) } : {}),
     ...progressFields(team, i, week, spec.week(week)),
   }));
+}
+
+function seasonAvgOn() {
+  return typeof process !== 'undefined' && process.env && process.env.TR_SEASON_AVG === '1';
+}
+function seasonAvgOf(spec) {
+  let sum = 0;
+  for (let w = 1; w <= PLAYED_THROUGH; w++) sum += Math.round(spec.week(w) * 0.9 * 10) / 10;
+  return Math.round((sum / PLAYED_THROUGH) * 10) / 10;
 }
 
 /** A squad's starters' points on the board in `week` (TR_PROGRESS's schedule). */
@@ -567,4 +580,16 @@ export async function fetchPlayerValues() {
     return hit && typeof hit.value === 'number' ? hit.value : null;
   };
   return { base: (v && v.base) || null, weeks: (v && v.weeks) || [], byId, lookup };
+}
+
+// ------------------------------------------------------------ past trades
+//
+// js/season.js `fetchDecisionWorld`, which the Trade page reads only for the
+// season's trades (js/past-trades.js). NONE by default. `TR_PAST_TRADES` is a
+// JSON list of moves in its shape, e.g.
+//   [{"kind":"trade","teamId":1,"trade":{"withTeamId":2,"gives":[103],"gets":[203]}}]
+export async function fetchDecisionWorld() {
+  let moves = [];
+  try { moves = JSON.parse(process.env.TR_PAST_TRADES || '[]'); } catch { moves = []; }
+  return { moves };
 }

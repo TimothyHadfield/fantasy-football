@@ -91,6 +91,9 @@ import { scope } from './prefs.js';
 import * as espn from './espn.js';
 import { movesFor } from './trade-moves.js';
 import { pastTradeBars, undoesPastTrade } from './past-trades.js';
+// The custom box's orange / red boxes and each side's needs (Tim, 2026-10-15). Pure.
+import { hintSteps } from './custom-hint.js';
+import { slotAverages, positionNeeds } from './slot-needs.js';
 import { acceptBy } from './accept-by.js';
 // "Ask AI" (2026-09-30): the text a row copies for an AI chat. Pure.
 import { askAiText } from './ask-ai.js';
@@ -5032,6 +5035,8 @@ function loadPastTrades() {
       cuSug.key = null;
       renderCustomSuggest();
     }
+    // The custom box's red boxes, and its orange ones without those men.
+    scheduleCuHint();
   }).catch(() => { /* no trades read: nothing barred */ });
 }
 function pastTradeBarred(offer, teamId = state.myTeamId) {
@@ -9099,8 +9104,8 @@ function renderCustomPickers() {
   $('cuMeet').innerHTML = cuMeetHtml(a, b);
   renderCustomAccept();
 
-  $('cuHeadA').innerHTML = a ? `<span${teamCardAttr(a)}>${esc(a.name)}</span> sends` : 'Sends';
-  $('cuHeadB').innerHTML = b ? `<span${teamCardAttr(b)}>${esc(b.name)}</span> sends` : 'Sends';
+  $('cuHeadA').innerHTML = a ? `<span${teamCardAttr(a)}>${esc(a.name)}</span> sends${customNeedsHtml(a.id)}` : 'Sends';
+  $('cuHeadB').innerHTML = b ? `<span${teamCardAttr(b)}>${esc(b.name)}</span> sends${customNeedsHtml(b.id)}` : 'Sends';
 
   // ACROSS THE LEAGUE since 2026-10-08 (docs/colour-plan.md), like every other
   // player figure on the site: it used to be the two squads on screen, so one
@@ -9116,6 +9121,8 @@ function renderCustomPickers() {
     { scales, ctx: ctx && { ...ctx, dir: 'send' } });
   $('cuListB').innerHTML = customList(state.custom.b, state.custom.sendB, 'b',
     { scales, ctx: ctx && { ...ctx, dir: 'get' } });
+  // The orange / red boxes, on the rows just drawn (`scheduleCuHint` reprices).
+  applyCuMarks();
   refreshCuByeKey();
 
   // Channel 4 of "never colour alone", in view under the lists it describes.
@@ -9195,6 +9202,203 @@ function customMovesHtml(team, side) {
 /** Nothing to show under a side yet — reserved, so the panel cannot jump. */
 const CU_BLANK = '<span class="cu-num flat">—</span>';
 
+/**
+ * THE FIGURES THE BOX PRINTS for a deal: You (`f.myWeek`, `f.myNet`), Him,
+ * Value (`val.a` is yours) and Total. One function, so the orange hint
+ * (`runCuHint`) prices a "what if I tick him too" deal exactly as the box would
+ * print it once ticked.
+ *
+ * THE ROW'S FIGURES (trade audit finding 5, 2026-10-14): You, Him and Total
+ * are `dealFigures` of the finder's own row when this deal is one, and of the
+ * box's pricing on the same footing otherwise — your side netted by his
+ * change in the weeks you play him, his counted by the chance he plays each
+ * week. The box used to print his flat change, so one deal read two ways.
+ */
+function customBoxFigures(entry, priced) {
+  const cuOffer = customOffer(entry, priced);
+  const f = dealFigures(rowTwinOf(entry) || cuOffer);
+  const val = customValueChange(entry.sendA.map(String), entry.sendB.map(String));
+  // The box always prices week by week; on another measure the row's Total is
+  // of one-week figures, so the box adds the two it prints instead.
+  const total = basis() === 'weeks' ? f.total : totalOfOffer(cuOffer, { mine: f.myWeek, his: f.hisWeek });
+  return { f, val, total };
+}
+
+// ------------------------------------------- the orange and red boxes
+//
+// Tim, 2026-10-15: "if there is a single player I can click on on either team
+// that will make it so that the value is positive, the +/week for me is between
+// +1 and +4, and the total is between 0 - +5, then fill that player's box in
+// orange … If the current trade numbers are already in that range, keep the
+// trade the same." / "don't highlight a player's box in orange if it's a player
+// that was traded between those two teams already. Instead highlight that
+// player's box in red." The rule is js/custom-hint.js; this prices each
+// candidate through `priceCustom` + `customBoxFigures` — the box's own path —
+// a few at a time after the tick (token-cancelled like the Suggested list).
+
+const cuHint = { key: null, done: null, token: 0, timer: null, orange: new Set(), red: new Set(), ms: null };
+const CU_HINT_DELAY = 120;
+/** Main-thread time one slice of the hint may take before giving a turn back. */
+const CU_HINT_SLICE_MS = 40;
+
+/** Every man on the two lists, with the side he would move from. */
+function cuHintMen() {
+  const c = state.custom;
+  const men = [];
+  for (const [side, id] of [['a', c.a], ['b', c.b]]) {
+    for (const { p } of customRoster(id)) if (p) men.push({ id: String(p.playerId), side, p });
+  }
+  return men;
+}
+
+/** Would moving him in this box undo a trade these two managers already made? */
+function cuPastBarred(m) {
+  const c = state.custom;
+  if (c.a === null || c.b === null || !m || !m.p) return false;
+  return pastTradeBarred({
+    partner: { id: c.b },
+    mineTeamId: c.a,
+    send: m.side === 'a' ? [m.p] : [],
+    receive: m.side === 'b' ? [m.p] : [],
+  }, c.a);
+}
+
+/**
+ * The printed figures of an entry, as `hintInRange` reads them; null when it
+ * cannot be priced. `quick`: a deal whose Value is not up is out of range
+ * whatever its lineups say, so it is not priced (Value costs nothing; pricing
+ * is two lineup solves a week).
+ */
+function cuHintFigures(entry, { quick = false } = {}) {
+  if (quick) {
+    const v = customValueChange(entry.sendA.map(String), entry.sendB.map(String));
+    if (!v || !(v.a > 0)) return { value: v ? v.a : null, myWeek: null, total: null };
+  }
+  const priced = priceCustom(entry);
+  if (priced.error) return null;
+  const { f, val, total } = customBoxFigures(entry, priced);
+  return { value: val ? val.a : null, myWeek: f.myWeek, total };
+}
+
+function cuHintKey() {
+  const sig = customSignature();
+  if (!sig) return null;
+  return [sig, basis(), state.valueBase ? 'v' : '-', pastTrades.moves ? pastTrades.moves.length : 'x'].join('|');
+}
+
+/** Put the marks on the rows drawn now. Red is worked out here, every time (cheap). */
+function applyCuMarks() {
+  const c = state.custom;
+  const red = new Set();
+  for (const m of cuHintMen()) if (cuPastBarred(m)) red.add(m.id);
+  cuHint.red = red;
+  const orange = cuHint.done && cuHint.done === cuHintKey() ? cuHint.orange : new Set();
+  for (const id of ['cuListA', 'cuListB']) {
+    const host = $(id);
+    if (!host) continue;
+    for (const row of host.querySelectorAll('.cu-man[data-man]')) {
+      const man = row.getAttribute('data-man');
+      const isRed = red.has(man);
+      const isOrange = !isRed && orange.has(man);
+      row.classList.toggle('cu-past', isRed);
+      row.classList.toggle('cu-hint', isOrange);
+      // No `title`: on a phone js/touch-titles.js would turn it into a sheet over
+      // the tap that ticks him. The key under the lists says what the colours mean.
+      if (isRed || isOrange) row.setAttribute('data-mark', isRed ? 'past' : 'hint');
+      else row.removeAttribute('data-mark');
+    }
+  }
+  const key = $('cuHintKey');
+  if (key) {
+    const parts = [];
+    if (orange.size) parts.push('<span class="lg-mark cu-hint-mark"></span>one more tick puts Value, You and Total in range');
+    if (red.size) parts.push('<span class="lg-mark cu-past-mark"></span>traded between these two before');
+    key.innerHTML = parts.join(' · ');
+  }
+  const panel = $('customPanel');
+  if (panel) {
+    panel.setAttribute('data-hint', !c.b || !cuHintKey() ? 'none' : cuHint.done === cuHintKey() ? 'done' : 'wait');
+    if (Number.isFinite(cuHint.ms)) panel.setAttribute('data-hint-ms', String(cuHint.ms));
+  }
+}
+
+/** After a tick: price "these ticks + one more man" for every candidate, in slices. */
+function scheduleCuHint() {
+  const key = cuHintKey();
+  if (key === cuHint.key) { applyCuMarks(); return; }
+  cuHint.key = key;
+  cuHint.done = null;
+  cuHint.orange = new Set();
+  const token = ++cuHint.token;
+  clearTimeout(cuHint.timer);
+  applyCuMarks();
+  if (!key) return;
+  const started = Date.now();
+  cuHint.timer = setTimeout(async () => {
+    const stale = () => token !== cuHint.token;
+    try {
+      const c = state.custom;
+      const entry = { a: c.a, b: c.b, sendA: c.sendA.map(String), sendB: c.sendB.map(String) };
+      const it = hintSteps({
+        men: cuHintMen(),
+        ticked: [...entry.sendA, ...entry.sendB],
+        barred: cuPastBarred,
+        valueOf: (id) => (typeof valueLookup === 'function' ? valueLookup(id) : null),
+        current: cuHintFigures(entry),
+        figuresWith: (m) => cuHintFigures({
+          ...entry,
+          sendA: m.side === 'a' ? entry.sendA.concat(m.id) : entry.sendA,
+          sendB: m.side === 'b' ? entry.sendB.concat(m.id) : entry.sendB,
+        }, { quick: true }),
+      });
+      let sliceAt = Date.now();
+      for (;;) {
+        const s = it.next();
+        if (s.done) { cuHint.orange = s.value.orange; break; }
+        if (Date.now() - sliceAt >= CU_HINT_SLICE_MS) {
+          await new Promise((r) => setTimeout(r, 0));
+          if (stale()) return;
+          sliceAt = Date.now();
+        }
+      }
+    } catch (err) { console.error(err); cuHint.orange = new Set(); }
+    if (stale()) return;
+    cuHint.done = key;
+    cuHint.ms = Date.now() - started;
+    applyCuMarks();
+  }, CU_HINT_DELAY);
+}
+
+// ------------------------------------------- what each side needs
+//
+// Tim, 2026-10-15: "Show the position that each user needs in the custom trade
+// section … Don't include K or DEF. Positions that the user needs are red in
+// the analysis section and positions that the user has are in green." The
+// Analysis page's All teams grid on Proj avg, from js/slot-needs.js: every
+// squad's slots averaged over the regular-season weeks still to play, on
+// today's rosters, each against the same slot of every other squad.
+
+let cuNeeds = { key: null, avgs: null };
+function customNeedsHtml(teamId) {
+  const teams = customTeams();
+  const weeks = spanFor('last');
+  if (!teams.length || !weeks.length || !state.slots) return '';
+  const key = [
+    sourceKey(), state.slots.join(','), weeks.join(','),
+    weeks.filter((w) => weekly.byWeek.has(w)).length,
+    state.floors ? [...state.floors.entries()].map(([k, f]) => `${k}${f && f.value}`).join(',') : 'nofloor',
+    teams.map((t) => `${t.id}:${(t.players || []).map((p) => p.playerId).join('.')}`).join(';'),
+  ].join('|');
+  if (cuNeeds.key !== key) {
+    cuNeeds = { key, avgs: slotAverages({ teams, weeks, slots: state.slots, projOf: projFor, floors: state.floors }) };
+  }
+  const { need, has } = positionNeeds(cuNeeds.avgs, teamId);
+  const parts = [];
+  if (need.length) parts.push(`Needs <b class="need">${need.join(' ')}</b>`);
+  if (has.length) parts.push(`Has <b class="has">${has.join(' ')}</b>`);
+  return parts.length ? ` <span class="cu-needs">· ${parts.join(' · ')}</span>` : '';
+}
+
 function renderCustomPreview(priced) {
   const el = $('cuPreview');
   const { sendA, sendB } = state.custom;
@@ -9220,18 +9424,8 @@ function renderCustomPreview(priced) {
   }
   $('cuSave').disabled = false;
   $('cuOpen').disabled = false;
-  // THE ROW'S FIGURES (trade audit finding 5, 2026-10-14): You, Him and Total
-  // are `dealFigures` of the finder's own row when this deal is one, and of the
-  // box's pricing on the same footing otherwise — your side netted by his
-  // change in the weeks you play him, his counted by the chance he plays each
-  // week. The box used to print his flat change, so one deal read two ways.
-  const cuOffer = customOffer(state.custom, priced);
-  const f = dealFigures(rowTwinOf(state.custom) || cuOffer);
-  const val = customValueChange(sendA.map(String), sendB.map(String));
+  const { f, val, total } = customBoxFigures(state.custom, priced);
   const appeal = f.appeal;
-  // The box always prices week by week; on another measure the row's Total is
-  // of one-week figures, so the box adds the two it prints instead.
-  const total = basis() === 'weeks' ? f.total : totalOfOffer(cuOffer, { mine: f.myWeek, his: f.hisWeek });
   $('cuGainA').innerHTML = customGainHtml(f.myNet, f.myWeek);
   $('cuGainB').innerHTML = customGainHtml(f.his.gain, f.hisWeek);
   // Once, above both names, and yours only: his are the same figures with the
@@ -10406,6 +10600,7 @@ function renderCustom() {
   renderCustomPickers();
   renderCustomSuggest();
   renderCustomPreview(priced);
+  scheduleCuHint();
   renderCustomInline(priced);
   renderCustomSeason();
   renderCustomSaved();

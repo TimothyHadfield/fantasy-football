@@ -3375,6 +3375,89 @@ SCENARIOS.boxMatchesRow = async function boxMatchesRow() {
 };
 
 /**
+ * THE CUSTOM BOX'S HINTS (Tim, 2026-10-15). After each tick a man on either
+ * roster whose one extra tick puts Value > 0, You +1…+4/wk and Total 0…+5 is
+ * tinted orange (`.cu-man.cu-hint`); a man already traded between the two
+ * teams is red (`.cu-past`) and never orange; each roster head names the
+ * positions that squad needs (red) and has (green), never K or D/ST.
+ * Live stub league, partner Bo (2), Values from FF_VALUE, the season's trades
+ * from TR_PAST_TRADES. Real ticks, one at a time, until an orange shows.
+ */
+SCENARIOS.customHint = async function customHint() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live', 'trade.team': 1 }),
+  };
+  const { document, window, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  $('cuTeamB').value = '2';
+  fire($('cuTeamB'), 'change');
+  await settle(800);
+  const panel = $('customPanel');
+  const waitDone = async () => {
+    for (let i = 0; i < 400; i++) {
+      // 'none' is final too: nothing ticked has nothing to work out.
+      if (/^(done|none)$/.test(panel.getAttribute('data-hint') || '')) return true;
+      await settle(25);
+    }
+    return false;
+  };
+  const marks = () => ({
+    orange: [...document.querySelectorAll('.cu-man.cu-hint')].map((r) => r.getAttribute('data-man')),
+    red: [...document.querySelectorAll('.cu-man.cu-past')].map((r) => r.getAttribute('data-man')),
+  });
+  const figures = () => ({
+    top: text($('cuTop')),
+    you: text($('cuGainA') && $('cuGainA').querySelector('.cu-num')),
+    hint: panel.getAttribute('data-hint'),
+    ms: Number(panel.getAttribute('data-hint-ms')),
+  });
+  const heads = { a: text($('cuHeadA')), b: text($('cuHeadB')),
+    needA: text($('cuHeadA').querySelector('.cu-needs .need')), hasA: text($('cuHeadA').querySelector('.cu-needs .has')),
+    needB: text($('cuHeadB').querySelector('.cu-needs .need')), hasB: text($('cuHeadB').querySelector('.cu-needs .has')) };
+  const box = (id) => document.querySelector(`.cu-man[data-man="${id}"] input[type="checkbox"]`);
+  const setTick = async (id, on) => {
+    const b = box(id);
+    if (!b || b.checked === on) return true;
+    b.checked = on;
+    fire(b, 'change');
+    return waitDone();
+  };
+  // Before any tick: red already, no orange (nothing ticked).
+  await waitDone();
+  const untouched = { ...marks(), ...figures() };
+  const ids = [...document.querySelectorAll('#cuListB .cu-man[data-man], #cuListA .cu-man[data-man]')]
+    .map((r) => r.getAttribute('data-man'));
+  const tries = [];
+  let found = null;
+  for (const id of ids) {
+    if (untouched.red.includes(id)) continue;
+    const settled = await setTick(id, true);
+    const m = marks();
+    tries.push({ id, ...figures(), orange: m.orange.length });
+    if (!settled) break;   // the box never says it has finished: no hint to wait for
+    if (m.orange.length) {
+      found = { ticked: id, before: figures(), ...m, redTicked: null };
+      const pick = m.orange[0];
+      await setTick(pick, true);
+      found.after = { pick, ...figures(), ...marks() };
+      // A red man ticked stays red, never orange.
+      const redMan = untouched.red[0];
+      if (redMan) {
+        await setTick(redMan, true);
+        found.redTicked = { id: redMan, ...marks() };
+        await setTick(redMan, false);
+      }
+      break;
+    }
+    await setTick(id, false);
+  }
+  return { errors, heads, untouched, tries: tries.slice(-6), triedN: tries.length, found };
+};
+
+/**
  * THE TWO SEASON BOXES UNDER THE BUILDER (Tim, 2026-09-30: "have 2 different
  * boxes of the season by week box … One is an exact copy of the current season
  * by week box, and the other is a 'after the trade' season by week box. Also
@@ -8024,7 +8107,8 @@ if (!live.boot) {
   ok('the two rosters are listed, one per side',
     cu.listA > 10 && cu.listB > 10, `${cu.listA} / ${cu.listB}`);
   ok('each side is headed by the squad that is sending',
-    /sends$/.test(cu.headA) && /sends$/.test(cu.headB), `${cu.headA} | ${cu.headB}`);
+    // (Since 2026-10-15 the positions that squad needs and has follow it.)
+    /sends( · (Needs|Has) .*)?$/.test(cu.headA) && /sends( · (Needs|Has) .*)?$/.test(cu.headB), `${cu.headA} | ${cu.headB}`);
   ok('and the two squads are different ones',
     cu.picked.a !== cu.picked.b, JSON.stringify(cu.picked));
 
@@ -9051,6 +9135,65 @@ if (!bm.boot) {
       `box ${b.box.him} · saved ${b.saved.him}`);
     ok('BUILT IN THE BOX: Total matches its saved row', totalAgrees(b.saved.total, b.box.top),
       `box ${b.box.top} · saved ${b.saved.total}`);
+  }
+}
+
+// ---- THE CUSTOM BOX'S HINTS (Tim, 2026-10-15) ------------------------------
+{
+  const { valueOf, restAvg } = await import(moduleUrl('js/value.js'));
+  const stub = await import('./tr-stub-season.mjs');
+  const BASE = { v: 1, setAt: 1760000000000, week: 5, lines: {
+    QB: { waiver: 10, starter: 15, agents: 3, starters: 4 },
+    RB: { waiver: 8, starter: 12, agents: 3, starters: 9 },
+    WR: { waiver: 7, starter: 11, agents: 3, starters: 11 },
+    TE: { waiver: 6, starter: 9, agents: 3, starters: 4 },
+    K: { waiver: 6, starter: 6, agents: 3, starters: 4 },
+    DST: { waiver: 5, starter: 8, agents: 3, starters: 4 },
+  } };
+  const WEEKS_LEFT = Array.from({ length: stub.WEEKS - stub.PLAYED_THROUGH }, (_, i) => stub.PLAYED_THROUGH + 1 + i);
+  const players = {};
+  for (const team of stub.TEAMS) {
+    team.players.forEach((spec, i) => {
+      const avg = restAvg(Object.fromEntries(WEEKS_LEFT.map((w) => [w, spec.week(w)])), WEEKS_LEFT, null);
+      players[stub.playerId(team.id, i)] = { position: spec.position, avg, value: valueOf(BASE, spec.position, avg) };
+    });
+  }
+  // Earlier this season Ana (1) sent Bo (2) the WR now on Bo's roster (210)
+  // for the WR now on hers (111): neither may go back, so both are red.
+  const past = [stub.playerId(2, 10), stub.playerId(1, 11)];
+  const TR_PAST_TRADES = JSON.stringify([{ kind: 'trade', teamId: 1, trade: { withTeamId: 2, gives: [past[0]], gets: [past[1]] } }]);
+  // TR_SEASON_AVG gives every man a season average, so the box has an Appeal
+  // and so a Total (without one the Total range can never be met).
+  const ch = run('customHint', { stub: true, env: {
+    FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players }), TR_PAST_TRADES, TR_SEASON_AVG: '1' } });
+  ok('the custom-hint scenario boots', !ch.boot, ch.boot);
+  if (!ch.boot) {
+    ok('HINT: no console errors', ch.errors.length === 0, ch.errors.slice(0, 2).join(' | '));
+    const POS = /^(QB|RB|WR|TE)( (QB|RB|WR|TE))*$/;
+    const h = ch.heads;
+    ok('NEEDS: each roster head names what that squad needs or has', /Needs|Has/.test(h.a) && /Needs|Has/.test(h.b), `${h.a} / ${h.b}`);
+    ok('NEEDS: only QB RB WR TE are named (never K, D/ST or FLEX)',
+      [h.needA, h.hasA, h.needB, h.hasB].every((s) => s === '' || POS.test(s)), JSON.stringify(h));
+    ok('NEEDS: a position is never both needed and held',
+      !h.needA.split(' ').some((p) => p && h.hasA.split(' ').includes(p)) && !h.needB.split(' ').some((p) => p && h.hasB.split(' ').includes(p)),
+      JSON.stringify(h));
+    const u = ch.untouched;
+    ok('RED: both men of the earlier Ana–Bo trade are red before any tick',
+      past.every((id) => u.red.includes(String(id))) && u.red.length === 2, JSON.stringify(u.red));
+    ok('HINT: nothing ticked, nothing orange', u.orange.length === 0 && u.hint === 'none', JSON.stringify(u));
+    const f = ch.found;
+    ok('HINT: a real tick turned some man orange', !!f, `${ch.triedN} ticks tried; ${JSON.stringify(ch.tries).slice(0, 400)}`);
+    if (f) {
+      const val = (s, word) => num((String(s || '').match(new RegExp(`${word}\\s*([+−-]?\\d+(?:\\.\\d+)?)`)) || [])[1] || 'NaN');
+      const wk = (s) => num((String(s || '').match(/([+−-]?\d+(?:\.\d+)?)\s*\/wk/) || [])[1] || 'NaN');
+      const inRange = (x) => val(x.top, 'Value') > 0 && wk(x.you) >= 1 && wk(x.you) <= 4 && val(x.top, 'Total') >= 0 && val(x.top, 'Total') <= 5;
+      ok('HINT: the deal that showed orange was not itself in range', !inRange(f.before), JSON.stringify(f.before));
+      ok('HINT: no red man is ever orange', !f.orange.some((id) => f.red.includes(id)), JSON.stringify(f));
+      ok('HINT: ticking the orange man puts Value, You and Total in range', inRange(f.after), JSON.stringify(f.after));
+      ok('HINT: once in range, no orange (the deal is kept)', f.after.orange.length === 0, JSON.stringify(f.after.orange));
+      ok('RED: a ticked red man stays red, not orange',
+        !!f.redTicked && f.redTicked.red.includes(f.redTicked.id) && !f.redTicked.orange.includes(f.redTicked.id), JSON.stringify(f.redTicked));
+    }
   }
 }
 
