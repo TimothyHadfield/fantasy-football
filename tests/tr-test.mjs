@@ -9108,7 +9108,9 @@ if (!gt.boot) {
   if (gt.deal && gt.deal.weeks) {
     const rows = [...gt.deal.weeks.weeks, ...gt.deal.weeks.totals]
       .filter((r) => Number.isFinite(r.before) && Number.isFinite(r.after));
-    const off = rows.filter((r) => tenths(r.after) - tenths(r.before) !== tenths(r.delta));
+    // Points stay to the tenth (only chances went whole-percent), so count in tenths here.
+    const pts = (x) => Math.round(Number(String(x).replace('−', '-').replace('+', '')) * 10);
+    const off = rows.filter((r) => pts(r.after) - pts(r.before) !== pts(r.delta));
     ok('pop-up: every row of the week table, the two totals included, prints after − before to the tenth',
       rows.some((r) => r.total) && rows.length > 5 && off.length === 0,
       off.map((r) => `${r.label}: ${r.before} → ${r.after}, ${r.delta}`).join(' | '));
@@ -9705,7 +9707,7 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     for (const [what, L] of [['his man ticked', sg.one], ['one each', sg.two], ['two of his', sg.dbl],
       ['assumed', sg.asm.rows], ['assumed, sending the man you got', sg.asm.gotRows]]) {
       ok(`SUGGESTED: ${what} - the rows run from the largest net increase (You gain + He gains) down`,
-        netOrdered(L.rows), netLine(L.rows));
+        netOrdered(L.rows), `${netLine(L.rows)} · goal ${L.rows.map((r) => (r.goal && r.goal.head) || r.goal).join(', ')}`);
     }
     ok('SUGGESTED: and somewhere that is not the order of your own gain',
       [sg.one, sg.two, sg.dbl, sg.asm.rows, sg.asm.gotRows].some((L) =>
@@ -10082,8 +10084,9 @@ if (!gl.boot) {
       const re = await rederiveGoal(A, row, 'last');
       const m = (row.alt || NA).sub.match(subRe);
       ok(`the last-chance preview of ${row.partner}'s deal re-derives from the engine alone`,
-        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.051 &&
-          Math.abs(Number(m[2]) - re.after * 100) <= 0.151,
+        // Whole percent since 2026-10-15 (Phase 4): the print is within half a point.
+        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.501 &&
+          Math.abs(Number(m[2]) - re.after * 100) <= 0.651,
         `page ${row.alt.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
     }
 
@@ -10185,8 +10188,9 @@ if (!gl.boot) {
       const re = await rederiveGoal(B, row, 'title');
       const m = row.alt && (row.alt || NA).sub.match(subRe);
       ok(`the title-chance preview of ${row.partner}'s deal re-derives on the title's own weeks`,
-        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.051 &&
-          Math.abs(Number(m[2]) - re.after * 100) <= 0.151,
+        // Whole percent since 2026-10-15 (Phase 4): the print is within half a point.
+        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.501 &&
+          Math.abs(Number(m[2]) - re.after * 100) <= 0.651,
         `page ${row.alt && row.alt.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
     }
     {
