@@ -44,6 +44,7 @@ const SUITES = [
   ['test-projection.mjs', 'the shared projection module'],
   ['test-lineup-avg.mjs', 'a squad’s best-lineup week, and the two averages on it: roster strength and the future proj diff, byes and no-games-left included'],
   ['test-floor.mjs', 'the positional floor: no slot assessed below the waiver wire'],
+  ['test-floor-ros.mjs', 'the floor ranked by rest-of-season average per game (Tim 2026-10-15): byes ahead, the this-week fallback, the words'],
   ['test-value.mjs', 'a player\'s Value: the average over the weeks left against two frozen lines at his position'],
   ['test-heat.mjs', 'the shared red/green scale: one number against the rest of its own kind'],
   ['test-heat-sweep.mjs', 'the scale walked outward: depth never falls with distance, the deepest step holds past the end'],

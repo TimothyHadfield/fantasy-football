@@ -25,6 +25,32 @@
 //    by definition one who is playing, so a flat floor is closer to right than
 //    it looks. Pages must say which it is; `describeFloors` writes that line.
 //
+//    WHICH NUMBER OFF THAT READ (Tim, 2026-10-15). Asked "Kickers and
+//    defences: should their 'waiver floor' use the 3rd-best free agent over
+//    the rest of the season, instead of this week's wire only? This also
+//    moves numbers on Players, Analysis and Decisions", he chose "Rest of
+//    season (Recommended)". The trade audit had measured why (finding 7,
+//    league 1241838, week 6): ranked by THIS WEEK's projection the K floor
+//    was 10.9 against 9.5–10.1 in the weeks after, 87% of kicker slots were
+//    floored, and any kicker trade priced at about nothing. A floor used flat
+//    for every week left should be a figure about every week left.
+//
+//    So the free agents are ranked by their REST-OF-SEASON AVERAGE PER GAME:
+//    ESPN's rest-of-season projection (`seasonProjected`, the season line the
+//    same wire read already carries — `espn.parseFreeAgent`) divided by the
+//    games he has left, which is the weeks from `fromWeek` to the NFL's last
+//    week (18, where ESPN's line runs to) less his bye if it is still ahead.
+//    Per GAME, not per week of the fantasy season, because a total over the
+//    weeks left would mark a man down for his bye and a floor is never asked
+//    for a week his bye takes — it stands for whoever you would stream. The
+//    divisor is the one js/trade.js's `gamesLeft` uses, measured there at
+//    −0.2% against the mean of each man's own weekly projections (171 men).
+//    A week ESPN projects him to miss stays in (his line counts it as 0), so
+//    a man ruled out for three weeks is honestly worth less a game.
+//    Still ONE read, still used flat, still the 3rd best. A wire with no
+//    rest-of-season line at a position (demo, stubs, an old archived read)
+//    keeps the old rule there: this week's projection.
+//
 // 2. WHAT IT APPLIES TO: everything below it, not just the empty slots. A
 //    kicker projecting 4.1 when the wire holds a 7.8 was never really worth
 //    4.1 — you would have streamed the 7.8. So a slot is worth
@@ -67,7 +93,7 @@
 //   to come, and `assessLineup` is only ever run on projections.
 //
 // Pure, and node-testable: the wire comes IN. `season.fetchFloors` does the
-// reading. See tests/test-floor.mjs.
+// reading. See tests/test-floor.mjs and tests/test-floor-ros.mjs.
 
 import { SLOT_ELIGIBILITY } from './espn.js';
 
@@ -99,6 +125,37 @@ const CANNOT_PLAY = new Set(['OUT', 'IR', 'INJURY_RESERVE', 'SUSPENSION', 'NOT_A
  */
 export const FLOOR_RANK = 3;
 
+/**
+ * The NFL's last week, where ESPN's rest-of-season line ends — the same
+ * constant as js/trade.js's `NFL_LAST_WEEK`, for the same divisor.
+ */
+export const ROS_LAST_WEEK = 18;
+
+/**
+ * The games a free agent has left in ESPN's rest-of-season line: the weeks
+ * from `fromWeek` to `lastWeek`, less his bye if it is still ahead. With no
+ * byes known, every man divides by the full span (no bye claimed).
+ */
+export function rosGamesLeft(p, fromWeek, byes = null, lastWeek = ROS_LAST_WEEK) {
+  const from = Number(fromWeek);
+  if (!Number.isFinite(from) || from <= 0) return null;
+  let bye = Number.isFinite(p && p.byeWeek) ? p.byeWeek : null;
+  if (bye === null && byes && p && p.proTeamId !== null && p.proTeamId !== undefined) {
+    const b = Number(byes instanceof Map ? byes.get(p.proTeamId) : byes[p.proTeamId]);
+    bye = Number.isFinite(b) && b > 0 ? b : null;
+  }
+  const games = lastWeek - from + 1 - (bye !== null && bye >= from && bye <= lastWeek ? 1 : 0);
+  return games > 0 ? games : null;
+}
+
+/** His rest-of-season average per game, or null when ESPN sent no line (or 0). */
+function rosPerGame(p, fromWeek, byes, lastWeek) {
+  const total = p && p.seasonProjected;
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return null;
+  const games = rosGamesLeft(p, fromWeek, byes, lastWeek);
+  return games ? { value: total / games, games } : null;
+}
+
 /** 1st, 2nd, 3rd, 4th — for the sentence a panel prints. */
 function ordinal(n) {
   const i = Math.abs(Math.floor(n));
@@ -107,16 +164,27 @@ function ordinal(n) {
 }
 
 /**
- * The floor at each position: the Nth-best free agent there, from ONE wire read.
+ * The floor at each position: the Nth-best free agent there, from ONE wire read,
+ * ranked by his rest-of-season average per game (decision 1, Tim 2026-10-15).
  *
  * @param {Array} freeAgents `season.fetchWireWeek()` output — each needs
- *   `position`, `projected`, and ideally `name` / `playerId` / `injuryStatus`.
+ *   `position`, `projected`, and ideally `seasonProjected` / `proTeamId` /
+ *   `name` / `playerId` / `injuryStatus`.
  * @param {Object} [opts]
  * @param {number} [opts.week] the week the wire was read for, carried through
  *   so a page can say which week the floor was measured in.
+ * @param {number} [opts.fromWeek] the first week ESPN's rest-of-season line
+ *   covers (the first week not yet played); defaults to `week`.
+ * @param {Object|Map} [opts.byes] proTeamId -> bye week, for the games left;
+ *   without it no bye is subtracted.
  * @param {number} [opts.rank] how deep to go; defaults to `FLOOR_RANK`.
  * @returns {Map<string, {value:number, position:string, name:string, playerId:*,
- *                        pool:number, rank:number, want:number, week:number|null}>}
+ *                        pool:number, rank:number, want:number, week:number|null,
+ *                        basis:'ros'|'week', games:number|null}>}
+ *
+ * `basis` says which number `value` is: 'ros' (rest-of-season ÷ `games` left)
+ * or 'week' (this week's projection — a position where no free agent carried a
+ * rest-of-season line, the rule before 2026-10-15).
  *
  * `rank` in the result is the place the floor was ACTUALLY taken from, which is
  * `want` unless the wire is thinner than that — a position with only two men
@@ -130,40 +198,51 @@ function ordinal(n) {
  * would read, in a panel note, as though the wire had been checked and found
  * to be worth nothing.
  *
- * Only men projected ABOVE zero count. A free agent on his own bye that week
- * projects 0 and is no use as a replacement for your man on HIS bye, and a
- * ruled-out man cannot be streamed at all — ESPN projects those at 0 too
- * (rule 2), so the `> 0` test catches most of it and `CANNOT_PLAY` catches the
- * rest.
+ * A ruled-out man cannot be streamed at all (`CANNOT_PLAY`). On the
+ * rest-of-season basis a man counts when his per-game figure is above zero —
+ * one on bye THIS week is still a fine streamer for the weeks after, and his
+ * line already leaves the bye out. On the this-week fallback only men
+ * projected ABOVE zero count: a free agent on his own bye that week projects 0
+ * and is no use as a replacement for your man on HIS bye, and ESPN projects a
+ * ruled-out man at 0 too (rule 2).
  */
-export function positionFloors(freeAgents, { week = null, rank = FLOOR_RANK } = {}) {
+export function positionFloors(freeAgents, {
+  week = null, fromWeek = null, byes = null, rank = FLOOR_RANK, lastWeek = ROS_LAST_WEEK,
+} = {}) {
   const want = Math.max(1, Math.floor(rank) || 1);
+  const from = fromWeek !== null && fromWeek !== undefined ? fromWeek : week;
 
   // Gathered per position first and ranked afterwards. The old "keep the best
   // one as you go" could not answer this question at all: the third-best is not
   // a running maximum, and there is no way to know who he is until the whole
-  // wire has been read.
-  const pools = new Map();
+  // wire has been read. Two pools per position: by rest-of-season per game,
+  // and by this week (used only where the first is empty).
+  const ros = new Map();
+  const wk = new Map();
+  const add = (m, pos, e) => { if (!m.has(pos)) m.set(pos, []); m.get(pos).push(e); };
   for (const p of freeAgents || []) {
     if (!p || !FLOOR_POSITIONS.includes(p.position)) continue;
-    const v = p.projected;
-    if (!Number.isFinite(v) || v <= 0) continue;
     if (CANNOT_PLAY.has(String(p.injuryStatus || '').toUpperCase())) continue;
-    if (!pools.has(p.position)) pools.set(p.position, []);
-    pools.get(p.position).push(p);
+    const r = rosPerGame(p, from, byes, lastWeek);
+    if (r) add(ros, p.position, { p, v: r.value, games: r.games });
+    const v = p.projected;
+    if (Number.isFinite(v) && v > 0) add(wk, p.position, { p, v, games: null });
   }
 
   const out = new Map();
-  for (const [position, pool] of pools) {
-    // The playerId tiebreak keeps two identical projections in a fixed order,
-    // so the named man does not swap between reads of the same wire.
+  for (const position of FLOOR_POSITIONS) {
+    const basis = ros.has(position) ? 'ros' : wk.has(position) ? 'week' : null;
+    if (!basis) continue;
+    const pool = (basis === 'ros' ? ros : wk).get(position);
+    // The playerId tiebreak keeps two identical figures in a fixed order, so
+    // the named man does not swap between reads of the same wire.
     pool.sort((a, b) =>
-      b.projected - a.projected ||
-      (Number(a.playerId) || 0) - (Number(b.playerId) || 0));
+      b.v - a.v ||
+      (Number(a.p.playerId) || 0) - (Number(b.p.playerId) || 0));
     const at = Math.min(want, pool.length);
-    const p = pool[at - 1];
+    const { p, v, games } = pool[at - 1];
     out.set(position, {
-      value: p.projected,
+      value: v,
       position,
       name: p.name || '',
       playerId: p.playerId ?? null,
@@ -171,6 +250,8 @@ export function positionFloors(freeAgents, { week = null, rank = FLOOR_RANK } = 
       rank: at,
       want,
       week: week === null ? null : Number(week),
+      basis,
+      games,
     });
   }
   return out;
@@ -178,7 +259,8 @@ export function positionFloors(freeAgents, { week = null, rank = FLOOR_RANK } = 
 
 /**
  * Where one floor came from, in words — "the 3rd-best WR on the waiver wire
- * (Voss)". ONE spelling of it, because it is printed on the season sheet's
+ * by rest-of-season average (Voss)", or without "by rest-of-season average"
+ * for a floor on this week's projection (`basis`). ONE spelling of it, because it is printed on the season sheet's
  * cells, in its panel note and in the trade pop-up, and three hand-written
  * versions is how the pages start making slightly different claims about the
  * same number.
@@ -190,7 +272,8 @@ export function floorSource(f, { withName = true } = {}) {
     : f.rank < f.want
       ? `the ${ordinal(f.rank)}-best (and last) ${f.position || ''}`.trim()
       : `the ${ordinal(f.rank)}-best ${f.position || ''}`.trim();
-  return `${place} on the waiver wire${withName && f.name ? ` (${f.name})` : ''}`;
+  const by = f.basis === 'ros' ? ' by rest-of-season average' : '';
+  return `${place} on the waiver wire${by}${withName && f.name ? ` (${f.name})` : ''}`;
 }
 
 /** The floor for one position, or null when the wire said nothing about it. */
@@ -346,12 +429,26 @@ export function describeFloors(floors, { week = null } = {}) {
   // may carry floors built at a different depth, and the sentence has to
   // describe the numbers beside it rather than what this build would do.
   const want = [...floors.values()].map((f) => f.want).find((n) => Number.isFinite(n)) || FLOOR_RANK;
+  // Which number each floor is (Tim, 2026-10-15): rest-of-season average per
+  // game where the wire carried ESPN's rest-of-season line, this week's
+  // projection where it did not. Said per basis so the sentence never claims
+  // one for a floor that is the other.
+  const shown = FLOOR_POSITIONS.filter((p) => floorAt(p, floors));
+  const weekOnly = shown.filter((p) => floors.get(p).basis !== 'ros');
+  const anyRos = weekOnly.length < shown.length;
+  const measure = anyRos
+    ? ` by rest-of-season average (ESPN's rest-of-season projection ÷ the games he has left` +
+      `${w ? `, read in week ${w}` : ''})`
+    : `${w ? ` in week ${w}` : ''}`;
+  const except = anyRos && weekOnly.length
+    ? ` (${weekOnly.join(', ')}: that week's projection — the wire carried no rest-of-season line there)`
+    : '';
   const depth = want > 1
     ? `Each is the ${ordinal(want)}-best free agent at that position on the wire` +
-      `${w ? ` in week ${w}` : ''} — not the best, because the top of the wire is the man every ` +
+      `${measure}${except} — not the best, because the top of the wire is the man every ` +
       `manager in the league is bidding for, and the ${ordinal(want)} is the one you could ` +
       `actually expect to get — read once and used for every week.`
-    : `Each is the best free agent at that position on the wire${w ? ` in week ${w}` : ''}, ` +
+    : `Each is the best free agent at that position on the wire${measure}${except}, ` +
       `read once and used for every week.`;
   return `No slot is assessed below what the waiver wire would give you at that ` +
     `position: ${parts.join(', ')}. ${depth} A slot worth ` +

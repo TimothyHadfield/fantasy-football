@@ -17,6 +17,9 @@
     "test-floor.mjs": {
       "assertions": 113
     },
+    "test-floor-ros.mjs": {
+      "assertions": 26
+    },
     "test-value.mjs": {
       "assertions": 107
     },
