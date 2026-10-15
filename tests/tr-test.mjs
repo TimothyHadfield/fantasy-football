@@ -5002,7 +5002,8 @@ if (!fresh.boot) {
       under.slice(0, 6).map((t) => `${t.partner} ${String(t.gainText).split('/wk')[0]}`).join(' | '));
     ok('FLOOR: and the list still holds no more than forty rows', rows.length <= 40, String(rows.length));
     ok('FLOOR: the method note says so, in those words',
-      fresh.tradeNote.includes('A trade worth less than +1.0 a week to you is left out'),
+      // Trade audit Phase 2 (2026-10-15) added the goal-chance clause to it.
+      /A trade worth less than \+1\.0 a week to you, or that lowers your .+? by more than 0\.4 of a point, is left out/.test(fresh.tradeNote),
       fresh.tradeNote.slice(0, 600));
     // OUT FOR THE SEASON (2026-10-12): the same sentence goes on to say such a
     // man is in no trade. The rule itself is held in test-trade-moves.mjs and
@@ -9035,7 +9036,8 @@ if (!gt.boot) {
       /typically 0\.27 points and at worst 0\.49/.test(T.note) && !/standard deviation/.test(T.note),
     T.note.slice(T.note.indexOf('It still moves'), T.note.indexOf('It still moves') + 700));
   ok('and says how the list is ordered now, not how it was',
-    /The list is ordered by You gain \+ He gains, largest first; equal sums share a rank\./.test(T.note) &&
+    // Trade audit Phase 2 (2026-10-15): the goal-chance guard is part of the order.
+    /The list is ordered by You gain \+ He gains, largest first, except that a deal which lowers your .+? by more than 0\.4 of a point goes below the rest; equal sums share a rank\./.test(T.note) &&
       !/The list is ranked by what each deal does/.test(T.note) && !/shown as level/.test(T.note),
     T.note.slice(0, 300));
   ok('and no column heading still says the list is ranked by a chance',
