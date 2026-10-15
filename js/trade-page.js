@@ -4603,13 +4603,13 @@ function goalMethodHtml(span) {
     (sigma !== null ? ` Scores are drawn ±${fmt(sigma)} points around each projection, the ` +
       `spread measured from this league’s played weeks.` : '') +
     `<br><br>` +
-    `<strong>Will he say yes?</strong> That is an estimate, and the only judgement here. He is ` +
-    `taken to weigh two things equally: what the deal does to <em>his</em> lineup (He gains, ` +
-    `a week) and how it looks on ESPN’s trade screen — the ESPN projections of the men he gets ` +
-    `against the men he gives up, a week. The chance is 1 ÷ (1 + e<sup>−(that + ` +
-    `${ACCEPT_LEEWAY}) ÷ ${ACCEPT_SCALE}</sup>): 98% if he comes out 3 a week ahead, 88% at ` +
-    `dead even, 50% if he gives up ${ACCEPT_LEEWAY} a week, 12% at 6. Generous on purpose — a ` +
-    `deal only drops hard when it is a clear fleece.` +
+    // TRADE AUDIT PHASE 3 (2026-10-15): the rebuilt estimate, js/accept.js.
+    `<strong>Will he say yes?</strong> An estimate, and the only judgement here. He weighs ` +
+    `what the deal does to <em>his</em> lineup (He gains, a week) and how it looks on ESPN’s ` +
+    `screen: each man’s average, last game and position rank. An injured man he gets counts ` +
+    `against it, filling an empty or thin spot counts for it, and a manager out of the race ` +
+    `or attached to his own men is harder to sell. The total goes through 1 ÷ (1 + ` +
+    `e<sup>−total ÷ ${ACCEPT_CURVE_SCALE}</sup>): an even deal is 50%.` +
     `<br><br>`
   );
 }
@@ -5756,7 +5756,7 @@ function rosOf(p, span) {
 // code that uses it, because the import block at the top of this file is shared
 // with other work in flight (ES imports are hoisted, so where it sits changes
 // nothing).
-import { acceptVerdict } from './accept.js';
+import { acceptVerdict, SCALE as ACCEPT_CURVE_SCALE } from './accept.js';
 
 /**
  * WHAT HE SEES, GATHERED ONCE. Everything the yes-chance reads beyond the deal's
