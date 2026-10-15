@@ -1261,6 +1261,7 @@ async function readWeekRostersNow(week, { byes, fresh = false } = {}) {
         // line). A week cached before these existed simply lacks them, and every
         // reader treats a missing one as null.
         seasonAvg: espn.seasonAverageOf(stats, season),
+        seasonGames: espn.seasonGamesOf(stats, season),
         posRank: espn.positionRankOf(e.playerPoolEntry),
       };
     });

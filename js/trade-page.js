@@ -170,7 +170,7 @@ import { statCard, clearPops, wirePops, hidePop, teamWeekSpec } from './pop.js';
 import { teamHref, weekHref, readParam } from './links.js';
 import {
   zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, yesSpec, altGoalSpec, oppSpec, depthSpec,
-  teamSpec, recordOf, meetSpec,
+  teamSpec, recordOf, meetSpec, chancePct, chanceChange,
 } from './trade-cards.js';
 
 const $ = (id) => document.getElementById(id);
@@ -767,6 +767,8 @@ function indexTeams(teams) {
         // ESPN's season average and position rank, for the card's glance line.
         // Absent on a week cached before they were parsed: null, never a crash.
         seasonAvg: typeof p.seasonAvg === 'number' ? p.seasonAvg : null,
+        // How many games that average is of (the 💎/🪙 gap; js/outlook-mark.js).
+        seasonGames: typeof p.seasonGames === 'number' ? p.seasonGames : null,
         posRank: typeof p.posRank === 'number' ? p.posRank : null,
       });
     }
@@ -2525,7 +2527,40 @@ function trendMarkOf(p) {
 function outlookOfMan(p) {
   if (!p || state.isDemo) return null;
   const g = glanceFor(p);
-  return outlook.outlookOf(g.proj, g.avg);
+  const c = markAvgOf(p, g.avg);
+  return outlook.outlookOf(g.proj, c.avg, c.games, c.skipped);
+}
+
+/**
+ * THE AVERAGE THE 💎/🪙 AND APPEAL READ (Trade audit Phase 4): ESPN's, less a
+ * game cut short by injury, with how many games it is of — js/outlook-mark.js
+ * `cleanAvgOf`. His weeks are the ones this page holds: a score only in a week
+ * that is over, and ESPN's projection for each week's game as it stood before
+ * kickoff (`pregame` once his game in a week under way is done).
+ */
+function markAvgOf(p, avg) {
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  let games = null;
+  const now = glanceWeek();
+  const order = [now, ...[...weekly.byWeek.keys()].sort((a, b) => b - a)];
+  for (const w of order) {
+    const e = w === null ? null : weekly.byWeek.get(w)?.get(p.playerId);
+    if (e && num(e.seasonGames) !== null) { games = e.seasonGames; break; }
+  }
+  if (games === null) games = num(p.seasonGames);
+  const played = new Set(state.playedWeeks);
+  const weeks = [];
+  for (const [w, m] of weekly.byWeek) {
+    const e = m.get(p.playerId);
+    if (!e) continue;
+    weeks.push({
+      week: w,
+      actual: played.has(w) ? num(e.actual) : null,
+      proj: num(e.done === true ? e.pregame : e.projected),
+    });
+  }
+  const bye = byeWeekOf(p, state.byes);
+  return outlook.cleanAvgOf({ avg, games, weeks, bye: Number.isFinite(bye) ? Number(bye) : null });
 }
 const outlookMarkOf = (p) => outlook.outlookHtml(outlookOfMan(p));
 
@@ -3947,7 +3982,8 @@ function valueCellHtml(offer) {
  * both, and in the sample league, whose men are invented.
  */
 function appealOfOffer(offer) {
-  const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: g.avg }; });
+  // The same average the mark reads: less a game cut short by injury.
+  const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: markAvgOf(p, g.avg).avg }; });
   return state.isDemo ? null : outlook.appealOf(side(offer.receive), side(offer.send));
 }
 
@@ -6191,24 +6227,28 @@ function scoreGoalCached(offer, mineId, span) {
   return ctx.scores.get(key);
 }
 
-const pct = (v, d = 1) => (Number.isFinite(v) ? `${(v * 100).toFixed(d)}%` : '—');
-/** "+3.1%" — percentage POINTS of chance, with a real minus sign. */
-const signedPct = (v, d = 1) => {
-  if (!Number.isFinite(v)) return '—';
-  const s = (Math.abs(v) * 100).toFixed(d);
-  if (Number(s) === 0) return `${s}%`;
-  return `${v > 0 ? '+' : '−'}${s}%`;
-};
+/**
+ * Season-sim chances print WHOLE ("23%"; Trade audit Phase 4, 2026-10-15: the
+ * run's own noise is about half a point, so a tenth was false precision).
+ * js/trade-cards.js `chancePct` / `chanceChange`, which the previews share.
+ */
+const pct = chancePct;
 /**
  * A change printed BESIDE its two ends is the difference of the two printed
- * numbers, not the exact change rounded on its own: "2.1% → 4.7%" has to read
- * +2.6%, never +2.7% (audit, 2026-10-06). Display only — every sort key
- * (`data-v`), colour and rank still reads the unrounded figure.
+ * numbers, not the exact change rounded on its own: "22% → 27%" reads +5%
+ * however the tenths fell (audit, 2026-10-06). Display only — every sort key
+ * (`data-v`), colour, `TIE_BAND` group and guard still reads the unrounded figure.
  */
-const pctChange = (before, after, d = 1) => {
-  if (!Number.isFinite(before) || !Number.isFinite(after)) return '—';
-  return signedPct((Number((after * 100).toFixed(d)) - Number((before * 100).toFixed(d))) / 100, d);
-};
+const pctChange = chanceChange;
+/**
+ * The green / red on a printed chance change: by the sign of the change (the
+ * goal's `gain`, good-way-up), and none when the change PRINTS as 0% — a
+ * coloured "0%" would claim a direction the figure does not show. Rounding can
+ * shrink a change to 0 but never flip its sign, so a coloured figure's sign and
+ * hue always agree.
+ */
+const chanceCls = (gain, before, after) =>
+  !(Math.abs(gain) > 0.0005) || pctChange(before, after) === '0%' ? '' : gain > 0 ? 'pos' : 'neg';
 
 /**
  * The goal's cell on a finder row: how the chance moves, from what to what,
@@ -6232,7 +6272,7 @@ function goalCellHtml(offer) {
         : `No ${g.chance} yet.`;
     return `<td class="goal-cell goal-wait" data-v="-1" data-rc="goal" data-why="${esc(why)}">${r.running ? '…' : '—'}</td>`;
   }
-  const good = s.mine.gain > 0.0005 ? ' pos' : s.mine.gain < -0.0005 ? ' neg' : '';
+  const good = chanceCls(s.mine.gain, s.mine.before, s.mine.after).replace(/^(?=.)/, ' ');
   // "yes: likely" where "62% yes" was (Tim, 2026-10-14: "show words"); the
   // percentage, the parts and the why are in the word's own preview.
   const yes = Number.isFinite(s.accept) ? yesWordHtml(s.verdict || { p: s.accept }) : '';
@@ -6382,7 +6422,7 @@ function altGoalCellHtml(offer) {
     const why = s && s.why ? s.why : r.why && r.why !== 'waiting' ? r.why : 'not worked out yet';
     return `<td class="alt-goal-cell" data-v="-1" data-rc="alt" data-why="${esc(`No ${g.chance} preview: ${why}.`)}">—</td>`;
   }
-  const good = s.gain > 0.0005 ? ' pos' : s.gain < -0.0005 ? ' neg' : '';
+  const good = chanceCls(s.gain, s.before, s.after).replace(/^(?=.)/, ' ');
   return (
     `<td class="alt-goal-cell${good}" data-v="${s.gain}" data-rc="alt">` +
     `${pctChange(s.before, s.after)}<span class="band"> ±${bandText()}</span>` +
@@ -6973,7 +7013,7 @@ function dealGoalHtml(offer) {
   const s = goalFor(offer);
   if (!s || !Number.isFinite(s.mine.gain)) return '';
   const g = goalOf(state.goal);
-  const cls = s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : '';
+  const cls = chanceCls(s.mine.gain, s.mine.before, s.mine.after);
   return (
     `<p class="deal-goal"><span class="lbl">Your ${esc(g.chance)}</span>` +
     `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong>` +
@@ -8074,7 +8114,7 @@ function comboGoalLine(entry) {
   const s = comboGoal(entry);
   if (!s || !Number.isFinite(s.mine.gain)) return '';
   const g = goalOf(state.goal);
-  const cls = s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : '';
+  const cls = chanceCls(s.mine.gain, s.mine.before, s.mine.after);
   const managers = new Set(entry.combo.map((o) => o.partner && o.partner.id)).size;
   // The word, its parts and the % in its preview (`yesShown`, 'combo-yes').
   // Several managers: the chance they ALL say yes, worded on the same cut-offs.
@@ -8106,7 +8146,7 @@ function comboGoalLine(entry) {
  */
 function altInlineHtml(s) {
   if (!s || !Number.isFinite(s.before) || !Number.isFinite(s.after)) return '';
-  const cls = s.gain > 0.0005 ? 'pos' : s.gain < -0.0005 ? 'neg' : '';
+  const cls = chanceCls(s.gain, s.before, s.after);
   return (
     ` <span class="alt-inline">· ${esc(CHANCE_SHORT[s.goal])} ` +
     `<b class="${cls}">${pctChange(s.before, s.after)}</b><span class="band"> ±${bandText()}</span></span>`
@@ -9867,7 +9907,7 @@ function renderCustomPreviewAt(priced) {
     ? scoreGoalCached(customOffer(state.custom, priced), state.custom.a, priced.weeks)
     : null;
   const goalBit = s && Number.isFinite(s.mine.gain)
-    ? ` · <span class="${s.mine.gain > 0.0005 ? 'pos' : s.mine.gain < -0.0005 ? 'neg' : ''}">` +
+    ? ` · <span class="${chanceCls(s.mine.gain, s.mine.before, s.mine.after)}">` +
       `${esc(goalOf(state.goal).chance)} <strong>${pctChange(s.mine.before, s.mine.after)}</strong>` +
       `<span class="band"> ±${bandText()}</span></span> ` +
       `(${pct(s.mine.before)} → ${pct(s.mine.after)})`

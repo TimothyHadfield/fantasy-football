@@ -82,7 +82,8 @@ ok('at least five finder rows carry a goal figure', rows.length >= 5, rows.lengt
 ok('no row prints the chance as "NN% yes"', rows.every((r) => !/\d+% yes/.test(r.sub) && !/%\s*yes/.test(r.sub)),
   rows.map((r) => r.sub).slice(0, 3).join(' | '));
 ok('every row says before → after and then the word',
-  rows.every((r) => /^\d+\.\d% → \d+\.\d% · yes: (likely|maybe|unlikely)$/.test(r.sub)),
+  // Whole-percent chances since trade audit Phase 4 (2026-10-15).
+  rows.every((r) => /^\d+% → \d+% · yes: (likely|maybe|unlikely)$/.test(r.sub)),
   rows.map((r) => r.sub).slice(0, 3).join(' | '));
 
 // ------------------------------------------------- 2. the word is the number

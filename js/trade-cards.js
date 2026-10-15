@@ -39,7 +39,26 @@ const signedHtml = (n) => {
   const c = signCls(n);
   return c ? `<span class="${c}">${signed(n)}</span>` : signed(n);
 };
-const pct = (v) => (finite(v) ? `${(v * 100).toFixed(1)}%` : '—');
+/**
+ * A SEASON-SIM CHANCE, PRINTED WHOLE (Trade audit finding 10, Phase 4,
+ * 2026-10-15). 12 seeds × 10,000 seasons moved a title change by 0.47 points,
+ * so a tenth ("22.8% → 27.3%") claimed precision the run does not have: "23% →
+ * 27%". Display only — every sort key, `TIE_BAND` and guard reads the
+ * unrounded figure.
+ */
+export const chancePct = (v) => (finite(v) ? `${(v * 100).toFixed(0)}%` : '—');
+/**
+ * The change BESIDE its two printed ends is their difference (house rule: "a
+ * printed difference equals its two printed ends subtracted"): round(after) −
+ * round(before), so 22.6% → 27.4% reads "23% → 27%" and "+4%", never "+5%". A
+ * rounded zero prints plain "0%"; a minus is a real minus.
+ */
+export function chanceChange(before, after) {
+  if (!finite(before) || !finite(after)) return '—';
+  const d = Number((after * 100).toFixed(0)) - Number((before * 100).toFixed(0));
+  return d === 0 ? '0%' : `${d > 0 ? '+' : '−'}${Math.abs(d)}%`;
+}
+const pct = chancePct;
 
 // ------------------------------------------------------------ the gain scale
 //
