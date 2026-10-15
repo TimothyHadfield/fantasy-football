@@ -571,6 +571,9 @@ function readOfferRows(table) {
           head,
           sub: subText,
           v: Number(td.getAttribute('data-v')),
+          // The unrounded change, good-way-up for the goal on show — the
+          // figure the goal guard reads (NaN when the cell has none).
+          gain: td.hasAttribute('data-gain') ? Number(td.getAttribute('data-gain')) : NaN,
           cls: td.getAttribute('class') || '',
           title: popText(td),
           rawTitle: td.getAttribute('title') || '',
@@ -708,6 +711,25 @@ const netOf = (t) => headTenths(t.gainText) + headTenths(t.theirText);
 /** Largest net increase first, never rising down the list, every row with a figure. */
 const netOrdered = (rows) => rows.length > 0 && rows.every((t) => Number.isFinite(netOf(t))) &&
   rows.every((t, i, a) => i === 0 || netOf(a[i - 1]) >= netOf(t));
+// THE GOAL GUARD (Tim, 2026-10-14: "Yes, add that guard"): a deal that lowers
+// your goal chance by more than the band (0.4 points, js/trade-odds.js
+// TIE_BAND) never sits above one that does not. "Lowers" is judged on the
+// row's own unrounded change, good-way-up for the goal on show (`goalGain`,
+// read off the goal cell's `data-gain`) — under "Don't finish last" a RISE in
+// the printed last-place chance is a fall here. The cell prints whole percent,
+// so a 0.6-point fall can print "0%" and still be moved down. A row with no
+// change is not judged. Inside each half: net increase, largest first.
+const { TIE_BAND: GUARD_BAND } = await import(moduleUrl('js/trade-odds.js'));
+const lowersOf = (t) => Number.isFinite(t.goalGain) && t.goalGain < -GUARD_BAND;
+/** Net increase order with goal-lowering rows below — never vacuous: every row has a figure. */
+const guardNetOrdered = (rows) => rows.length > 0 && rows.every((t) => Number.isFinite(netOf(t))) &&
+  rows.every((t, i, a) => {
+    if (i === 0) return true;
+    const p = a[i - 1];
+    const lp = lowersOf(p) ? 1 : 0;
+    const lt = lowersOf(t) ? 1 : 0;
+    return lp < lt || (lp === lt && netOf(p) >= netOf(t));
+  });
 /** Rows with one net increase stay in the goal's order (the order before 2026-10-09). */
 const netTiesKeepGoal = (rows) => rows.every((t, i, a) => i === 0 || netOf(a[i - 1]) !== netOf(t) ||
   a[i - 1].goal.v >= t.goal.v - 0.0001);
@@ -3797,7 +3819,7 @@ SCENARIOS.customSuggest = async function customSuggest() {
       rows: readOfferRows($('cuSugTable')).map((r) => ({
         partner: r.partner, send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)),
         myGain: r.myGain, theirGain: r.theirGain, gainText: r.gainText, theirText: r.theirText, goal: r.goal && r.goal.head,
-        alt: r.alt && r.alt.head,
+        goalGain: r.goal ? r.goal.gain : NaN, alt: r.alt && r.alt.head,
       })),
       buttons: [...h.querySelectorAll('tbody tr')].map((tr) => ({
         load: !!tr.querySelector('button[data-cu-load]'),
@@ -9706,8 +9728,11 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     // NET INCREASE (Tim, 2026-10-09): every suggested list, largest first.
     for (const [what, L] of [['his man ticked', sg.one], ['one each', sg.two], ['two of his', sg.dbl],
       ['assumed', sg.asm.rows], ['assumed, sending the man you got', sg.asm.gotRows]]) {
-      ok(`SUGGESTED: ${what} - the rows run from the largest net increase (You gain + He gains) down`,
-        netOrdered(L.rows), `${netLine(L.rows)} · goal ${L.rows.map((r) => (r.goal && r.goal.head) || r.goal).join(', ')}`);
+      // With the finder's goal guard (Tim, 2026-10-14): a row that lowers your
+      // goal chance by more than the band sits below every row that does not.
+      ok(`SUGGESTED: ${what} - the rows run from the largest net increase (You gain + He gains) down, goal-lowering rows below`,
+        guardNetOrdered(L.rows), `${netLine(L.rows)} · goal ${L.rows.map((r) => `${(r.goal && r.goal.head) || r.goal}`
+          + ` [${Number.isFinite(r.goalGain) ? (r.goalGain * 100).toFixed(2) : '?'}${lowersOf(r) ? ' lowers' : ''}]`).join(', ')}`);
     }
     ok('SUGGESTED: and somewhere that is not the order of your own gain',
       [sg.one, sg.two, sg.dbl, sg.asm.rows, sg.asm.gotRows].some((L) =>

@@ -6292,8 +6292,12 @@ function goalCellHtml(offer) {
   // with, the chance he says yes — built when it is asked for (`rowCardSpec`).
   // It was one long sentence about simulated seasons; the method is in "How
   // this works", and a level group still says so under the three lines.
+  // `data-gain`: the unrounded change, good-way-up for the goal on show — the
+  // figure the goal guard (`lowersGoal`) reads. Nothing prints it; the cell
+  // prints whole percent, so a 0.6-point fall can read "0%" and still be moved
+  // down by the guard, and a test has to see the same figure the page sorted on.
   return (
-    `<td class="goal-cell${good}" data-v="${s.value}" data-rc="goal">` +
+    `<td class="goal-cell${good}" data-v="${s.value}" data-gain="${s.mine.gain}" data-rc="goal">` +
     `${place}${pctChange(s.mine.before, s.mine.after)}<span class="band"> ±${bandText()}</span>` +
     `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
     (yes ? ` · yes: ${yes}` : '') +

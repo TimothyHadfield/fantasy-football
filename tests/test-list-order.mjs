@@ -86,6 +86,18 @@ if (have) {
     const list = [row('a', 10, 0.01), row('b', 10, 0.02), row('c', 10, -0.01), row('d', 10, -0.02)];
     eq(ids(order(list)), ['a', 'b', 'c', 'd'], 'equal net increases keep their incoming order (stable)');
   }
+  // MEASURED, 2026-10-15 (tr-test SUGGESTED "two of his", "Don't finish last"):
+  // the rows printed "+1.4 −8.0 =−6.6 | −0.5 −5.9 =−6.4 | −7.5 +1.1 =−6.4",
+  // goal "−4%, 0%, +17%". `gain` is good-way-up for the goal on show — a FALL in
+  // the last-place chance (18.83% → 15.49%) is +0.0334, a rise (→ 19.46%,
+  // → 36.41%) is −0.0063 and −0.1758. The second row prints "0%" (whole
+  // percent) yet its change is past the band, so both −6.4 rows go below the
+  // −6.6 one, and the two keep their incoming order.
+  {
+    const list = [row('0%', -64, -0.0063), row('+17%', -64, -0.1758), row('−4%', -66, 0.0334)];
+    eq(ids(order(list)), ['−4%', '0%', '+17%'],
+      'Don\'t finish last: a rise in the last-place chance past the band lowers your goal, even when it prints 0%');
+  }
   // In place, as the page's `byNetIncrease` is.
   {
     const list = [row('L', 9, -0.01), row('R', 1, 0.01)];
@@ -159,6 +171,11 @@ if (have) {
   ok(/return byNetIncreaseGuarded\(offers\);/.test(sug),
     'the Suggested list is put in the guarded order (byNetIncreaseGuarded), not plain byNetIncrease',
     (sug.match(/return [^\n]*/g) || []).join(' | '));
+  // The figure the guard reads is on the row, so a reader of the page (tr-test)
+  // can check the guarded order: the goal cell prints whole percent, which can
+  // hide a fall past the band ("0%" for −0.63 points).
+  ok(/class="goal-cell\$\{good\}" data-v="\$\{s\.value\}" data-gain="\$\{s\.mine\.gain\}"/.test(body('goalCellHtml')),
+    'the goal cell carries the unrounded change the guard reads (data-gain = goalScore.mine.gain)');
   ok(!/finderGoalOk|goalGateOk|\.filter\(/.test(sug.slice(sug.indexOf('const offers = result.offers'))),
     'the Suggested list drops nothing after the search: no +1 gate, no goal gate, so its "at least 3" holds');
 
