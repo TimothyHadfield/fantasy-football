@@ -58,6 +58,7 @@ const SUITES = [
   ['scatter-check.mjs','the projected-vs-actual scatter: the least-squares line by hand, one scale on both axes, the preview that is a link'],
   ['shared-tables-check.mjs', 'the standings, the Summary chart and season-by-week as current / hypothetical / difference: hand-made inputs, signed cells, the dimming'],
   ['test-bye-rule.mjs', 'a known bye week projects 0 (ESPN projects D/STs through theirs), playoff weeks in the phone copy, points for to the tenth'],
+  ['test-assumed-trade.mjs', 'the assumed trade site-wide: the Trade page keeps its moves, every forward page reads both squads traded from the next unplayed week, played weeks and kept readings stay real'],
   ['test-season-rules.mjs', 'played means ESPN decided it, ties count half, playoff games kept apart, waiver status, byes'],
   ['test-store.mjs', 'the weeks kept in this browser between pages: two freshness clocks, eviction, and the seam in season.js'],
   ['test-decision-data.mjs', 'what the managers did, from ESPN: real transaction payloads decoded, a decided week’s moves frozen, the world’s cold and warm cost'],

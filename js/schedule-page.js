@@ -48,6 +48,9 @@ import { readIntParam, teamHref, weekHref } from './links.js';
 import { statCard, clearPops, wirePops, hidePop } from './pop.js';
 import * as snapshots from './snapshots.js';
 import * as backup from './backup.js';
+// A trade assumed on the Trade page reaches this page's squads through
+// js/season.js; a reading of them is never kept (see `autoCapture`).
+import { movesFor as assumedMovesFor } from './assumed-trade.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('schedule');
@@ -556,6 +559,14 @@ function autoCapture() {
     return;
   }
   if (snapshots.get(id.leagueId, id.season, week)) {   // already have it
+    renderArchive();
+    return;
+  }
+
+  // AN ASSUMED TRADE IS ON (2026-10-15): the squads on screen are not ESPN's,
+  // and a reading is what ESPN projected. The bar takes this week's reading off
+  // the real squads (js/connection.js), so nothing is lost by waiting here.
+  if (assumedMovesFor(id.leagueId, id.season)) {
     renderArchive();
     return;
   }
@@ -3884,6 +3895,12 @@ $('snapSave').addEventListener('click', () => {
   const id = archiveId();
   if (!id) {
     state.snapMsg = 'Connect a league first.';
+    state.snapErr = true;
+    renderArchive();
+    return;
+  }
+  if (assumedMovesFor(id.leagueId, id.season)) {
+    state.snapMsg = 'Stop assuming your trade to save this week.';
     state.snapErr = true;
     renderArchive();
     return;

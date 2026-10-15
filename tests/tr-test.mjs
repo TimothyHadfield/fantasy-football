@@ -3932,6 +3932,38 @@ SCENARIOS.assumeReload = async function assumeReload() {
   return { errors, page: readAssumed(document), prefs: prefs ? { assumed: prefs['trade.assumed'] ?? null, custom: prefs['trade.custom'] || null } : null };
 };
 
+/**
+ * THE ASSUMED TRADE, SITE-WIDE (2026-10-15): on the stubbed REAL league, a
+ * stored assumed trade (`TR_ASSUMED` = the prefs to seed) is worked out and its
+ * moves kept for the other pages (`trade.assumedMoves`, js/assumed-trade.js);
+ * Remove clears them. Read by tests/test-assumed-trade.mjs `trade-persist`.
+ */
+SCENARIOS.assumeLive = async function assumeLive() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': process.env.TR_ASSUMED || JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, window, errors } = await boot('trade.html', '', seed);
+  await settleGoal(document);
+  const read = () => {
+    try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}'); } catch { return null; }
+  };
+  const before = read();
+  const block = !document.getElementById('assumedPanel').hidden;
+  const rm = document.querySelector('#assumedPanel button[data-unassume]');
+  if (rm) rm.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settleGoal(document);
+  const after = read();
+  return {
+    errors, block, removed: !!rm,
+    moves: before ? before['trade.assumedMoves'] ?? null : null,
+    assumed: before ? before['trade.assumed'] ?? null : null,
+    movesAfter: after ? after['trade.assumedMoves'] ?? null : null,
+    assumedAfter: after ? after['trade.assumed'] ?? null : null,
+    customAfter: after ? after['trade.custom'] ?? null : null,
+  };
+};
+
 /** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
 SCENARIOS.goalLive = async function goalLive() {
   const seed = {

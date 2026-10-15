@@ -39,6 +39,10 @@
       "assertions": 85,
       "scenarios": 11
     },
+    "test-assumed-trade.mjs": {
+      "assertions": 102,
+      "scenarios": 7
+    },
     "test-season-rules.mjs": {
       "assertions": 145,
       "scenarios": 12
