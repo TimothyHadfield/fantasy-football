@@ -208,6 +208,9 @@
     "test-trade-bench.mjs": {
       "assertions": 16
     },
+    "test-list-order.mjs": {
+      "assertions": 120
+    },
     "test-trade-net.mjs": {
       "assertions": 49
     },

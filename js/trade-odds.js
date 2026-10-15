@@ -545,6 +545,50 @@ export function tieGroups(offers, band = TIE_BAND) {
   return marks;
 }
 
+// ---------------------------------------------- a deal that lowers your chance
+//
+// Tim, 2026-10-14, asked "keep 'You + He gains' but never put a trade that
+// lowers your goal chance above one that raises it?": "Yes, add that guard".
+// And the +1 a week gate also needs the chance not to fall.
+//
+// "Lowers" means by more than the measured band: a change inside ±TIE_BAND is
+// one the simulation cannot tell from nothing (see TIE_BAND above), so it is
+// not a fall. A deal with no change yet (not played out, or the goal could not
+// be simulated) is judged on nothing here and keeps the order it had.
+//
+// THE GUARD IS A FUNCTION OF THE ROW ALONE — its own change against a fixed
+// band, never against another row — so the order is a plain two-key sort and
+// rule 19 (a tie is a grouping, never a sort key) still holds.
+
+/** Your goal change for a deal, or null when it has none yet. */
+const goalChangeOf = (offer) => {
+  const g = offer?.goalScore?.mine?.gain;
+  return Number.isFinite(g) ? g : null;
+};
+
+/** Does this deal lower your goal chance by more than the band? Unknown: no. */
+export function lowersGoal(offer, band = TIE_BAND) {
+  const g = goalChangeOf(offer);
+  return g !== null && g < -band;
+}
+
+/** The +1 a week gate's goal half: a known change must be above −band. Unknown: passes. */
+export function goalGateOk(offer, band = TIE_BAND) {
+  const g = goalChangeOf(offer);
+  return g === null || g > -band;
+}
+
+/**
+ * The finder's order: every deal that does not lower your chance first, then
+ * the ones that do; inside each, largest `keyOf` first. In place, and stable
+ * (equal deals keep the order they came in).
+ */
+export function orderWithGoalGuard(list, keyOf) {
+  const key = new Map(list.map((o) => [o, keyOf(o)]));
+  const low = new Map(list.map((o) => [o, lowersGoal(o) ? 1 : 0]));
+  return list.sort((a, b) => low.get(a) - low.get(b) || key.get(b) - key.get(a) || 0);
+}
+
 // ------------------------------------------------- weeks a trade cannot reach
 //
 // A WEEK WHOSE GAMES HAVE KICKED OFF IS AS BANKED AS A WEEK WITH A RESULT.

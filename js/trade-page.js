@@ -107,6 +107,7 @@ import {
   scoreOffer, compareByGoal, ACCEPT_LEEWAY, ACCEPT_SCALE, GOAL_RUNS,
   weekWeights, weekWeightsSliced, THEIR_MIN_PER_WEEK, TIE_BAND, tieGroups, lockedWeeks,
   finishedWeeks, someoneFinished, espnLookPerWeek, playoffReach, goalChance, goalGain, shiftSeason,
+  lowersGoal, goalGateOk, orderWithGoalGuard,
 } from './trade-odds.js';
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion, currentSeason } from './bridge.js';
 // The finished list's best deals, kept for the Notifications page.
@@ -4559,7 +4560,8 @@ function goalMethodHtml(span) {
   const sigma = r.spread && Number.isFinite(r.spread.sigma) ? r.spread.sigma : null;
   return (
     `<strong>Your goal: ${esc(g.label)}.</strong> The list is ordered by <strong>You gain + He gains</strong>, ` +
-    `largest first; equal sums share a rank. Each offer is played out in the <strong>same season simulation as the Schedule ` +
+    `largest first, except that a deal which lowers your ${esc(g.chance)} by more than ${bandText()} of a ` +
+    `point goes below the rest; equal sums share a rank. Each offer is played out in the <strong>same season simulation as the Schedule ` +
     `page</strong>, ${GOAL_RUNS.toLocaleString('en-US')} seasons, once as the league stands and ` +
     `once with the deal made, on the same seed, so the difference is the deal and not two ` +
     `different runs of luck. ` +
@@ -4815,7 +4817,8 @@ function renderFinderNote(scales = finderScales) {
       ? `<strong>Bench value is on:</strong> a trade is kept only when it raises your <strong>bench value</strong> ` +
         `(the Values of the men outside your best lineup) and your lineup loses nothing a week, and the ` +
         `list is ordered by the bench gain. `
-      : `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong> is left out, `) +
+      : `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong>, or that ` +
+        `lowers your ${esc(g.chance)} by more than ${bandText()} of a point, is left out, `) +
     `and so is any trade with a man ESPN lists as out for the rest of the season. ` +
     `There is no trade-value ` +
     `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
@@ -5496,7 +5499,7 @@ function runGoalRank() {
     for (const o of offers) o.goalUnranked = false;
     // A NEW ARRAY, not a sort in place: the combo panel may be holding the old
     // one, and its own order is its own business.
-    search.offers = byNetIncrease(offers.slice().sort(compareByGoalNet));
+    search.offers = byNetIncreaseGuarded(offers.filter(finderGoalOk).sort(compareByGoalNet));
     search.goalRanked = true;
     markTies(search.offers);
     // The preview of the other goal follows, after the ranked column is done —
@@ -5618,17 +5621,37 @@ function keepTradeNotes(final) {
 keepTradeNotes.list = null;
 keepTradeNotes.final = null;
 
+/** A row's place key: its net increase, or its bench value gain under the bench-value switch. */
+function netKeyOf(o) {
+  return state.benchValue && Number.isFinite(o.benchGain) ? o.benchGain : netIncreaseOf(o);
+}
+
 /** Largest net increase first, in place; equal ones keep the order they came in (the sort is stable). */
 function byNetIncrease(list) {
-  // The bench-value switch orders the finder's rows by bench value gain.
-  const key = new Map(list.map((o) => [o,
-    state.benchValue && Number.isFinite(o.benchGain) ? o.benchGain : netIncreaseOf(o)]));
+  const key = new Map(list.map((o) => [o, netKeyOf(o)]));
   return list.sort((a, b) => key.get(b) - key.get(a) || 0);
 }
 
+/**
+ * THE FINDER'S ORDER (Tim, 2026-10-14: "Yes, add that guard"): net increase as
+ * above, except that a deal which lowers your goal chance by more than the band
+ * never sits above one that does not (`orderWithGoalGuard`, js/trade-odds.js).
+ * A deal not played out yet is not judged.
+ */
+function byNetIncreaseGuarded(list) {
+  return orderWithGoalGuard(list, netKeyOf);
+}
+
+/**
+ * THE +1 A WEEK GATE'S GOAL HALF (Tim, 2026-10-14: the gate "also needs chance
+ * not to fall"): once a deal has been played out, a fall in your chance beyond
+ * the band leaves it out. Only the +1 gate: the bench-value switch has its own.
+ */
+const finderGoalOk = (o) => state.benchValue || goalGateOk(o);
+
 function stageGoalRank(search, offers, scored) {
   const r = state.goalRank;
-  const top = byNetIncrease(offers.slice(0, scored).sort(compareByGoalNet));
+  const top = byNetIncreaseGuarded(offers.slice(0, scored).filter(finderGoalOk).sort(compareByGoalNet));
   markTies(top);
   const rest = offers.slice(scored);
   // Marked as a group, not by "has no score yet": a row scored after this
@@ -5658,7 +5681,9 @@ function stageGoalRank(search, offers, scored) {
 function markTies(offers) {
   // The list is in net-increase order since 2026-10-09, so the rank is the
   // row's place in THAT order and "=" is an equal net increase (band 0).
-  const marks = tieGroups(offers.map((o) => ({ goalScore: { value: netIncreaseOf(o) } })), 0);
+  // A deal that lowers your chance sits in a lower group, so it is never "="
+  // with a row of the group above, whatever its sum (the offset keeps them apart).
+  const marks = tieGroups(offers.map((o) => ({ goalScore: { value: netIncreaseOf(o) - (lowersGoal(o) ? 1e9 : 0) } })), 0);
   offers.forEach((o, i) => {
     const m = marks[i];
     o.goalPlace = Number.isFinite(o.goalScore?.value) ? m.place : null;

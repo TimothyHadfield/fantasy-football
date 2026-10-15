@@ -90,6 +90,7 @@ const SUITES = [
   ['test-trade-suggest.mjs', 'the Suggested list under the custom builder: every completion of the ticked men, against a brute force'],
   ['test-trade-odds.mjs', 'the goal: a trade ranked by the title (or last-place) chance it moves, and will he say yes'],
   ['test-accept.mjs', 'will he say yes, rebuilt: an even deal near 50%, an Out man or a lineup loss lowers it, a filled hole raises it, out of the race lowers it; likely / maybe / unlikely and a why'],
+  ['test-list-order.mjs', 'the finder’s order: net increase, but a deal that lowers your goal chance never above one that does not, and the +1 gate needs the chance not to fall'],
   ['test-trade-cards.mjs', 'the trade page’s previews: a gain is never red on a plus, and every card ends on the number its cell prints'],
   ['test-live-week.mjs', 'the week in progress: played out from its score so far and the share of the spread left, not from kickoff'],
   ['test-done.mjs', 'what has finished counts now: a finished player’s score is his number, a finished matchup is final before ESPN closes the week'],
