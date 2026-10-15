@@ -1605,12 +1605,28 @@ export async function fetchFloors(week) {
 
   const job = (async () => {
     try {
-      const wire = await fetchWireWeek(w);
+      // The byes ride along for the floor's divisor (Tim, 2026-10-15: ranked by
+      // rest-of-season average per game, js/floor.js decision 1). On the
+      // synced copy they come ONLY from that copy — a phone makes no ESPN
+      // request for a floor (test-cloud-wiring); live, `fetchWireWeek` has
+      // already read them and `fetchByeWeeks` is cached. A missing or failed
+      // read is `{}`, which only means no bye is subtracted.
+      const down = await cloudDown().catch(() => null);
+      const [wire, byes] = await Promise.all([
+        fetchWireWeek(w),
+        down
+          ? Promise.resolve(down.byes && typeof down.byes === 'object' ? down.byes : {})
+          : fetchByeWeeks().catch(() => ({})),
+      ]);
       // A FLOOR IS WHAT YOU COULD STILL STREAM, so it is read off what each man
       // was PROJECTED — never off the points of free agents who have already
       // played, which would be hindsight nobody could have claimed.
       const preGame = (p) => (p && p.done === true ? { ...p, projected: p.pregame } : p);
-      return floor.positionFloors(wire.map(preGame), { week: w });
+      // ESPN's rest-of-season line runs from the first week not yet decided,
+      // whatever week the wire was asked for; the schedule's current week when
+      // this page has read it, else the week read.
+      const fromWeek = currentWeek() || w;
+      return floor.positionFloors(wire.map(preGame), { week: w, fromWeek, byes });
     } catch {
       // Cached as empty on purpose: a league that refuses the wire would
       // otherwise be asked again by every panel on the page.
