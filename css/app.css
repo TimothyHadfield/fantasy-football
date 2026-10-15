@@ -1193,6 +1193,22 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
 .conn.warn .conn-btn { background: var(--warn); color: #251b06; }
 .conn.warn .conn-btn:hover { background: #e6b458; }
 
+/* THE ASSUMED TRADE (2026-10-15): one line under the bar on a page whose
+ * squads a trade assumed on the Trade page has changed. Stop is the Trade
+ * page's small outlined button (its `.cu-drop`). */
+.assume-site { margin: -8px 0 14px; }
+.assume-stop {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: var(--r-2, 4px);
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.assume-stop:hover { color: var(--err); border-color: var(--err); }
+
 .conn-err {
   flex: 1 1 100%;
   color: var(--err);

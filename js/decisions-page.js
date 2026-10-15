@@ -2068,7 +2068,9 @@ async function loadOdds() {
   let aheadFloors = null;
   if (asking.length) {
     let weekTeams = new Map();
-    try { weekTeams = await season.fetchWeeksRosters(asking); } catch { weekTeams = new Map(); }
+    // The REAL squads: this page reviews what was done, beside a world read
+    // the same way (an assumed trade on the Trade page is left out here).
+    try { weekTeams = await season.fetchWeeksRosters(asking, { assumed: false }); } catch { weekTeams = new Map(); }
     if (stale()) return;
 
     const floorWeek = capture.floorWeek(o.data);

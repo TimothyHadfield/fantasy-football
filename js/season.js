@@ -41,6 +41,9 @@ import * as pending from './pending.js';
 // ESPN's injury classes, read one way across the site. See "WHO IS OUT FOR THE
 // SEASON" below.
 import { healthy, injuryClass } from './injury.js';
+// The trade assumed on the Trade page, made on every roster read on its way
+// out. See "THE ASSUMED TRADE" below and js/assumed-trade.js.
+import * as assumedTrade from './assumed-trade.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -432,7 +435,7 @@ async function settleEarly(regular, playoff = []) {
     if (!inWeek.some((g) => scored(g.homeScore) || scored(g.awayScore))) return;
 
     if (!proKnown(await seekProGames())) return;
-    const { teams } = await fetchWeekRosters(week);
+    const { teams } = await fetchWeekRosters(week, { assumed: false });
     const byId = new Map((teams || []).map((t) => [t.id, t]));
     const finished = (id) => {
       const starters = ((byId.get(id) || {}).players || []).filter((p) => p.started);
@@ -934,11 +937,52 @@ async function inBatches(items, size, fn) {
  * NOW" above. `opts.raw` skips that and hands back the reading as ESPN sent it;
  * `buildCloudPayload` is its one caller, because what is uploaded must be raw.
  */
-export async function fetchWeekRosters(week, { byes, fresh = false, raw = false } = {}) {
+export async function fetchWeekRosters(week, { byes, fresh = false, raw = false, assumed = true } = {}) {
   const { final, ...got } = await readWeekRosters(week, { byes, fresh });
   if (raw) return got;
   const teams = await annotateTeams(week, got.teams, { final: final === true });
-  return { ...got, teams: await withInjuryDetails(teams) };
+  const out = await withInjuryDetails(teams);
+  return { ...got, teams: assumed ? await withAssumed(week, out) : out };
+}
+
+// ===========================================================================
+// THE ASSUMED TRADE (Tim, 2026-10-15)
+// ===========================================================================
+//
+// "if a trade is assumed in the trade section, the other sections that talk
+// about each user's current team or future predictions ... are adjusted so
+// that that user has updated information".
+//
+// The Trade page keeps the assumed trade's moves (js/assumed-trade.js); every
+// roster this file hands a page is made with them, ON THE WAY OUT and on a
+// copy — so the store, the synced copy and every frozen record stay exactly as
+// ESPN sent them. Only weeks still to play: a week ESPN has decided, or one
+// under way (a kickoff has passed, or anybody in it has a score), keeps its
+// real squads, and so does every week up to the trade's "send after week N".
+//
+// `assumed: false` asks for the real squads. The Trade page (which makes the
+// trade itself and also prices the real world), the readings that are KEPT
+// (the bar's weekly capture, the frozen Value lines, the Decisions review's
+// world) and this file's own settling all ask that way.
+
+/** One week's teams with the assumed trade made, or the same teams. Never throws. */
+async function withAssumed(week, teams) {
+  try {
+    if (!Array.isArray(teams) || !teams.length) return teams;
+    const cfg = storable();
+    if (!cfg || pastSeason()) return teams;
+    const moves = assumedTrade.movesFor(cfg.leagueId, cfg.season);
+    if (!moves) return teams;
+    // Which weeks are played is the SCHEDULE's word; unknown is not "unplayed".
+    if (!(await decidedKnown())) return teams;
+    const underWay = teams.some((t) => ((t && t.players) || []).some((p) =>
+      p && (typeof p.actual === 'number' || p.done === true)));
+    return assumedTrade.applyAssumed(teams, week, moves, {
+      played: (w) => weekIsFinal(w) || weekInPlay(w) || underWay,
+    });
+  } catch {
+    return teams;
+  }
 }
 
 // ===========================================================================
@@ -1389,7 +1433,7 @@ export function fetchWeeksRosters(weeks, opts) {
   return counted(() => weeksRostersNow(weeks, opts));
 }
 
-async function weeksRostersNow(weeks, { onProgress, fresh = false } = {}) {
+async function weeksRostersNow(weeks, { onProgress, fresh = false, assumed = true } = {}) {
   const out = new Map();
   let done = 0;
 
@@ -1411,8 +1455,10 @@ async function weeksRostersNow(weeks, { onProgress, fresh = false } = {}) {
       const got = synced ? keepSynced(cfg, down, week, synced) : null;
       if (got) {
         noteRead(week, got.at);
-        // Stored raw, handed out annotated — the same as `fetchWeekRosters`.
-        out.set(Number(week), await annotateTeams(week, got.teams));
+        // Stored raw, handed out annotated — the same as `fetchWeekRosters`
+        // (the assumed trade included).
+        const teams = await annotateTeams(week, got.teams);
+        out.set(Number(week), assumed ? await withAssumed(week, teams) : teams);
       }
       done++;
       if (onProgress) onProgress(done, weeks.length, week, got ? got.from : 'gap');
@@ -1435,7 +1481,7 @@ async function weeksRostersNow(weeks, { onProgress, fresh = false } = {}) {
   await inBatches(weeks, 3, async (week) => {
     let from = 'gap';
     try {
-      const got = await fetchWeekRosters(week, { byes, fresh });
+      const got = await fetchWeekRosters(week, { byes, fresh, assumed });
       if (got.teams && got.teams.length) {
         out.set(week, got.teams);
         from = got.from || 'espn';
@@ -2380,7 +2426,8 @@ async function valueBaseNow(demo) {
   if (!weeks.length) return null;
   const byes = await fetchByeWeeks();
   if (!byesAreKnown(byes)) return null;
-  const weekTeams = await fetchWeeksRosters(weeks);
+  // The REAL squads: these lines are frozen for the season.
+  const weekTeams = await fetchWeeksRosters(weeks, { assumed: false });
   const weekWire = new Map();
   // A week the wire refuses throws, and then nothing is made this time.
   await inBatches(weeks, 3, async (w) => { weekWire.set(w, await fetchWireWeek(w)); });
@@ -2453,7 +2500,9 @@ async function playerValuesNow(demo) {
   const base = await fetchValueBase().catch(() => null);
   const weeks = valueWeeks(await fetchSchedule());
   if (!weeks.length) return playerValuesOf(base, [], new Map(), {});
-  const weekTeams = await fetchWeeksRosters(weeks);
+  // The REAL squads: a man's Value is his, whoever an assumed trade puts him with
+  // (and a man it cuts keeps his).
+  const weekTeams = await fetchWeeksRosters(weeks, { assumed: false });
   // On the synced copy the byes are the synced ones or none: `fetchByeWeeks`
   // would go on to ask ESPN when the sync carried none, and this may not.
   const down = await cloudDown();
@@ -3145,6 +3194,8 @@ async function gatherDecisions({ onProgress, demo = false } = {}) {
 
   const rosters = weeks.length
     ? await fetchWeeksRosters(weeks, {
+      // The REAL squads: the review reads who held whom, week by week.
+      assumed: false,
       onProgress: (d, t, week, from) => {
         if (from === 'espn') { requests++; bought.add(Number(week)); }
         report(++done, total, `Week ${week} squads`);

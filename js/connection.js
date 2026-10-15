@@ -13,6 +13,7 @@ import * as capture from './capture.js';
 import * as snapshots from './snapshots.js';
 import * as projHistory from './proj-history.js';
 import * as leagues from './leagues.js';
+import * as assumedTrade from './assumed-trade.js';
 import { configure, fetchLeague, AuthError } from './espn.js';
 
 const KEY = 'ff.connection';
@@ -622,7 +623,9 @@ async function maybeCapture() {
       bridgePresent: bridge.isAvailable(),
       teamId: state.teamId ?? null,
       fetchSchedule: season.fetchSchedule,
-      fetchWeeksRosters: season.fetchWeeksRosters,
+      // The REAL squads: a reading is kept, and never with a trade only assumed
+      // on the Trade page in it (js/assumed-trade.js).
+      fetchWeeksRosters: (weeks, opts) => season.fetchWeeksRosters(weeks, { ...(opts || {}), assumed: false }),
       // The Schedule page's floor read, so the bar's reading is floored the
       // same way (AUDIT §2.2). Absent in a stub: no floor, as on that page.
       fetchFloors: typeof season.fetchFloors === 'function' ? season.fetchFloors : null,
@@ -1395,6 +1398,16 @@ async function init() {
   mountBell();
   document.addEventListener('ff:connection', scheduleBell);
   scheduleBell();
+
+  // A trade assumed on the Trade page changes this page's squads: one line
+  // under the bar says so, with Stop (js/assumed-trade.js). Only while the
+  // league is connected: a page still on demo data shows no traded squads.
+  const assumeNotice = () => {
+    if (currentConnection()) assumedTrade.mountNotice(document);
+    else document.getElementById('assumeSite')?.remove();
+  };
+  document.addEventListener('ff:connection', assumeNotice);
+  assumeNotice();
 
   bridge.onAvailability(({ available }) => {
     state.extension = available;

@@ -97,6 +97,9 @@ import { slotAverages, positionNeeds } from './slot-needs.js';
 import { acceptBy } from './accept-by.js';
 // "Send: now / after week N" in the custom box (Tim, 2026-10-15). Pure.
 import { sendAfterChoices, liveSendAfter, weeksAfter, weeksBefore } from './send-after.js';
+// THE ASSUMED TRADE's one implementation, shared with every other page through
+// js/season.js (Tim, 2026-10-15). See THE ASSUMED TRADE below.
+import * as assumedTrade from './assumed-trade.js';
 // "Ask AI" (2026-09-30): the text a row copies for an AI chat. Pure.
 import { askAiText } from './ask-ai.js';
 // The ONE definition of the playoff weeks (last regular week + one per round).
@@ -934,32 +937,17 @@ function activeAssumed() {
   return a && a.src === sourceKey() ? a.entry : null;
 }
 
-/** One week's teams with the assumed trade made; the same array when nothing changes. */
+/**
+ * One week's teams with the assumed trade made; the same array when nothing
+ * changes. THE ONE IMPLEMENTATION is js/assumed-trade.js `applyAssumed` (every
+ * other page gets it through js/season.js); this page's own reads ask season.js
+ * for the real squads (`assumed: false`) and make the trade here, so it is made
+ * once — and the "real world" pricing still has the squads as they are.
+ */
 function assumedTeams(teams, week, selected = false) {
   const m = assume.moves;
-  if (!m || m.src !== sourceKey() || !teams || !teams.length) return teams;
-  if (!selected && playedWeeks().includes(week)) return teams;
-  const ta = teams.find((t) => t.id === m.a);
-  const tb = teams.find((t) => t.id === m.b);
-  if (!ta || !tb) return teams;
-  const bench = (p) => ({ ...p, started: false, lineupSlotId: 20, slot: espn.SLOT_LABELS[20] ?? 'Bench' });
-  const remake = (team, send, cut, from, gets) => {
-    const kept = (team.players || []).filter((p) =>
-      !send.has(String(p.playerId)) && !cut.has(String(p.playerId)));
-    const arriving = (from.players || [])
-      .filter((p) => gets.has(String(p.playerId)) && !cut.has(String(p.playerId)))
-      .map(bench);
-    const players = kept.concat(arriving);
-    return {
-      ...team,
-      players,
-      starters: players.filter((p) => p.started),
-      bench: players.filter((p) => !p.started),
-    };
-  };
-  const na = remake(ta, m.sendA, m.cutA, tb, m.sendB);
-  const nb = remake(tb, m.sendB, m.cutB, ta, m.sendA);
-  return teams.map((t) => (t === ta ? na : t === tb ? nb : t));
+  if (!m || m.src !== sourceKey()) return teams;
+  return assumedTrade.applyAssumed(teams, week, m, { played: selected ? null : playedWeeks() });
 }
 
 /** The selected week, as ESPN sent it and as the page prices it. */
@@ -994,7 +982,7 @@ function reapplyAssumed() {
 function setMoves(moves, deltas) {
   const sig = moves
     ? JSON.stringify([moves.src, moves.a, moves.b, ...['sendA', 'sendB', 'cutA', 'cutB'].map((k) => [...moves[k]].sort()),
-      deltas ? [...deltas].map(([t, m]) => [t, [...m]]) : null])
+      moves.after ?? null, deltas ? [...deltas].map(([t, m]) => [t, [...m]]) : null])
     : null;
   if (sig === assume.movesSig) return false;
   assume.movesSig = sig;
@@ -1018,8 +1006,11 @@ function syncAssumed() {
     playedWeeks(), state.rawData.week, state.slots, offerId(state.floors)]);
   if (key === assume.key) return false;
   assume.key = key;
-  const priced = withRealWorld(() => priceCustom(entry));
-  const cutOf = (side) => new Set(((side && side.cut) || []).map((p) => String(p.playerId)));
+  // SENT AFTER WEEK N (2026-10-15): the trade is made from week N+1 on, and its
+  // forced cut is the one it is priced with under that week.
+  const after = cutOf(entry.sendAfter);
+  const priced = withRealWorld(() => withSendCut(after, () => priceCustom(entry)));
+  const cutIds = (side) => new Set(((side && side.cut) || []).map((p) => String(p.playerId)));
   if (priced.error && !priced.forA && !/every week has been played/i.test(priced.error)) {
     const b = withRealWorld(() => teamById(entry.b));
     dropAssumed(`Stopped assuming your trade with ${b ? b.name : 'the other squad'}. ${priced.error}`);
@@ -1031,13 +1022,20 @@ function syncAssumed() {
     b: entry.b,
     sendA: new Set(entry.sendA.map(String)),
     sendB: new Set(entry.sendB.map(String)),
-    cutA: cutOf(priced.forA),
-    cutB: cutOf(priced.forB),
+    cutA: cutIds(priced.forA),
+    cutB: cutIds(priced.forB),
+    after,
   };
+  // EVERY OTHER PAGE reads these moves (js/assumed-trade.js, through
+  // js/season.js), so they are kept with the names the notice there says.
+  if (moves.src.startsWith('live:')) {
+    const name = (id) => withRealWorld(() => { const t = teamById(id); return t ? t.name : ''; });
+    assumedTrade.writeMoves({ ...moves, aName: name(entry.a), bName: name(entry.b) });
+  }
   let deltas = null;
   if (state.isDemo && priced.forA) {
     const played = new Set(playedWeeks());
-    const all = offerDeltas(customOffer(entry, priced), entry.a);
+    const all = withSendCut(after, () => offerDeltas(customOffer(entry, priced), entry.a));
     deltas = new Map();
     for (const [teamId, m] of all) {
       const keep = new Map([...m].filter(([w]) => state.weeks.includes(w) && !played.has(w)));
@@ -1100,6 +1098,8 @@ function assumedText() {
 
 function saveAssumed() {
   prefs.set('assumed', state.assumed);
+  // Nothing assumed: the other pages' copy of the moves goes with it.
+  if (!state.assumed) assumedTrade.writeMoves(null);
 }
 
 function loadAssumed() {
@@ -1111,6 +1111,9 @@ function loadAssumed() {
     b: Number(e.b),
     sendA: Array.isArray(e.sendA) ? e.sendA.map(String) : [],
     sendB: Array.isArray(e.sendB) ? e.sendB.map(String) : [],
+    // Its "send after week N", kept (2026-10-15): the trade is made from N+1.
+    ...(e.sendAfter !== null && e.sendAfter !== undefined && e.sendAfter !== '' && Number.isFinite(Number(e.sendAfter))
+      ? { sendAfter: Number(e.sendAfter) } : {}),
   };
   if (!Number.isFinite(entry.a) || !Number.isFinite(entry.b) || entry.a === entry.b) return null;
   if (!entry.sendA.length && !entry.sendB.length) return null;
@@ -1457,6 +1460,8 @@ async function buyMissingWeeks(list = null, { fresh = false } = {}) {
         const sources = new Map();
         const got = await fetchWeeksRosters(batch, {
           fresh,
+          // The REAL squads: this page makes the assumed trade itself (`assumedTeams`).
+          assumed: false,
           onProgress: (done, total, week, from) => {
             if (week !== undefined) sources.set(week, from || 'espn');
             if (stale() || !weekly.progress) return;
@@ -8647,7 +8652,8 @@ async function loadWeek() {
     setStatus(`Loading week ${state.week} rosters from ESPN…`);
     let loaded;
     try {
-      loaded = await fetchWeekRosters(state.week);
+      // The REAL squads: this page makes the assumed trade itself (`setData`).
+      loaded = await fetchWeekRosters(state.week, { assumed: false });
     } catch (err) {
       if (stale()) return;
       await fallBackToDemo(err.message);
