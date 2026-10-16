@@ -38,7 +38,9 @@ import { playoffWeeks as leaguePlayoffWeeks } from './capture.js';
 import { heatScale, heatOf, heatMarkHtml } from './heat.js';
 import { enableSort, resort } from './sortable.js';
 // The site's one zero rule — a 0.00 is a bye, a man ruled out, or a real zero.
-import { zeroKind, byeWeekOf, outMark } from './player-card.js';
+import {
+  zeroKind, byeWeekOf, outMark, playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns, setValueSource,
+} from './player-card.js';
 import { wirePops, hidePop } from './pop.js';
 import { playerHref } from './links.js';
 import { diffOf, diffClass } from './view-switch.js';
@@ -221,6 +223,7 @@ async function mount(host) {
     owners: new Map(),        // String(team id) -> first name
     men: new Map(),           // playerId -> { p, ownerId|null, seasonAvg }
     proj: new Map(),          // week -> Map(playerId -> number|null)
+    held: new Map(),          // week -> the squads and the wire as read, for the player card
     status: new Map(),        // week -> Map(playerId -> his injury status THAT week)
     failed: new Set(),        // weeks with neither read
     read: { done: 0, of: 0 },
@@ -239,6 +242,7 @@ async function mount(host) {
     state.token++;
     state.men = new Map();
     state.proj = new Map();
+    state.held = new Map();
     state.status = new Map();
     state.failed = new Set();
     state.teams = [];
@@ -271,6 +275,9 @@ async function mount(host) {
     };
     for (const t of teams || []) for (const p of t.players || []) take(p);
     for (const p of wire || []) take(p);
+    // The card looks for him on every squad of a week; the wire rides along as
+    // one more, so a free agent's card has his weeks too.
+    state.held.set(week, [...(teams || []), { players: wire || [] }]);
     state.proj.set(week, byId);
     state.status.set(week, status);
   }
@@ -293,10 +300,26 @@ async function mount(host) {
     }
   }
 
+  /** His Value at the top of the card, looked up when it opens (as on Home). */
+  let valueFor = null;
+  function wireValue(demo) {
+    if (typeof season.fetchPlayerValues !== 'function') return;
+    const cfg = demo ? {} : espn.getConfig();
+    const key = demo ? 'demo' : `${cfg.leagueId}::${cfg.season}`;
+    if (key !== valueFor) setValueSource(null);
+    valueFor = key;
+    let asked;
+    try { asked = season.fetchPlayerValues({ demo: Boolean(demo) }); } catch { return; }
+    Promise.resolve(asked).then((v) => {
+      if (valueFor === key && v && typeof v.lookup === 'function') setValueSource(v.lookup);
+    }).catch(() => {});
+  }
+
   async function loadDemo() {
     reset();
     const token = state.token;
     state.isDemo = true;
+    wireValue(true);
     state.loading = true;
     state.leagueId = null;
     render();
@@ -344,6 +367,7 @@ async function mount(host) {
     reset();
     const token = state.token;
     state.isDemo = false;
+    wireValue(false);
     state.loading = true;
     state.leagueId = String(saved.leagueId);
     espn.configure({ leagueId: saved.leagueId, season: saved.season });
@@ -500,6 +524,7 @@ async function mount(host) {
 
   function render() {
     try {
+      clearRuns('po');
       renderControls();
       renderTable();
       renderStatus();
@@ -619,10 +644,21 @@ async function mount(host) {
       ? ` <span class="tag ${status.cls}" title="${esc(status.why)}">${status.tag}</span>`
       : '';
     const href = playerHref(p.playerId);
+    // THE SITE'S PLAYER CARD on his name (Tim, 2026-10-16: "show the regular
+    // week by week preview that is shown everywhere else in the cite when you
+    // hover over a player in the playoffs section"): js/player-card.js's
+    // `playerCardFromWeeks`, the one Home, Stats and Schedule use, from the
+    // weeks this list read (this week through the last playoff week, the
+    // playoff ones marked PO). Nothing is read for a card.
+    const weeks = [...state.held.keys()].sort((a, b) => a - b);
+    const tip = tipAttr(registerRun(playerCardFromWeeks(state.held, p, {
+      weeks, currentWeek: state.currentWeek, byes: state.byes, demo: state.isDemo,
+      playoffWeeks: state.poWeeks, id: `po:${p.playerId}`,
+    }), 'po'));
     // `aria-label`, never `title`, on the link (js/touch-titles.js leaves links alone).
     const link = href
-      ? `<a class="pref" href="${esc(href)}" aria-label="${esc(p.name)} — open his row on the Players page">${esc(p.name)}</a>`
-      : esc(p.name);
+      ? `<a class="pref" href="${esc(href)}"${tip} aria-label="${esc(p.name)} — open his row on the Players page">${esc(p.name)}</a>`
+      : `<span class="pref"${tip} tabindex="0">${esc(p.name)}</span>`;
     return `<td class="name" data-v="${esc(String(p.name || '').toLowerCase())}">${link}${tag}</td>`;
   }
 
@@ -809,6 +845,7 @@ async function mount(host) {
   // Best playoff average first (the Playoff column).
   enableSort(table, { defaultIndex: 6 });
   wirePops(table, { selector: 'td[data-c]', card: cardFor });
+  wireTips(table);
 
   // A league connected later turns the list live; a Sync re-reads it.
   // Started BEFORE the listener goes on: onConnection answers at once when a

@@ -267,6 +267,20 @@ eq(table.querySelectorAll('tbody tr[data-player]').length, rows.length, 'All bri
 // ---------------------------------------------------------------- the name, the cost
 const link = rowOf(poZeroMen[0]).querySelector('td.name a.pref');
 ok(link && /^waivers\.html\?player=\d+$/.test(link.getAttribute('href')), 'a name links to his row on the Players page');
+// Tim, 2026-10-16: "show the regular week by week preview that is shown
+// everywhere else in the cite when you hover over a player in the playoffs
+// section." The site's player card (js/player-card.js), on a hover of his name.
+eq(rows.filter((tr) => tr.querySelector('td.name [data-tip]')).length, rows.length, 'every name carries the site’s player card');
+{
+  const id = poZeroMen[0];
+  const a = rowOf(id).querySelector('td.name [data-tip]');
+  a.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 50));
+  const tip = document.getElementById('tipCard');
+  const txt = tip ? tip.textContent.replace(/\s+/g, ' ') : '';
+  ok(tip && !tip.hidden && /Proj/.test(txt) && /Week/.test(txt), 'hovering a name opens the card: Week and Proj rows', txt.slice(0, 120));
+  ok(PO.every((w) => txt.includes(`${w}`)) && /PO/.test(txt), 'the card runs through the playoff weeks, marked PO', txt.slice(0, 300));
+}
 eq(fetchCalls.length, 0, 'the sample league asks the network for nothing');
 eq(rejections.length, 0, 'no unhandled rejection');
 
