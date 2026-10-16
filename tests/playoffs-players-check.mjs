@@ -117,7 +117,7 @@ const heads = [...table.querySelectorAll('thead th')].map((th) => {
   clone.querySelectorAll('.sr-only, .po-tag').forEach((n) => n.remove());
   return clone.textContent.replace(/\s+/g, ' ').trim();
 });
-const FIXED = ['Player', 'Pos', 'Tm', 'Owner', 'Avg', 'Future', 'Playoff', 'PO − Avg'];
+const FIXED = ['Player', 'Pos', 'Tm', 'Owner', 'Avg', 'Future', 'Playoff', 'PO − Avg', 'PO − Fut'];
 eq(JSON.stringify(heads.slice(0, FIXED.length)), JSON.stringify(FIXED), 'the columns, in order');
 eq(JSON.stringify(heads.slice(FIXED.length)), JSON.stringify(PO.map(String)), 'then exactly the playoff weeks');
 ok(!heads.some((h) => /^\d+$/.test(h) && !PO.includes(Number(h))), 'no regular-season week column', heads.join('|'));
@@ -215,6 +215,19 @@ for (const tr of rows) {
 }
 ok(diffsSeen > 100, 'most rows have both figures', String(diffsSeen));
 eq(diffsOk, diffsSeen, 'every PO − Avg is its row’s Playoff minus Avg, as printed');
+
+// Tim, 2026-10-16: "make another derived column for these playoff players that
+// is playoff avg - future proj avg." Every row's PO − Fut, the same way.
+let futOk = 0, futSeen = 0;
+for (const tr of rows) {
+  const f = cellText(tr, col('Future')).replace(/[▲▼]/g, '').trim();
+  const p = cellText(tr, col('Playoff')).replace(/[▲▼]/g, '').trim();
+  if (f === '—' || p === '—') continue;
+  futSeen++;
+  if (cellText(tr, col('PO − Fut')) === sign(r1(Number(p) - Number(f)))) futOk++;
+}
+ok(futSeen > 100, 'most rows have Future and Playoff', String(futSeen));
+eq(futOk, futSeen, 'every PO − Fut is its row’s Playoff minus Future, as printed');
 
 // ---------------------------------------------------------------- a free agent's numbers
 const fa = pool.find((p) => PO.every((w) => demo.generateDemoFreeAgents(w).some((q) => q.playerId === p.playerId)));

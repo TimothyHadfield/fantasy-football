@@ -355,7 +355,7 @@
       "scenarios": 8
     },
     "playoffs-players-check.mjs": {
-      "assertions": 49
+      "assertions": 51
     }
   }
 }

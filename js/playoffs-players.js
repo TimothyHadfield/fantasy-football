@@ -13,7 +13,7 @@
 // So this is the Players page's Taken table (js/waivers-page.js, waivers.html)
 // with the regular-season week columns taken out and three averages put in:
 //
-//   Player · Pos · Tm · Owner · Avg · Future · Playoff · PO − Avg · one column
+//   Player · Pos · Tm · Owner · Avg · Future · Playoff · PO − Avg · PO − Fut · one column
 //   per playoff week.
 //
 // THE DATA is the Players page's own reads, and no more of them: every week
@@ -464,6 +464,9 @@ async function mount(host) {
         owner: man.ownerId === null ? null : (state.owners.get(String(man.ownerId)) || `Team ${man.ownerId}`),
         avg: avgShown, future: futShown, futureN: f.n, playoff: poShown, playoffN: pl.n,
         diff: diffOf(poShown, avgShown),
+        // Tim, 2026-10-16: "make another derived column for these playoff
+        // players that is playoff avg - future proj avg."
+        diffFut: diffOf(poShown, futShown),
         futureValues: future, poValues: po,
       });
     }
@@ -598,6 +601,7 @@ async function mount(host) {
        <th data-sort title="${futTitle}">Future</th>
        <th data-sort title="${poTitle}">Playoff</th>
        <th data-sort title="Playoff minus Avg, as printed: green = projected above his average in the playoffs.">PO − Avg</th>
+       <th data-sort title="Playoff minus Future, as printed: green = projected higher in the playoffs than in the rest of the regular season.">PO − Fut</th>
        ${wk}
      </tr>`;
   }
@@ -658,10 +662,10 @@ async function mount(host) {
     const ownerCell = r.owner === null
       ? `<td class="left owner fa" data-v="~">${esc(AVAILABLE)}</td>`
       : `<td class="left owner" data-v="${esc(r.owner.toLowerCase())}">${esc(r.owner)}</td>`;
-    const d = r.diff;
-    const diffCell = d === null
+    const diffTd = (d, c) => (d === null
       ? `<td>${dash}</td>`
-      : `<td class="${diffClass(d)}" data-v="${d}" data-c="diff">${Math.abs(d) < 1e-9 ? '0' : (d > 0 ? '+' : '−') + Math.abs(d).toFixed(1)}</td>`;
+      : `<td class="${diffClass(d)}" data-v="${d}" data-c="${c}">${Math.abs(d) < 1e-9 ? '0' : (d > 0 ? '+' : '−') + Math.abs(d).toFixed(1)}</td>`);
+    const diffCell = diffTd(r.diff, 'diff') + diffTd(r.diffFut, 'diffFut');
     return `<tr data-player="${esc(r.id)}"${status && status.dim ? ' class="unavailable"' : ''}>
       ${nameCell(r)}
       <td class="left" data-v="${POS_ORDER.get(p.position) ?? 9}">${esc(p.position)}</td>
@@ -721,6 +725,13 @@ async function mount(host) {
           rows: [{ label: 'Playoff', value: r.playoff }, { label: 'Avg', value: r.avg }],
           total: { label: 'Difference', html: esc((r.diff > 0 ? '+' : r.diff < 0 ? '−' : '') + (r.diff === 0 ? '0' : Math.abs(r.diff).toFixed(1))), value: r.diff },
         };
+      case 'diffFut':
+        return {
+          title: r.p.name,
+          sub: 'PO − Fut',
+          rows: [{ label: 'Playoff', value: r.playoff }, { label: 'Future', value: r.future }],
+          total: { label: 'Difference', html: esc((r.diffFut > 0 ? '+' : r.diffFut < 0 ? '−' : '') + (r.diffFut === 0 ? '0' : Math.abs(r.diffFut).toFixed(1))), value: r.diffFut },
+        };
       default:
         return null;
     }
@@ -757,6 +768,7 @@ async function mount(host) {
         'Every week counts: a bye or a man ruled out is a 0 in the average, not left out. ' +
         'Only a week with no projection at all is left out. Tap a figure for its weeks.',
       lead('PO − Avg') + 'Playoff minus Avg, as printed: green means projected above his average in the playoffs.',
+      lead('PO − Fut') + 'Playoff minus Future, as printed: green means projected higher in the playoffs than in the regular weeks left.',
       lead('Colour') + 'Avg, Future, Playoff and each week compare men at the same position, ' +
         'the whole list at once — a filter never moves a colour.',
       state.isDemo
