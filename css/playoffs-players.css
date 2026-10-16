@@ -1,0 +1,145 @@
+/* THE PLAYOFFS PAGE'S PLAYER LIST (js/playoffs-players.js).
+   Tim, 2026-10-16: "This whole player display should look extreamly similar to
+   the charts in the regular player's section". So everything here is COPIED
+   from waivers.html's own <style> (the Taken table's rules), scoped to the
+   panel so it cannot reach anything else on the page it lands in. Change one,
+   change the other. Everything not here comes from css/app.css. */
+
+#poPlayers .seg-sm button { padding: 6px 12px; font-size: 13px; }
+#poPlayers .seg-count {
+  margin-left: 6px;
+  font-weight: 500;
+  opacity: 0.72;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The figure the table is ordered by carries a little more weight. */
+#poPlayers td.avg { font-weight: 650; color: var(--text); }
+#poPlayers td.bye { color: var(--warn); font-size: 11.5px; letter-spacing: 0.04em; }
+#poPlayers td.wait { color: var(--line); }
+
+/* Previews: the cursor says a cell opens one. */
+#poPlayers td[data-c] { cursor: help; }
+
+/* PLAYOFF − AVG: green up, red down, dim for none — word and sign as well as
+   colour (the sign is printed). */
+#poPlayers td.d-up { color: var(--accent); font-weight: 600; }
+#poPlayers td.d-down { color: var(--err); font-weight: 600; }
+#poPlayers td.d-zero { color: var(--dim); }
+
+/* Availability tags, and OUT/IR dimming the row. */
+#poPlayers .tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  margin-left: 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+#poPlayers .tag.bad { color: var(--err); border-color: #5a2424; }
+#poPlayers .tag.warn { color: var(--warn); border-color: #5a4718; }
+#poPlayers tbody tr.unavailable td { color: var(--dim); }
+#poPlayers tbody tr.unavailable td.name { font-weight: 500; }
+#poPlayers .empty-row td { text-align: center; color: var(--dim); padding: 24px 12px; }
+
+/* The owner's first name, capped as the Taken table caps a manager's name. */
+#poPlayers td.owner {
+  color: var(--dim);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A player reference: quiet until hovered or focused. */
+#poPlayers a.pref { color: inherit; text-decoration: none; cursor: pointer; }
+#poPlayers a.pref:hover { text-decoration: underline; text-underline-offset: 2px; color: var(--accent); }
+#poPlayers a.pref:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: var(--r-1);
+}
+
+#poPlayers .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px 28px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+}
+
+#poPlayers .status { margin: 10px 0 0; font-size: 13px; color: var(--dim); }
+#poPlayers .status p { margin: 0 0 4px; }
+#poPlayers .status:empty { display: none; }
+
+#poPlayers .legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 12px 0 8px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+#poPlayers .legend .key { display: inline-flex; align-items: center; gap: 6px; }
+#poPlayers .legend .key[hidden] { display: none; }
+#poPlayers .legend .sw {
+  display: inline-block;
+  min-width: 34px;
+  padding: 1px 6px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--line);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+#poPlayers .legend .sw.bye { color: var(--warn); font-size: 11px; letter-spacing: 0.04em; }
+
+/* A real zero for a man ruled out — not a bye. Word and class, never colour alone. */
+#poPlayers td.zero-out, #poPlayers td.zero { color: var(--dim); }
+#poPlayers .zmark {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--err);
+  margin-left: 2px;
+}
+#poPlayers .legend .sw.zero-out { color: var(--dim); }
+#poHeatKey:empty { display: none; }
+
+/* The heading line, with "Show my players" beside it. */
+#poPlayers .panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 14px;
+}
+#poPlayers .panel-head > h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 0;
+  font-weight: 600;
+}
+#poPlayers .panel-head .switch { margin-left: auto; font-size: 13px; white-space: nowrap; }
+
+#poPlayers details.explain > .panel-note p { margin: 0 0 10px; }
+#poPlayers details.explain > .panel-note p:last-child { margin-bottom: 0; }
+#poPlayers details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
+
+@media (max-width: 760px) {
+  #poPlayers .ctl { flex: 1 1 100%; }
+  #poPlayers .seg-sm button { padding: 6px 4px; font-size: 12.5px; line-height: 1.25; }
+  #poPlayers .seg-count { display: block; margin-left: 0; font-size: 10.5px; }
+  #poPlayers .toolbar { padding: 10px; gap: 12px; }
+  #poPlayers td.owner { max-width: 30vw; }
+  #poPlayers .panel-head { margin-bottom: 11px; flex-wrap: wrap; row-gap: 0; }
+  #poPlayers .panel-head .switch { order: 3; margin-left: 0; }
+}
