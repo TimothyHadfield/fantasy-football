@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playoffs &middot; Fantasy Football</title>
+<link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Fantasy">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0f1115">
+<script src="js/site-status.js" defer></script>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/playoffs-players.css">
+<style>
+/* Page-local styles. Everything else comes from css/app.css. */
+#poTeams td:not(.name), #poTeams th:not(.name) { text-align: right; }
+.empty-row td { text-align: center; color: var(--dim); padding: 24px 12px; }
+@media (max-width: 760px) {
+  /* Six columns in a phone's width: tighter cells and a name cut short (the
+     ellipsis rule is app.css's) keep the table from scrolling sideways. */
+  #poTeams th, #poTeams td { padding-left: 3px; padding-right: 3px; }
+  #poTeams td.name, #poTeams th.name { max-width: 86px; padding-left: 0; }
+}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap wide">
+    <a class="brand" href="leagues.html">Fantasy Football</a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="stats.html">Stats</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="schedule.html">Schedule</a>
+      <a href="playoffs.html" class="active" aria-current="page">Playoffs</a>
+      <a href="waivers.html">Players</a>
+      <a href="trade.html">Trade</a>
+      <a href="decisions.html">Decisions</a>
+      <a href="draft.html">Draft</a>
+      <a href="summary.html">Summary</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wide">
+
+  <div id="connBar"></div>
+
+  <h1>Playoffs <span id="modeBadge" class="badge demo">Demo</span></h1>
+  <p class="sub" id="pageSub">A generated sample league, as of week 4.</p>
+
+  <!-- 1. Every team: its chance of the playoffs and of a bye (the Schedule
+          page's simulation, same inputs and seed), then its projected points
+          in each playoff week (the same best-lineup totals the simulation
+          plays the bracket with). -->
+  <section class="panel" id="poTeamsPanel">
+    <h2>Teams</h2>
+    <p class="lede">Chance of the playoffs and a bye, and projected points each playoff week. Chances are our model, not ESPN&rsquo;s.</p>
+    <div class="table-scroll"><table id="poTeams">
+      <thead><tr>
+        <th class="name" data-sort>Team</th>
+        <th data-sort title="How often this team made the playoffs in the simulated seasons.">Playoffs %</th>
+        <th data-sort title="How often this team seeded high enough to skip the first playoff round.">Bye %</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="panel-note" id="poKey" hidden></p>
+    <details class="explain">
+      <summary>How this works</summary>
+      <div class="panel-note" id="poNote"></div>
+    </details>
+  </section>
+
+  <!-- 2. Players (js/playoffs-players.js mounts here). -->
+  <section class="panel" id="poPlayers"></section>
+
+  <section class="panel" id="sourcePanel">
+    <h2>Data source</h2>
+    <div class="segmented" id="sourceToggle">
+      <button type="button" data-src="demo" class="on">Demo data</button>
+      <button type="button" data-src="live">My ESPN league</button>
+    </div>
+    <div id="sourceStatus" class="panel-note"></div>
+  </section>
+
+</div>
+
+<script type="module" src="js/playoffs-page.js"></script>
+<script type="module" src="js/connection.js"></script>
+<script type="module" src="js/touch-titles.js"></script>
+</body>
+</html>

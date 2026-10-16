@@ -44,6 +44,8 @@ const PAGES = [
   'leagues.html',
   // Notifications (2026-10-11): the sample league's lines.
   'notifications.html',
+  // Playoffs (2026-10-16): the sample league as of week 4.
+  'playoffs.html',
 ];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

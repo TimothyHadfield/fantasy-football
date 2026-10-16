@@ -30,6 +30,8 @@ const PAGES = [
   'leagues.html',
   // Notifications (2026-10-11): no league connected, so the sample league's lines.
   'notifications.html',
+  // Playoffs (2026-10-16): the sample league.
+  'playoffs.html',
 ];
 
 /** Parse the <script type="module" src="..."> tags a page actually declares. */

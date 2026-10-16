@@ -56,6 +56,9 @@
     "nav-check.mjs": {
       "assertions": 225
     },
+    "playoffs-check.mjs": {
+      "assertions": 165
+    },
     "site-status-check.mjs": {
       "assertions": 95
     },
