@@ -137,6 +137,17 @@ g. Does ESPN's app still show a "Trade Grade" on a received offer, and does the 
 - Verified: fail-first tests per builder; merged-tree suites (see chat.md 2026-10-15); demo median yes 90% → 48%; screenshots 393 + 1440.
 - Still open: `findSuggestions` yes input not flat; constants unvalidated (Phase 5 outcome recording); wording and the custom-box height change are Tim's.
 
+## BUILT 2026-10-15 evening (Phase 4 + phone cards)
+- Tim's answers: d "Rest of season (Recommended)"; e "Free cut first, Value breaks ties"; f "whatever you reccommend" → cards on phone, laptop table unchanged.
+- e8af732 forced cut: least cost to the priced weeks, then Value as printed, then season total, then roster order; one-position guard + IR rule kept (`tests/test-trade-cut.mjs` §5, Diggs/Lloyd fixture).
+- 7f37424 floor: wire ranked by ROS projection ÷ games left (byes out), still 3rd best, one read flat (`tests/test-floor-ros.mjs`). 1241838: K 10.85→10.09, D/ST 5.44→5.54, kicker slots floored 87%→66%.
+- 3255389 💎/🪙 gap max(2, 6.7/√games) (6.7 = median weekly spread, 1241838 wks 1–5); a game under half his usual followed by an ESPN 0 projection is dropped from the average (Appeal too). Marked 43%→21%. Trade chances whole %, change = round(after) − round(before); TIE_BAND and sorts unrounded.
+- 2a7255f phone cards: CSS-only (trade.html), laptop pixel-identical; first card y 1696→1694 (nothing above was prose to fold).
+- 1649e39: Suggested-order "failure" was the test — under "Don't finish last" the guard correctly demoted rows that raise last-place chance; goal cell carries `data-gain`.
+- Plan was wrong about: finding 17 (2-for-1 left short) — the floor already prices an open starting slot at the 3rd-best FA, so filling it changes 0; "best FA" would add +10.9 median (same Ravens D/ST for every deal) and flatter. Built (5c81f32), parked.
+- Not built (need Tim's go): per-player current-week lock (reverses D12), availability discount. Chances still printed to tenths on Schedule/Decisions.
+- Verified: fail-first per builder; tr-test 1288/0 on 1649e39; screenshots 393 + 1440 (cards); live files fetched.
+
 ## Sources
 - ESPN trades: https://support.espn.com/hc/en-us/articles/360000959252-Proposing-and-Accepting-Trade-Offers · review/veto: https://support.espn.com/hc/en-us/articles/360000071412-Trade-Review · columns: https://support.espn.com/hc/en-us/articles/115003862972-Fantasy-Football-Acronyms · 2025 app: https://www.espn.com/fantasy/football/story/_/id/45844949/2025-fantasy-football-where-play-new-features-espn
 - ESPN/IBM Trade Grades: https://newsroom.ibm.com/2024-09-10-ibm-brings-next-generation-of-ai-powered-insights-to-espn-fantasy-football-platform
