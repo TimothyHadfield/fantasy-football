@@ -56,7 +56,7 @@ import {
   zeroKind, byeWeekOf, outMark, playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns, setValueSource,
 } from './player-card.js';
 import { wirePops, hidePop } from './pop.js';
-import { playerHref } from './links.js';
+import { playerHref, tradeManHref } from './links.js';
 import { diffOf, diffClass } from './view-switch.js';
 import { scope } from './prefs.js';
 
@@ -703,7 +703,7 @@ async function mount(host, opts = {}) {
         '<span class="sr-only"> (playoffs)</span></th>';
     }).join('');
     return `<tr>
-       <th class="name" data-sort title="Every player on a roster, and the free agents the Players page lists. Click a name for his row there.">Player</th>
+       <th class="name" data-sort title="Every player on a roster, and the free agents the Players page lists. Click a rostered man’s name for a custom trade with him; a free agent’s for his row there.">Player</th>
        <th class="left" data-sort title="His position.">Pos</th>
        <th class="left" data-sort title="His NFL team.">Tm</th>
        <th class="left" data-sort title="Whose roster he is on this week, by first name.">Owner</th>
@@ -722,7 +722,14 @@ async function mount(host, opts = {}) {
     const tag = status
       ? ` <span class="tag ${status.cls}" title="${esc(status.why)}">${status.tag}</span>`
       : '';
-    const href = playerHref(p.playerId);
+    // A ROSTERED MAN'S NAME GOES TO THE CUSTOM TRADE (Tim, 2026-10-16: "if you
+    // click a players name in the player section or the playoffs section it
+    // automatically brings you to the cusome trade section with the
+    // appropriate user and that specific player selected"): his manager and
+    // him, or him on your side when he is yours (js/links.js `tradeManHref`).
+    // A free agent keeps his link to his row on the Players page.
+    const trade = tradeManHref(p.playerId, r.man.ownerId, myTeamId());
+    const href = trade || playerHref(p.playerId);
     // THE SITE'S PLAYER CARD on his name (Tim, 2026-10-16: "show the regular
     // week by week preview that is shown everywhere else in the cite when you
     // hover over a player in the playoffs section"): js/player-card.js's
@@ -733,10 +740,12 @@ async function mount(host, opts = {}) {
     const tip = tipAttr(registerRun(playerCardFromWeeks(state.held, p, {
       weeks, currentWeek: state.currentWeek, byes: state.byes, demo: state.isDemo,
       playoffWeeks: state.poWeeks, id: `po:${p.playerId}`,
-    }), 'po'));
+    // On a trade link the card is hover-only, so a tap on a phone follows the link.
+    }), 'po'), { hoverOnly: Boolean(trade) });
     // `aria-label`, never `title`, on the link (js/touch-titles.js leaves links alone).
+    const said = trade ? 'open a custom trade with him ticked' : 'open his row on the Players page';
     const link = href
-      ? `<a class="pref" href="${esc(href)}"${tip} aria-label="${esc(p.name)} — open his row on the Players page">${esc(p.name)}</a>`
+      ? `<a class="pref" href="${esc(href)}"${tip} aria-label="${esc(p.name)} — ${said}">${esc(p.name)}</a>`
       : `<span class="pref"${tip} tabindex="0">${esc(p.name)}</span>`;
     return `<td class="name" data-v="${esc(String(p.name || '').toLowerCase())}">${link}${tag}</td>`;
   }

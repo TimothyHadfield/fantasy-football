@@ -144,6 +144,7 @@ async function boot(page, search = '') {
 // ------------------------------------------------------------------- the runs
 
 const HREF = /^waivers\.html\?player=(\d+)$/;
+const TRADE_HREF = /^trade\.html\?(?:with=\d+&get|send)=\d+$/;
 
 async function collect(page) {
   const { document, errors, fetchCalls } = await boot(page);
@@ -221,9 +222,22 @@ for (const page of SOURCES) {
   ok(`${page} made no network call`, got.fetchCalls.length === 0, got.fetchCalls.slice(0, 2).join(' | '));
   ok(`${page} links to players at all`, got.links.length > 0, `${got.links.length} links`);
 
-  const bad = got.links.filter((l) => !HREF.test(l.href));
+  // THE SECOND CONTRACT, the Players page only (Tim, 2026-10-16: "if you click
+  // a players name in the player section ... it automatically brings you to
+  // the cusome trade section with the appropriate user and that specific
+  // player selected"): a ROSTERED man's name is the custom trade —
+  // `trade.html?with=<his team>&get=<him>`, or `trade.html?send=<him>` for yours.
+  const trades = page === 'waivers.html' ? got.links.filter((l) => TRADE_HREF.test(l.href)) : [];
+  const bad = got.links.filter((l) => !HREF.test(l.href) && !trades.includes(l));
   ok(`every ${page} link obeys the href contract`, bad.length === 0,
     bad.slice(0, 3).map((l) => l.href).join(' | '));
+  if (page === 'waivers.html') {
+    ok('waivers.html: other managers’ men link to a trade with that manager, and yours to one with you sending',
+      trades.some((l) => /with=/.test(l.href)) && trades.some((l) => /^trade\.html\?send=/.test(l.href)),
+      `${trades.length} trade links: ${trades.slice(0, 2).map((l) => l.href).join(' | ')}`);
+    ok('waivers.html: and the free agents still link to their rows', got.links.some((l) => HREF.test(l.href)),
+      `${got.links.length} links`);
+  }
 
   // A real anchor, never a handler — that is what makes middle-click work.
   ok(`every ${page} link is a real href`, got.links.every((l) => l.hasHref), 'a .pref with no href');

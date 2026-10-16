@@ -246,10 +246,14 @@ const SCENARIOS = {
       const link = (table, pid) => document.querySelector(`#${table} tbody tr#p${pid} a.pref`);
       // Selecting a man narrows HIS table to his position, so the next man may
       // not be on screen: put that table's own filter back to All first.
+      // A TAKEN man's name opens the custom trade since 2026-10-16, so his
+      // Actual row is reached the other in-page way: a `?player=` link (the
+      // Gain card's "Drop X", a card's button), answered here without a reload.
       const tap = async (table, pid) => {
         fire(document.querySelector(
           `#${table === 'takenTable' ? 'takenPosFilter' : 'posFilter'} button[data-pos="ALL"]`), 'click');
-        clickLeft(window, link(table, pid));
+        if (table === 'takenTable') jumpLink(window, document, pid);
+        else clickLeft(window, link(table, pid));
         await waitFor();
       };
       const played = (arr) => arr.filter((w) => w <= 3).sort((a, b) => a - b);
@@ -301,15 +305,6 @@ const SCENARIOS = {
         });
       }
 
-      // The same name again closes it; the man stays selected.
-      await tap('takenTable', 7101);
-      out.openAfterSecond = actRows();
-      out.rossClosed = rowView(document, 'takenTable', 7101);
-      out.spotAfterSecond = [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player'));
-      // And a third opens it again.
-      await tap('takenTable', 7101);
-      out.openAfterThird = actRows();
-
       await tap('takenTable', 7106);
       out.hale = rowView(document, 'takenTable', 7106);
       out.openAfterHale = actRows();
@@ -323,6 +318,15 @@ const SCENARIOS = {
       out.p07 = rowView(document, 'waiverTable', 5007);
       await tap('waiverTable', 5002);
       out.p02 = rowView(document, 'waiverTable', 5002);
+      // The same name again closes it; the man stays selected (a free agent's
+      // name: a taken man's opens a trade instead).
+      await tap('waiverTable', 5002);
+      out.openAfterSecond = actRows();
+      out.rossClosed = rowView(document, 'waiverTable', 5002);
+      out.spotAfterSecond = [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player'));
+      // And a third opens it again.
+      await tap('waiverTable', 5002);
+      out.openAfterThird = actRows();
 
       out.rosterAfterAll = played(season.calls.rosterWeeks);
       out.wireAfterAll = played(espn.calls.weeks);
@@ -348,21 +352,32 @@ const SCENARIOS = {
   },
 
   // The same row on a phone: no hover there, so the tap is all there ever was.
+  // A free agent's name opens his row; a TAKEN man's name is left to the
+  // browser, which follows it to the custom trade (Tim, 2026-10-16).
   'past-touch': {
-    label: '(h) a tap on a name opens the same row on a phone, and no sheet',
+    label: '(h) a tap on a free agent’s name opens his row on a phone, and no sheet; a taken name is followed',
     stub: true,
     coarse: true,
     env: { WV_PAST: '1' },
     prefs: { 'waivers.source': 'live', 'waivers.span': '3' },
     conn: { leagueId: '99', season: 2026, teamId: 1 },
     after: async ({ document, window, waitFor }) => {
-      clickLeft(window, document.querySelector('#takenTable tbody tr#p7101 a.pref'));
+      const taken = clickLeft(window, document.querySelector('#takenTable tbody tr#p7101 a.pref'));
       await waitFor();
-      const card = document.getElementById('tipCard');
-      globalThis.__past = {
-        ross: rowView(document, 'takenTable', 7101),
+      const card = () => { const c = document.getElementById('tipCard') || document.getElementById('statCard'); return Boolean(c && !c.hidden && !c.hasAttribute('hidden')); };
+      const takenOut = {
+        prevented: taken ? taken.defaultPrevented : null,
+        href: (document.querySelector('#takenTable tbody tr#p7101 a.pref') || { getAttribute: () => null }).getAttribute('href'),
         open: [...document.querySelectorAll('tr.act-row')].map((tr) => tr.getAttribute('data-actual-for')),
-        card: Boolean(card && !card.hidden && !card.hasAttribute('hidden')),
+        card: card(),
+      };
+      clickLeft(window, document.querySelector('#waiverTable tbody tr#p5000 a.pref'));
+      await waitFor();
+      globalThis.__past = {
+        taken: takenOut,
+        ross: rowView(document, 'waiverTable', 5000),
+        open: [...document.querySelectorAll('tr.act-row')].map((tr) => tr.getAttribute('data-actual-for')),
+        card: card(),
         spot: [...document.querySelectorAll('tr.spotlight')].map((tr) => tr.getAttribute('data-player')),
       };
     },
@@ -414,7 +429,8 @@ const SCENARIOS = {
       const takenId = takenTr.getAttribute('data-player');
       const wireId = wireTr.getAttribute('data-player');
       const heads = { taken: headView(document, 'takenTable'), wire: headView(document, 'waiverTable') };
-      clickLeft(window, takenTr.querySelector('a.pref'));
+      // His name opens the custom trade now: the in-page `?player=` link instead.
+      jumpLink(window, document, takenId);
       await waitFor();
       const taken = rowView(document, 'takenTable', takenId);
       clickLeft(window, document.querySelector(`#waiverTable tbody tr#p${wireId} a.pref`));
@@ -432,10 +448,27 @@ const SCENARIOS = {
 
 /** A real tap is a primary-button click; the page's jump handler asks. */
 function clickLeft(window, el) {
-  if (!el) return;
+  if (!el) return null;
   const ev = new window.Event('click', { bubbles: true, cancelable: true });
   Object.defineProperty(ev, 'button', { value: 0 });
   el.dispatchEvent(ev);
+  return ev;
+}
+
+/**
+ * An in-page `?player=` link to one man, clicked: what the Gain card's "Drop X"
+ * and every card's button on this page are, answered by the page's own jump
+ * handler. Since 2026-10-16 the way to a TAKEN man's Actual row on this page,
+ * his name being the custom trade's link.
+ */
+function jumpLink(window, document, pid) {
+  const a = document.createElement('a');
+  a.setAttribute('class', 'pref');
+  a.setAttribute('href', `waivers.html?player=${pid}`);
+  a.textContent = String(pid);
+  document.body.appendChild(a);
+  clickLeft(window, a);
+  a.remove();
 }
 
 const clsOf = (el) => el.getAttribute('class') || '';
@@ -496,6 +529,8 @@ function rowView(document, table, pid) {
     ...read(tr),
     avg: tr.children[avgAt].getAttribute('data-v'),
     expanded: (tr.querySelector('a.pref') || { getAttribute: () => null }).getAttribute('aria-expanded'),
+    href: (tr.querySelector('td.name a.pref') || { getAttribute: () => null }).getAttribute('href'),
+    table,
     act: act && {
       ...read(act),
       for: act.getAttribute('data-actual-for'),
@@ -832,7 +867,15 @@ async function check(scenario, boot) {
       }
       c.ok(`${name}: and nothing under a week still to come`,
         a && a.future.length > 0 && a.future.every((v) => v === ''), J(a && a.future));
-      c.ok(`${name}: his name says the row is open`, got && got.expanded === 'true', String(got && got.expanded));
+      if (got && got.table === 'takenTable') {
+        // A taken man's name opens the custom trade (2026-10-16), so it claims
+        // no open/closed state; it is the trade link, with him in it.
+        c.ok(`${name}: his name is the custom trade’s link, with him in it, and says nothing about the row`,
+          got && got.expanded === null && new RegExp(`^trade\\.html\\?(with=\\d+&get|send)=${name.id}$`).test(got.href || ''),
+          `${got && got.expanded} ${got && got.href}`);
+      } else {
+        c.ok(`${name}: his name says the row is open`, got && got.expanded === 'true', String(got && got.expanded));
+      }
     };
     const named = (label, id) => ({ id, toString: () => label });
 
@@ -906,11 +949,12 @@ async function check(scenario, boot) {
         J((w.sorted || []).map((st) => st.first)));
 
       // ---- click again: closed; again: open ----------------------------------
+      // (Player 02, a free agent: a taken man's name opens a trade since 2026-10-16.)
       c.ok('clicking his name again closes it',
         J(w.openAfterSecond) === '[]' && w.rossClosed && w.rossClosed.act === null &&
         w.rossClosed.expanded === 'false', `${J(w.openAfterSecond)} ${w.rossClosed && w.rossClosed.expanded}`);
-      c.ok('and leaves him selected', J(w.spotAfterSecond) === '["7101"]', J(w.spotAfterSecond));
-      c.ok('a third click opens it again', J(w.openAfterThird) === '["7101"]', J(w.openAfterThird));
+      c.ok('and leaves him selected', J(w.spotAfterSecond) === '["5002"]', J(w.spotAfterSecond));
+      c.ok('a third click opens it again', J(w.openAfterThird) === '["5002"]', J(w.openAfterThird));
 
       // ---- the awkward men ---------------------------------------------------
       const hale = named('Hale Innis (bye in week 2)', 7106);
@@ -953,12 +997,20 @@ async function check(scenario, boot) {
     }
 
     if (scenario === 'past-touch') {
-      const ross = named('tap on Alden Ross', 7101);
-      mainRow(ross, w.ross, LEAD.taken, ['22.0', '22.0', '22.0']);
-      actRow(ross, w.ross, LEAD.taken, ['25.4', '18.2', '30.0']);
-      c.ok('one row, his', J(w.open) === '["7101"]', J(w.open));
+      // A TAKEN name under a finger: nothing on the page catches it, so the
+      // browser follows it — to the custom trade with his manager and him.
+      const t = w.taken || {};
+      c.ok('a tap on a taken man’s name is left to the link (not caught, no row, no sheet)',
+        t.prevented === false && J(t.open) === '[]' && t.card === false, J(t));
+      // Alden Ross is on squad 1, the connected "you": the send form.
+      c.ok('and that link is the custom trade with him ticked on your side (he is yours)',
+        t.href === 'trade.html?send=7101', t.href);
+      const p00 = named('tap on Player 00', 5000);
+      mainRow(p00, w.ross, LEAD.wire, ['20.0', '15.2', '24.0']);
+      actRow(p00, w.ross, LEAD.wire, ['23.0', '17.2', '27.8']);
+      c.ok('one row, his', J(w.open) === '["5000"]', J(w.open));
       c.ok('and no sheet or card opened over the page', w.card === false, String(w.card));
-      c.ok('the tap selected him', J(w.spot) === '["7101"]', J(w.spot));
+      c.ok('the tap selected him', J(w.spot) === '["5000"]', J(w.spot));
     }
 
     if (scenario === 'link-week' || scenario === 'link-week-wire') {
@@ -1189,14 +1241,39 @@ async function check(scenario, boot) {
   const takenLinks = [...d.querySelectorAll('#takenTable tbody a.pref')];
   c.ok('every taken row’s name is a link to that player',
     takenLinks.length === rows.length, `${takenLinks.length} links, ${rows.length} rows`);
-  c.ok('the link is a real href carrying ESPN’s own id, not a click handler',
-    takenLinks.every((a) => /^waivers\.html\?player=\d+$/.test(a.getAttribute('href') || '')),
+  // Since 2026-10-16 (Tim: "if you click a players name in the player section
+  // ... it automatically brings you to the cusome trade section with the
+  // appropriate user and that specific player selected") a taken man's name is
+  // the custom trade: `trade.html?with=<his team>&get=<him>`, or
+  // `trade.html?send=<him>` for one of yours.
+  const TRADE = /^trade\.html\?(?:with=(\d+)&get|send)=(\d+)$/;
+  c.ok('the link is a real href to the custom trade carrying ESPN’s own id, not a click handler',
+    takenLinks.every((a) => TRADE.test(a.getAttribute('href') || '')),
     takenLinks[0] && takenLinks[0].getAttribute('href'));
   c.ok('and the id in the href is the row’s own player',
     takenLinks.every((a) => {
       const tr = a.closest('tr');
-      return a.getAttribute('href') === `waivers.html?player=${tr.getAttribute('data-player')}`;
+      return (TRADE.exec(a.getAttribute('href') || '') || [])[2] === tr.getAttribute('data-player');
     }), takenLinks[0] && takenLinks[0].getAttribute('href'));
+  {
+    // One manager per team id, and "yours" (send) is exactly one manager no `with` names.
+    const ownerOfRow = (a) => { const tr = a.closest('tr'); return rows.find((r) => r.player === tr.getAttribute('data-player')).owner; };
+    const withOwners = new Map();
+    const sendOwners = new Set();
+    for (const a of takenLinks) {
+      const m = TRADE.exec(a.getAttribute('href') || '');
+      if (!m) continue;
+      if (m[1]) {
+        if (!withOwners.has(m[1])) withOwners.set(m[1], new Set());
+        withOwners.get(m[1]).add(ownerOfRow(a));
+      } else sendOwners.add(ownerOfRow(a));
+    }
+    const named = [...withOwners.values()].flatMap((s) => [...s]);
+    c.ok('each `with` names one manager, his own rows’ owner; your own men (send) are one other manager',
+      withOwners.size > 1 && [...withOwners.values()].every((s) => s.size === 1) && sendOwners.size <= 1 &&
+        ![...sendOwners].some((o) => named.includes(o)),
+      JSON.stringify({ with: [...withOwners].map(([k, s]) => [k, [...s]]), send: [...sendOwners] }));
+  }
   c.ok('the wire’s names are links too, by the same contract',
     wireRows.every((tr) => {
       const a = tr.querySelector('td.name a.pref');

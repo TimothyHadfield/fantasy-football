@@ -92,6 +92,15 @@ async function boot(page = 'trade.html', search = '', seed = null, { wide = true
   };
   globalThis.location = window.location;
   if (!window.postMessage) window.postMessage = () => {};
+  // linkedom has no history: a recorder, so the deal-link scenarios can see the
+  // address being tidied (`replaceState`) after a link's deal is put in the box.
+  if (!window.history) {
+    window.history = {
+      state: null,
+      calls: [],
+      replaceState(s, t, u) { this.calls.push(String(u)); },
+    };
+  }
 
   // Seeded BEFORE the page's modules are imported, because connection.js and
   // prefs.js both read storage on first touch — a league written afterwards
@@ -4720,12 +4729,14 @@ SCENARIOS.previews = async function previews() {
   // two of his men and one of yours.
   const opts = qa('#cuTeamB option').map((o) => o.getAttribute('value'));
   const cur = $('cuTeamB').value;
+  // One of the CURRENT manager's men too, for the link that names a man only.
+  const curMan = (qa('#cuListB input[type="checkbox"]')[0] || { getAttribute: () => null }).getAttribute('value');
   const other = opts.find((v) => v !== cur);
   $('cuTeamB').value = other;
   fire($('cuTeamB'), 'change');
   await settle(300);
   const link = {
-    me: Number($('teamSelect').value), cur: Number(cur), b: Number(other),
+    me: Number($('teamSelect').value), cur: Number(cur), b: Number(other), curMan,
     get: qa('#cuListB input[type="checkbox"]').slice(0, 2).map((i) => i.getAttribute('value')),
     send: qa('#cuListA input[type="checkbox"]').slice(1, 2).map((i) => i.getAttribute('value')),
   };
@@ -4755,6 +4766,8 @@ SCENARIOS.dealLink = async function dealLink() {
     gainA: text($('cuGainA')), saved: saved(), savedRows: qa('#cuRows tr[data-cu]').length,
   });
   const opened = read();
+  // The address is tidied once the deal is in the box, so a reload does not tick it again.
+  opened.replaced = (window.history && window.history.calls) ? window.history.calls.slice() : [];
   // A repaint from elsewhere (the week picker) must not lose the link's deal…
   fire($('weekSelect'), 'change');
   await settleGoal(document);
@@ -10626,6 +10639,40 @@ if (!gl.boot) {
       ok('the reader’s own change spends the link: his manager stays chosen through the next repaint',
         dl.afterChange.b === dl.afterChange.want && dl.afterChange.bMen.length === 0, JSON.stringify(dl.afterChange));
       eq(dl.afterChange.saved, JSON.stringify(seeded), 'and still nothing was saved');
+      // Tim, 2026-10-16: a name clicked on the Players or Playoffs page lands
+      // here with him ticked; "reloads don't re-tick", so the address is tidied.
+      ok('the address loses with/get/send once the deal is in the box (a reload does not tick it again)',
+        dl.opened.replaced.length === 1 && !/[?&](with|get|send)=/.test(dl.opened.replaced[0]),
+        JSON.stringify(dl.opened.replaced));
+    }
+
+    // -- one of YOUR men by name: `?send=<id>` alone -----------------------------
+    // (the Players / Playoffs pages' link for a name on your own roster): he is
+    // ticked in your list and the other manager is left as the page had him.
+    const plain = run('dealLink', { env: { TR_LINK: '' } });
+    const mine = run('dealLink', { env: { TR_LINK: `?send=${L.send[0]}` } });
+    ok('the your-man link scenario boots', !mine.boot && !plain.boot, mine.boot || plain.boot);
+    if (!mine.boot && !plain.boot) {
+      ok('no console errors on the your-man link', mine.errors.length === 0, mine.errors.slice(0, 2).join(' | '));
+      eq(mine.opened.a.join(','), String(L.send[0]), 'YOUR MAN BY NAME: he is ticked in your list');
+      eq(mine.opened.b, plain.opened.b, 'and the other manager is the one the page opens on anyway');
+      eq(mine.opened.bMen.length, 0, 'with nobody of his ticked');
+      ok('the address is tidied for this link too',
+        mine.opened.replaced.length === 1 && !/[?&]send=/.test(mine.opened.replaced[0]), JSON.stringify(mine.opened.replaced));
+      eq(plain.opened.replaced.length, 0, 'and a plain visit leaves the address alone');
+    }
+    // A `send` id that is not on your team (the Players page had another team
+    // picked as yours) is his owner's man: that manager, him ticked on his side.
+    // His owner is NOT the manager the page opens on anyway, or this proves nothing.
+    const pick = !plain.boot && plain.opened.b === String(L.b)
+      ? { team: L.cur, man: L.curMan } : { team: L.b, man: L.get[0] };
+    const theirs = run('dealLink', { env: { TR_LINK: `?send=${pick.man}` } });
+    ok('the not-yours send link scenario boots', !theirs.boot, theirs.boot);
+    if (!theirs.boot && !plain.boot) {
+      ok('(his owner is not the default manager)', String(pick.team) !== plain.opened.b, `${pick.team} vs ${plain.opened.b}`);
+      eq(theirs.opened.b, String(pick.team), 'a man you do not hold opens on his owner');
+      eq(theirs.opened.bMen.join(','), String(pick.man), 'with him ticked on his side');
+      eq(theirs.opened.a.length, 0, 'and nobody of yours');
     }
   } catch (e) {
     ok('the previews checks ran to the end without throwing', false, String(e && e.stack).slice(0, 300));
