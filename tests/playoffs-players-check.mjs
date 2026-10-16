@@ -192,7 +192,7 @@ for (const id of poZeroMen) {
   }
 }
 
-// Future: the regular-season weeks left, a 0 week counted.
+// Future: the regular-season weeks left, a 0 week LEFT OUT (Tim, 2026-10-16).
 const futZeroMen = [...rostered].filter((id) => {
   const r = runOf(id, FUTURE);
   return r.all && r.zeros > 0 && r.zeros < FUTURE.length && r1(r.withZeros) !== r1(r.skipZeros);
@@ -200,8 +200,11 @@ const futZeroMen = [...rostered].filter((id) => {
 ok(futZeroMen.length > 0, 'the fixture has a rostered man projected 0 in a regular week left');
 for (const id of futZeroMen.slice(0, 5)) {
   const r = runOf(id, FUTURE);
-  eq(cellText(rowOf(id), col('Future')).replace(/[▲▼]/g, '').trim(), r1(r.withZeros).toFixed(1),
-    `man ${id}: Future = mean of ${FUTURE.length} weeks, the ${r.zeros} zero week(s) counted`);
+  // Tim, 2026-10-16: "only count 0 projections for playoff zeros, not regular
+  // season zeros. This means if a player has a bye week 9, don't count it
+  // against his future proj avg." So Future skips its zero weeks.
+  eq(cellText(rowOf(id), col('Future')).replace(/[▲▼]/g, '').trim(), r1(r.skipZeros).toFixed(1),
+    `man ${id}: Future = mean of his ${FUTURE.length - r.zeros} non-zero weeks, the ${r.zeros} zero week(s) left out`);
 }
 
 // Every row's PO − Avg is its own two printed cells subtracted.

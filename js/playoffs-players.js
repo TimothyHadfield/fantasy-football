@@ -101,14 +101,20 @@ const weekRange = (weeks) => {
  *
  * @param {Array<number|null|undefined>} values one per week of the span
  * @param {Array<boolean>} [byeBlank] per week: a blank that is a known bye
+ * @param {{skipZeros?: boolean}} [opts] FUTURE ONLY (Tim, 2026-10-16: "only
+ *   count 0 projections for playoff zeros, not regular season zeros. This
+ *   means if a player has a bye week 9, don't count it against his future proj
+ *   avg."): every 0 week — bye or ruled out — leaves the divisor.
  * @returns {{mean:number|null, n:number}} mean unrounded; null when no week has a number
  */
-export function spanMean(values, byeBlank = []) {
+export function spanMean(values, byeBlank = [], { skipZeros = false } = {}) {
   let sum = 0;
   let n = 0;
   values.forEach((v, i) => {
-    if (typeof v === 'number' && Number.isFinite(v)) { sum += v; n++; }
-    else if (byeBlank[i]) n++;          // a bye with no number: a 0 week
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      if (skipZeros && v === 0) return;  // Future: a 0 week is left out
+      sum += v; n++;
+    } else if (byeBlank[i] && !skipZeros) n++;   // a bye with no number: a 0 week
   });
   return { mean: n ? sum / n : null, n };
 }
@@ -451,7 +457,7 @@ async function mount(host) {
       const p = man.p;
       const future = state.futureWeeks.map((w) => projOf(id, w));
       const po = state.poWeeks.map((w) => projOf(id, w));
-      const f = spanMean(future, state.futureWeeks.map((w, i) => byeBlank(p, w, future[i])));
+      const f = spanMean(future, state.futureWeeks.map((w, i) => byeBlank(p, w, future[i])), { skipZeros: true });
       const pl = spanMean(po, state.poWeeks.map((w, i) => byeBlank(p, w, po[i])));
       const avg = num(man.seasonAvg);
       // Printed to the tenth, and the difference is of the two printed figures
@@ -578,7 +584,7 @@ async function mount(host) {
 
   function headHtml(weeks) {
     const futTitle = state.futureWeeks.length
-      ? `His average projection over ${weekRange(state.futureWeeks)}, the regular season left. Every week counts — a bye or a ruled-out 0 included.`
+      ? `His average projection over ${weekRange(state.futureWeeks)}, the regular season left. A 0 week — bye or ruled out — is left out.`
       : 'The regular season is over: no weeks left to average.';
     const poTitle = `His average projection over the playoff weeks (${weekRange(weeks)}). Every week counts — a bye or a ruled-out 0 included.`;
     const wk = weeks.map((w, i) => {
@@ -686,12 +692,14 @@ async function mount(host) {
 
   /** Where a mean comes from: each week of its span, and the mean of them. */
   function spanCard(r, weeks, values, mean, n, what) {
+    const skip = what === 'Future';   // its 0 weeks are left out (spanMean)
     const rows = weeks.map((w, i) => {
       const v = values[i];
       if (v === undefined) return { label: `Week ${w}`, note: 'not read, left out', value: null };
       const zero = zeroKind(v, { week: w, byeWeek: byeWeekOf(r.p, state.byes), injuryStatus: statusFor(r.p, w), demo: state.isDemo });
-      if (zero === 'bye') return { label: `Week ${w}`, note: 'bye, counts 0', value: 0 };
+      if (zero === 'bye') return { label: `Week ${w}`, note: skip ? 'bye, left out' : 'bye, counts 0', value: skip ? null : 0 };
       if (v === null) return { label: `Week ${w}`, note: 'no projection, left out', value: null };
+      if (v === 0 && skip) return { label: `Week ${w}`, note: zero === 'out' ? 'ruled out, left out' : '0, left out', value: null };
       if (v === 0) return { label: `Week ${w}`, note: zero === 'out' ? 'ruled out, counts 0' : 'counts 0', value: 0 };
       return { label: `Week ${w}`, value: v };
     });
@@ -765,7 +773,8 @@ async function mount(host) {
       lead('Avg') + 'His season average so far: ESPN’s own figure, the one on his player card.',
       lead('Future and Playoff') + 'His average projection over the regular-season weeks left ' +
         `(${weekRange(state.futureWeeks)}) and over the playoff weeks (${weekRange(state.poWeeks)}). ` +
-        'Every week counts: a bye or a man ruled out is a 0 in the average, not left out. ' +
+        'In Playoff every week counts: a bye or a man ruled out is a 0, not left out. ' +
+        'In Future a 0 week (bye or ruled out) is left out. ' +
         'Only a week with no projection at all is left out. Tap a figure for its weeks.',
       lead('PO − Avg') + 'Playoff minus Avg, as printed: green means projected above his average in the playoffs.',
       lead('PO − Fut') + 'Playoff minus Future, as printed: green means projected higher in the playoffs than in the regular weeks left.',
