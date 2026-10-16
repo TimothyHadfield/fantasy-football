@@ -131,6 +131,7 @@ const SUITES = [
   ['wv-start-check.mjs', 'Players: the Analysis page’s Who to start box above the free agents, for the position picked — the shared renderer’s rows, and nothing asked of ESPN'],
   ['wv-marks-check.mjs', 'Players: Show my players, the diamond / coin by a name and its filter, and the green name for a bye already played'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
+  ['playoffs-players-check.mjs', 'the Playoffs page’s player list: its columns, first-name owners, Future and Playoff as means with every 0 week counted, Playoff − Avg, free agents'],
   ['done-check.mjs', 'the Players page mid-week: a finished game shows the score, plain, in both tables'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],
