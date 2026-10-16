@@ -105,7 +105,7 @@ import { savedConfig, onConnection, coarsePointer } from './connection.js';
 // THE PREVIEWS (Tim, 2026-10-08): every number on this page opens the site's
 // stat card, built when it is asked for — see "the previews" below.
 import { wirePops, hidePop } from './pop.js';
-import { teamHref, playerHref, weekHref } from './links.js';
+import { teamHref, playerHref, weekHref, tradeManHref } from './links.js';
 // The preseason arrows by a name (Tim, 2026-09-30) — see js/proj-trend.js.
 import * as trend from './proj-trend.js';
 import { scope } from './prefs.js';
@@ -3907,8 +3907,15 @@ function rowIdentity(playerId, { addressable = true, cls = '' } = {}) {
  * click it here. On this page the click is intercepted and answered without a
  * reload, because everything needed to answer it is already in the cache.
  */
-function playerLink(p, inner, why, opens = false) {
+function playerLink(p, inner, why, opens = false, href = null) {
   if (p.playerId === null || p.playerId === undefined) return inner;
+  // A ROSTERED MAN'S NAME GOES TO THE CUSTOM TRADE instead (`href`, Tim,
+  // 2026-10-16: "if you click a players name in the player section ... it
+  // automatically brings you to the cusome trade section with the appropriate
+  // user and that specific player selected"; js/links.js `tradeManHref`). A
+  // plain link the jump handler below does not catch, so it navigates — a tap
+  // on a phone too, since a name opens no card under a finger (`nameCard`).
+  if (href) return `<a class="pref" href="${esc(href)}" aria-label="${why}">${inner}</a>`;
   // `aria-label`, not `title`: a title on a link is the one thing HANDOFF's
   // touch rule forbids — js/touch-titles.js leaves links alone, so the words
   // could never be read on a phone, and the W and injury tags beside the name
@@ -4177,13 +4184,15 @@ function mineRow(row, weeks, avgScales, weekScales) {
   const cols = weekScales.get(p.position) || [];
   const why =
     `${esc(p.name)} — on your roster, not on the wire. Your lowest-averaging ` +
-    `${esc(p.position)} over ${weekRange(weeks)}, of the ${depth} you hold there.`;
+    `${esc(p.position)} over ${weekRange(weeks)}, of the ${depth} you hold there. ` +
+    'Open a custom trade with him ticked';
 
   const heat = heatOf(row.shownAvg, avgScales.get(p.position));
+  const me = myTeamId();
 
   return `<tr${rowIdentity(p.playerId, { addressable: false, cls: 'mine' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">` +
-        nameLine(playerLink(p, nameHtml(p), why), trendMark(p, true) + outlookMark(p, false),
+        nameLine(playerLink(p, nameHtml(p), why, false, tradeManHref(p.playerId, me, me)), trendMark(p, true) + outlookMark(p, false),
           injuryTag(availability(p.injuryStatus)),
           // The label opens your men at that position (`mineCard`), keyboard included.
           `<span class="mine-tag" tabindex="0">${esc(label)}</span> `) +
@@ -4329,7 +4338,7 @@ function renderTakenHead(weeks) {
 
   $('takenTable').querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort title="A player already on a roster; click a name for the rest of his season and his actual scores.">Player</th>
+       <th class="name" data-sort title="A player already on a roster; click a name for a custom trade with him.">Player</th>
        <th class="left" data-sort title="His position, and his rank at it on his own manager’s roster by Avg — best is 1.">Pos</th>
        <th class="left" data-sort title="His NFL team.">Tm</th>
        <th class="left" data-sort title="The manager whose roster he is on, as of the earliest week shown.">Owner</th>
@@ -4362,8 +4371,9 @@ function takenRow(row, weeks, avgScales, weekScales) {
 
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
-        playerLink(p, nameHtml(p), `${esc(p.name)} — on ${esc(owner)}’s roster. Jump to ` +
-          `his row, show every remaining week and his actual scores`, true), trendMark(p, true) + outlookMark(p, false),
+        playerLink(p, nameHtml(p), `${esc(p.name)} — on ${esc(owner)}’s roster. Open a ` +
+          'custom trade with him ticked', false, tradeManHref(p.playerId, row.ownerId, myTeamId())),
+        trendMark(p, true) + outlookMark(p, false),
         injuryTag(status))}</td>
       <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" data-c="pos"${tradeHrefFor(row) ? ' data-go' : ''}>${
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>

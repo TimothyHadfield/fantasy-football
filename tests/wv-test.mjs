@@ -223,12 +223,26 @@ function glanceOf(document, tableId, pid) {
 }
 
 function tapName(document, window, tableId, pid) {
-  const link = document.querySelector(`#${tableId} tbody tr#p${pid} a.pref`);
+  let link = document.querySelector(`#${tableId} tbody tr#p${pid} a.pref`);
   if (!link) return false;
+  // A TAKEN man's name is the custom trade's link since 2026-10-16; his row is
+  // opened the page's other in-page way, a `?player=` link (a card's button).
+  if (!/[?&]player=/.test(link.getAttribute('href') || '')) link = inPageLink(document, pid);
   const ev = new window.Event('click', { bubbles: true, cancelable: true });
   Object.defineProperty(ev, 'button', { value: 0 });
   link.dispatchEvent(ev);
+  if (link.hasAttribute('data-in-page')) link.remove();
   return true;
+}
+
+/** A `?player=` link to one man, outside the tables (what a card's button is). */
+function inPageLink(document, pid) {
+  const a = document.createElement('a');
+  a.setAttribute('class', 'pref');
+  a.setAttribute('href', `waivers.html?player=${pid}`);
+  a.setAttribute('data-in-page', '');
+  document.body.appendChild(a);
+  return a;
 }
 
 /**
@@ -1689,9 +1703,13 @@ async function check(scenario, boot) {
       // found again with that table's filter back on All.
       const open = (tableId, filterId, pid) => {
         press(d.querySelector(`#${filterId} button[data-pos="ALL"]`));
-        const link = d.querySelector(`#${tableId} tbody tr#p${pid} a.pref`);
+        let link = d.querySelector(`#${tableId} tbody tr#p${pid} a.pref`);
         if (!link) return { text: '', under: false, acts: [], wk4: '', pid: Number(pid) };
+        // A taken man's name opens the custom trade (2026-10-16): his row by
+        // the in-page `?player=` link instead.
+        if (!/[?&]player=/.test(link.getAttribute('href') || '')) link = inPageLink(d, pid);
         tap(link);
+        if (link.hasAttribute('data-in-page')) link.remove();
         const row = d.querySelector(`#${tableId} tbody tr#p${pid}`);
         const act = row && row.nextElementSibling;
         const isAct = Boolean(act && /\bact-row\b/.test(act.getAttribute('class') || ''));

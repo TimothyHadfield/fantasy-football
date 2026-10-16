@@ -265,8 +265,39 @@ eq(table.querySelectorAll('tbody tr[data-player]').length, rows.length, 'All bri
 }
 
 // ---------------------------------------------------------------- the name, the cost
-const link = rowOf(poZeroMen[0]).querySelector('td.name a.pref');
-ok(link && /^waivers\.html\?player=\d+$/.test(link.getAttribute('href')), 'a name links to his row on the Players page');
+// Tim, 2026-10-16: "make it so if you click a players name in the player
+// section or the playoffs section it automatically brings you to the cusome
+// trade section with the appropriate user and that specific player selected."
+// Another manager's man → `trade.html?with=<his team>&get=<him>`; one of yours
+// (the sample league's first squad is yours) → `trade.html?send=<him>`; a free
+// agent keeps his link to his row on the Players page. Expected hrefs are built
+// here from the generator's own rosters, never through the module.
+{
+  const me = String(anchorTeams[0].id);
+  const idsShown = rows.map((tr) => tr.getAttribute('data-player'));
+  const owner = (id) => { const t = ownerOf.get(Number(id)) || ownerOf.get(id); return t ? String(t.id) : null; };
+  const theirs = idsShown.filter((id) => owner(id) !== null && owner(id) !== me);
+  const mine = idsShown.filter((id) => owner(id) === me);
+  const free = idsShown.filter((id) => owner(id) === null);
+  ok(theirs.length > 5 && mine.length > 0 && free.length > 0, 'the list has other managers’ men, yours and free agents',
+    `${theirs.length}/${mine.length}/${free.length}`);
+  const hrefOf = (id) => { const a = rowOf(id).querySelector('td.name a.pref'); return a ? a.getAttribute('href') : null; };
+  const badTheirs = theirs.filter((id) => hrefOf(id) !== `trade.html?with=${owner(id)}&get=${id}`);
+  ok(badTheirs.length === 0, 'ANOTHER MANAGER’S MAN: his name opens the custom trade with that manager and him ticked',
+    badTheirs.slice(0, 3).map((id) => `${id} → ${hrefOf(id)} (owner ${owner(id)})`).join(' | '));
+  const badMine = mine.filter((id) => hrefOf(id) !== `trade.html?send=${id}`);
+  ok(badMine.length === 0, 'YOUR MAN: his name opens the custom trade with him ticked on your side',
+    badMine.slice(0, 3).map((id) => `${id} → ${hrefOf(id)}`).join(' | '));
+  const badFree = free.filter((id) => !/^waivers\.html\?player=\d+$/.test(hrefOf(id) || '') || hrefOf(id) !== `waivers.html?player=${id}`);
+  ok(badFree.length === 0, 'a free agent’s name still links to his row on the Players page',
+    badFree.slice(0, 3).map((id) => `${id} → ${hrefOf(id)}`).join(' | '));
+  // A tap on a phone must FOLLOW the link (a real <a>), so the card on an
+  // owned man's name is hover-only; a free agent's keeps today's tap card.
+  const hoverOnly = (id) => { const a = rowOf(id).querySelector('td.name a.pref'); return Boolean(a && a.hasAttribute('data-tip-hover')); };
+  ok([...theirs, ...mine].every(hoverOnly), 'an owned man’s card is hover-only, so a tap on his name goes to the trade',
+    [...theirs, ...mine].filter((id) => !hoverOnly(id)).slice(0, 3).join(','));
+  ok(free.every((id) => !hoverOnly(id)), 'a free agent’s name keeps its tap card', free.filter(hoverOnly).slice(0, 3).join(','));
+}
 // Tim, 2026-10-16: "show the regular week by week preview that is shown
 // everywhere else in the cite when you hover over a player in the playoffs
 // section." The site's player card (js/player-card.js), on a hover of his name.

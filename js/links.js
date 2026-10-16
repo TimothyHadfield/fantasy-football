@@ -21,6 +21,8 @@
 //                               the Players page, filtered to that position
 //   dealHref({with, get, send}) trade.html?with=7&get=11,12&send=13
 //                               the Trade page's custom builder on that deal
+//   tradeManHref(id, owner, me) trade.html?with=7&get=11 | trade.html?send=13
+//                               a rostered man's name: the builder, him ticked
 //   espnLineupHref({...})       ESPN's own lineup screen for a team and week
 //                               (the one link here that leaves the site)
 //
@@ -77,6 +79,21 @@ export function dealHref({ with: partner, get = [], send = [] } = {}) {
   const g = ids(get);
   const s = ids(send);
   return `trade.html?with=${enc(partner)}${g ? `&get=${g}` : ''}${s ? `&send=${s}` : ''}`;
+}
+
+/**
+ * A rostered man's NAME → the Trade page's custom builder with him ticked
+ * (Tim, 2026-10-16: "if you click a players name in the player section or the
+ * playoffs section it automatically brings you to the cusome trade section with
+ * the appropriate user and that specific player selected"). Another manager's
+ * man: `trade.html?with=<his team>&get=<him>`. One of yours: `trade.html?send=<him>`
+ * — ticked on your side, the other manager left as the Trade page has him.
+ * null for a free agent (no owner) or a man with no id: his name keeps its link.
+ */
+export function tradeManHref(playerId, ownerId, myTeamId = null) {
+  if (!has(playerId) || !has(ownerId)) return null;
+  if (has(myTeamId) && String(ownerId) === String(myTeamId)) return `trade.html?send=${enc(playerId)}`;
+  return dealHref({ with: ownerId, get: [playerId] });
 }
 
 /**

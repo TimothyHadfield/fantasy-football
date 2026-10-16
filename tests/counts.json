@@ -147,11 +147,11 @@
       "scenarios": 4
     },
     "taken-check.mjs": {
-      "assertions": 444,
+      "assertions": 448,
       "scenarios": 12
     },
     "link-check.mjs": {
-      "assertions": 135
+      "assertions": 137
     },
     "an-test.mjs": {
       "assertions": 2679,
@@ -355,7 +355,7 @@
       "scenarios": 8
     },
     "playoffs-players-check.mjs": {
-      "assertions": 173
+      "assertions": 178
     }
   }
 }

@@ -12009,36 +12009,96 @@ function syncHeadTitles(root = document) {
 // drawn until the reader changes something himself (a tick, the manager, Clear,
 // Save, the team picker), because the first draw is the sample league and the
 // real rosters arrive after it; from his first change on, the link is spent.
+//
+// `trade.html?send=<playerId>` ALONE (2026-10-16, Tim: "if you click a players
+// name in the player section or the playoffs section it automatically brings
+// you to the cusome trade section with the appropriate user and that specific
+// player selected"): the link a name on YOUR roster makes (js/links.js
+// `tradeManHref`). He is ticked in your list and the other manager is left as
+// the page has him. If your team here does not hold him (the Players page had
+// another squad picked as yours), he is his owner's man: that manager, him
+// ticked on his side.
+//
+// Once a link's deal is in the box the address loses with/get/send
+// (`tidyDealLink`, history.replaceState), so a reload does not tick it again;
+// the deal itself stays in memory until the reader's first change, as above.
 const dealLink = (() => {
   const ids = (name) => (readParam(name) || '').split(',').map((s) => s.trim()).filter(Boolean);
   const partner = readParam('with');
-  return { active: partner !== null, partner, get: ids('get'), send: ids('send'), shown: false };
+  const send = ids('send');
+  return {
+    active: partner !== null || send.length > 0, partner, get: ids('get'), send,
+    shown: false, applied: false, tidied: false,
+  };
 })();
 
 function applyDealLink() {
+  dealLink.applied = false;
   if (!dealLink.active) return;
   const teams = customTeams();
-  const b = teams.find((t) => String(t.id) === dealLink.partner);
-  if (!b || b.id === state.custom.a) return;
   const a = teamById(state.custom.a);
-  const on = (team, list) => {
-    const have = new Set(((team && team.players) || []).map((p) => String(p.playerId)));
-    return list.filter((id) => have.has(id));
-  };
+  const holds = (team, id) => ((team && team.players) || []).some((p) => String(p.playerId) === id);
+  const on = (team, list) => list.filter((id) => holds(team, id));
+  let { partner, get, send } = dealLink;
+  if (partner === null) {
+    const mine = on(a, send);
+    if (mine.length) {
+      state.custom.sendA = mine;
+      dealLink.applied = true;
+      tidyDealLink();
+      return;
+    }
+    const owner = teams.find((t) => t.id !== state.custom.a && send.some((id) => holds(t, id)));
+    if (!owner) return;
+    partner = String(owner.id);
+    get = send;
+    send = [];
+  }
+  const b = teams.find((t) => String(t.id) === partner);
+  if (!b || b.id === state.custom.a) return;
   state.custom.b = b.id;
-  state.custom.sendB = on(b, dealLink.get);
-  state.custom.sendA = on(a, dealLink.send);
+  state.custom.sendB = on(b, get);
+  state.custom.sendA = on(a, send);
+  dealLink.applied = true;
+  tidyDealLink();
+}
+
+/** The address without with/get/send, once — every other parameter kept. */
+function tidyDealLink() {
+  if (dealLink.tidied) return;
+  dealLink.tidied = true;
+  try {
+    const h = typeof window !== 'undefined' ? window.history : null;
+    const loc = typeof window !== 'undefined' ? window.location : null;
+    if (!h || typeof h.replaceState !== 'function' || !loc) return;
+    const q = new URLSearchParams(loc.search || '');
+    for (const k of ['with', 'get', 'send']) q.delete(k);
+    const s = q.toString();
+    h.replaceState(h.state ?? null, '', `${loc.pathname || ''}${s ? `?${s}` : ''}${loc.hash || ''}`);
+  } catch { /* an address that cannot be rewritten is only untidy */ }
 }
 
 /** Bring the builder into view, once, when a link's deal is first on screen. */
 function showDealLink() {
   if (!dealLink.active || dealLink.shown || state.isDemo) return;
-  if (String(state.custom.b) !== dealLink.partner) return;
+  if (!dealLink.applied) return;
   dealLink.shown = true;
   const panel = $('customPanel');
   if (panel && typeof panel.scrollIntoView === 'function') {
     try { panel.scrollIntoView({ block: 'start' }); } catch { /* no layout */ }
   }
+  // The man a name link ticked: if he is below the screen with the box at its
+  // top (a phone — the lists sit under the pickers), bring HIM to the middle.
+  try {
+    const ids = [...state.custom.sendB, ...state.custom.sendA].map(String);
+    const box = ids.length && document.querySelector(
+      `#cuListB input[value="${CSS.escape(ids[0])}"], #cuListA input[value="${CSS.escape(ids[0])}"]`);
+    const row = box && (box.closest('label') || box);
+    if (row && typeof row.getBoundingClientRect === 'function' && typeof window.innerHeight === 'number') {
+      const r = row.getBoundingClientRect();
+      if (r.bottom > window.innerHeight || r.top < 0) row.scrollIntoView({ block: 'center' });
+    }
+  } catch { /* no layout */ }
 }
 
 const spendDealLink = () => { dealLink.active = false; };
