@@ -140,7 +140,7 @@
       "scenarios": 9
     },
     "wv-marks-check.mjs": {
-      "assertions": 62,
+      "assertions": 74,
       "scenarios": 4
     },
     "taken-check.mjs": {

@@ -13,6 +13,9 @@
 //    the trade section by the player's name."
 //   "and when you're in the players section allow to sort between coin and
 //    diamond players aswell or neither"
+// Tim, 2026-10-16:
+//   "add a show my players switch in the taken players box that is synced to
+//    the available players switch"  (off = your own squad out of Taken too)
 //
 // The mark is js/outlook-mark.js's rule, the Trade page's: projected 2 or more
 // a week above (diamond) or below (coin) his season average. The stub
@@ -182,7 +185,15 @@ function snap(d) {
   const sw = d.getElementById('showMine');
   return {
     wire: wire.map((tr) => ({ id: tr.getAttribute('data-player'), mine: /\bmine\b/.test(cls(tr)), mark: markOf(tr) })),
-    taken: taken.map((tr) => ({ id: tr.getAttribute('data-player'), mark: markOf(tr) })),
+    taken: taken.map((tr) => ({
+      id: tr.getAttribute('data-player'), mark: markOf(tr),
+      // The stub's squads hold ids team * 100 + i, so your men are ME * 100 + i.
+      mine: Math.floor(Number(tr.getAttribute('data-player')) / 100) === ME,
+      owner: tr.querySelector('td.owner')?.textContent.trim() || '',
+    })),
+    takenSwitchExists: Boolean(d.getElementById('takenShowMine')),
+    takenSwitchOn: Boolean(d.getElementById('takenShowMine')?.checked),
+    takenCount: d.querySelector('#takenStats .stat .v')?.textContent.trim() || '',
     box: !isHidden(d.getElementById('startBox')),
     boxRows: d.querySelectorAll('#startersTable tbody tr').length,
     switchExists: Boolean(sw),
@@ -209,8 +220,8 @@ async function click(d, w, sel) {
   return true;
 }
 
-async function flip(d, w, on) {
-  const el = d.getElementById('showMine');
+async function flip(d, w, on, id = 'showMine') {
+  const el = d.getElementById(id);
   if (!el) return false;
   el.checked = on;
   el.dispatchEvent(new w.Event('change', { bubbles: true }));
@@ -340,11 +351,59 @@ async function check(scenario, { document: d, window: w, errors, rejections, sto
     c.ok('ON AGAIN: the box and your row are back, exactly as before',
       on.box && on.boxRows === s.boxRows && on.wire.length === s.wire.length && on.wire.some((r) => r.mine), JSON.stringify(on.wire.length));
     c.ok('ON AGAIN: remembered', prefsOf(store)['waivers.showMine'] === true, JSON.stringify(prefsOf(store)));
+
+    // THE TAKEN BOX'S OWN SWITCH (Tim, 2026-10-16: "add a show my players
+    // switch in the taken players box that is synced to the available players
+    // switch"). One setting: either switch flips both, and both lists follow.
+    const tsw = d.getElementById('takenShowMine');
+    const tlabel = tsw && tsw.closest('label.switch');
+    c.ok('TAKEN SWITCH: a role=switch checkbox in a label.switch on the Taken box\'s heading line',
+      Boolean(tsw && tsw.getAttribute('role') === 'switch' && tlabel && tsw.closest('#takenPanel .panel-head')),
+      'missing or not on #takenPanel .panel-head');
+    c.ok('TAKEN SWITCH: it says "Show my players", and is on',
+      Boolean(tlabel && tlabel.textContent.replace(/\s+/g, ' ').trim() === 'Show my players' && s.takenSwitchOn),
+      tlabel ? tlabel.textContent : 'none');
+    const theirs = s.taken.filter((r) => !r.mine);
+    c.ok('on: the Taken table holds your men and everyone else\'s', s.taken.some((r) => r.mine) && theirs.length > 0,
+      `${s.taken.filter((r) => r.mine).length} mine of ${s.taken.length}`);
+    const takenOthers = () => rowsOf(d, 'takenTable')
+      .filter((tr) => Math.floor(Number(tr.getAttribute('data-player')) / 100) !== ME).map((tr) => tr.outerHTML).sort();
+    const others0 = takenOthers();
+    await flip(d, w, false, 'takenShowMine');
+    const toff = snap(d);
+    c.ok('TAKEN OFF: none of your men in the Taken table, everyone else still there',
+      toff.taken.length === theirs.length && !toff.taken.some((r) => r.mine),
+      `${toff.taken.length} vs ${theirs.length}; mine left: ${toff.taken.filter((r) => r.mine).length}`);
+    c.ok('TAKEN OFF: every other row is exactly what it was (no number moves)',
+      others0.length > 0 && takenOthers().join('\n') === others0.join('\n'), `${takenOthers().length} vs ${others0.length}`);
+    c.ok('TAKEN OFF: the Taken count tile follows the rows', toff.takenCount === String(theirs.length),
+      `${toff.takenCount} vs ${theirs.length}`);
+    c.ok('TAKEN OFF: the Available switch follows, and so does that list and the box',
+      !toff.switchOn && !toff.box && !toff.wire.some((r) => r.mine), JSON.stringify([toff.switchOn, toff.box]));
+    c.ok('TAKEN OFF: remembered as the one setting', prefsOf(store)['waivers.showMine'] === false, JSON.stringify(prefsOf(store)));
+    await flip(d, w, true, 'showMine');
+    const ton = snap(d);
+    c.ok('AVAILABLE ON: the Taken switch follows, and your men are back in the Taken table',
+      ton.takenSwitchOn && ton.taken.length === s.taken.length && ton.taken.some((r) => r.mine),
+      JSON.stringify([ton.takenSwitchOn, ton.taken.length, s.taken.length]));
+    await flip(d, w, false, 'showMine');
+    const aoff = snap(d);
+    c.ok('AVAILABLE OFF: the Taken switch goes off and your men leave the Taken table too',
+      !aoff.takenSwitchOn && aoff.taken.length === theirs.length && !aoff.taken.some((r) => r.mine),
+      JSON.stringify([aoff.takenSwitchOn, aoff.taken.length]));
+    await flip(d, w, true, 'takenShowMine');
+    const back2 = snap(d);
+    c.ok('TAKEN ON: everything is back as it started',
+      back2.switchOn && back2.takenSwitchOn && back2.box && back2.wire.length === s.wire.length &&
+      back2.taken.length === s.taken.length, JSON.stringify([back2.switchOn, back2.takenSwitchOn, back2.taken.length]));
   }
 
   if (scenario === 'offSaved') {
     c.ok('the switch comes back off', s.switchExists && !s.switchOn, 'on');
     c.ok('so no box and no rows of yours', !s.box && !s.wire.some((r) => r.mine), JSON.stringify([s.box, s.wire.length]));
+    c.ok('the Taken box\'s switch comes back off too, and none of your men is in that table',
+      s.takenSwitchExists && !s.takenSwitchOn && s.taken.length > 0 && !s.taken.some((r) => r.mine),
+      JSON.stringify([s.takenSwitchExists, s.takenSwitchOn, s.taken.filter((r) => r.mine).length]));
     c.ok('the filter comes back on Coins, and the list is only coins',
       s.markOn === 'coin' && s.wire.length > 0 && s.wire.every((r) => r.mark === 'coin'),
       JSON.stringify([s.markOn, s.wire.slice(0, 4)]));

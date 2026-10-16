@@ -3364,7 +3364,7 @@ function render() {
     $(box).hidden = state.isDemo;
     syncSegmented(id, 'mark', state.mark);
   }
-  if ($('showMine')) $('showMine').checked = state.showMine;
+  for (const id of ['showMine', 'takenShowMine']) if ($(id)) $(id).checked = state.showMine;
 
   $('modeBadge').className = 'badge ' + (state.isDemo ? 'demo' : 'live');
   $('modeBadge').textContent = state.isDemo ? 'Demo' : 'Live';
@@ -4376,13 +4376,24 @@ function takenRow(row, weeks, avgScales, weekScales) {
     </tr>${actualRowIf(p, weeks, false, 4)}`;
 }
 
+/**
+ * "Show my players" off leaves your own squad out of the Taken table (Tim,
+ * 2026-10-16: the Taken box's switch, "synced to the available players
+ * switch"). Rows only: the colour scales are still built over everyone.
+ */
+function takenMineOk(r) {
+  if (state.showMine) return true;
+  const me = myTeamId();
+  return me === null || me === undefined || String(r.ownerId) !== String(me);
+}
+
 function renderTaken(weeks) {
   const table = $('takenTable');
   const tbody = table.querySelector('tbody');
   renderTakenHead(weeks);
 
   const all = withShown(buildTakenRows(weeks), weeks);
-  const shown = all.filter((r) => matchesTaken(r) && matchesMark(r.p, false));
+  const shown = all.filter((r) => matchesTaken(r) && matchesMark(r.p, false) && takenMineOk(r));
   const cols = pastWeeks(weeks).length + weeks.length + 5;
 
   // Built from `all`, never from `shown`: this table's own position buttons
@@ -4479,7 +4490,7 @@ function takenEmptyReason(totalPlayers) {
 
 function renderTakenStats(weeks) {
   const el = $('takenStats');
-  const rows = withShown(buildTakenRows(weeks), weeks).filter(matchesTaken);
+  const rows = withShown(buildTakenRows(weeks), weeks).filter((r) => matchesTaken(r) && takenMineOk(r));
 
   if (!rows.length) {
     el.innerHTML = '';
@@ -5044,8 +5055,11 @@ onMarkClick('markFilter');
 onMarkClick('takenMarkFilter');
 
 // "Show my players": a repaint, remembered. Nothing is bought or re-priced.
-if ($('showMine')) {
-  $('showMine').addEventListener('change', (e) => {
+// One setting, two switches (Tim, 2026-10-16: the Taken box has its own,
+// "synced to the available players switch"): render() sets both.
+for (const id of ['showMine', 'takenShowMine']) {
+  if (!$(id)) continue;
+  $(id).addEventListener('change', (e) => {
     state.showMine = Boolean(e.target.checked);
     prefs.set('showMine', state.showMine);
     render();

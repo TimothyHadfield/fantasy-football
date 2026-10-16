@@ -794,7 +794,16 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
        tables are priced over the same weeks: one choice, shown at both ends of
        a long page, never two choices that could disagree. -->
   <section class="panel" id="takenPanel">
-    <h2>Taken players</h2>
+    <!-- The same "Show my players" setting as the panel above (Tim,
+         2026-10-16): off leaves your own squad out of this table too. -->
+    <div class="panel-head">
+      <h2>Taken players</h2>
+      <label class="switch" for="takenShowMine">
+        <input type="checkbox" role="switch" id="takenShowMine" checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-text">Show my players</span>
+      </label>
+    </div>
     <p class="lede">Everyone already on a roster, who holds him, and his projected points each week.</p>
 
     <div class="toolbar">
