@@ -949,6 +949,9 @@
   /* Not `.cu-sug`: that was the removed "also send" mark, and tr-test checks it stays gone. */
   .cu-suggested { margin-top: 6px; }
   .cu-suggested .sbw-title { margin-top: 4px; }
+  /* The heading and its Playoffs switch on one line (2026-10-16). */
+  .cu-sug-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 4px 0 6px; }
+  .cu-sug-head .sbw-title { margin: 0; }
   .cu-suggested-wait { margin: 6px 0 0; font-size: 12.5px; color: var(--dim); }
 
   /* A saved deal built from a squad that is not the one selected today. Quiet,
@@ -2067,7 +2070,17 @@
          `complete`) and drawn by its own row builder. Hidden while nothing is
          ticked; its height is held while ticks change (`renderCustomSuggest`). -->
     <div class="cu-suggested" id="cuSug" hidden>
-      <h3 class="sbw-title">Suggested</h3>
+      <!-- Tim, 2026-10-16: "make a switch in the suggested trade section that
+           targets trades that increase proj for the playoffs". Off is the list
+           as it was; hidden when no playoff week is left. Wording is Tim's. -->
+      <div class="cu-sug-head">
+        <h3 class="sbw-title">Suggested</h3>
+        <label class="switch" for="sugPlayoffs" id="sugPlayoffsWrap" hidden>
+          <input type="checkbox" role="switch" id="sugPlayoffs">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span class="switch-text">Playoffs</span>
+        </label>
+      </div>
       <div class="table-scroll"><table id="cuSugTable" class="offers">
         <thead><tr>
           <th class="name">With</th>
