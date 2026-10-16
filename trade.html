@@ -1003,17 +1003,31 @@
      big, the rest-of-season total small underneath — Tim's display rule, and
      the same order every other figure on this page follows. The sign is always
      printed, so the colour is a second cue and never the only one. */
+  /* A FIXED HEIGHT, the same on both sides (Tim, 2026-10-16: the lists were
+     "moving up and down when you select players … keep it still so it doesn't
+     move at all … always lined up with the other user's players"). Measured:
+     his side's "Yes:" line appeared with the first tick and wrapped to two
+     lines, pushing his roster 17–34px below yours. The box now holds the big
+     figure, the small line and two lines of "Yes:" from the start, top-aligned,
+     so a tick fills space that was already there. */
   .cu-gain {
     margin: 0 0 8px;
-    min-height: 44px;
+    height: 80px;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 1px;
   }
+  .cu-gain .cu-yes {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden; line-height: 16px;
+  }
   /* WHO THIS SIDE MUST DROP, AND WHAT IT MUST ADD (Tim, 2026-10-12), at the top
-     of its column. One line is reserved so ticking a man moves nothing. */
-  .cu-moves { margin: 0 0 8px; min-height: 17px; font-size: 12px; line-height: 17px; color: var(--cu-sub); }
+     of its column. Exactly one line, so ticking a man moves nothing; a list too
+     long for it ends in "…" and the whole of it is on the line's title. */
+  .cu-moves { margin: 0 0 8px; height: 17px; font-size: 12px; line-height: 17px; color: var(--cu-sub);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cu-moves .cu-move { margin-right: 10px; }
   .cu-moves .cu-move.drop b { color: var(--err); }
   .cu-moves .cu-move.add b { color: var(--text); }
@@ -1034,7 +1048,7 @@
   /* The side's change in total Value, on that small line: the same green and
      red as the big figure over it, and its sign always printed. */
   .cu-gain .cu-val { font-weight: 600; white-space: nowrap; }
-  .cu-top { margin: 0 0 6px; min-height: 22px; text-align: center; font-size: 13px; color: var(--cu-sub); font-variant-numeric: tabular-nums; }
+  .cu-top { margin: 0 0 6px; height: 22px; line-height: 22px; text-align: center; font-size: 13px; color: var(--cu-sub); font-variant-numeric: tabular-nums; }
   .cu-top b { font-size: 16px; font-weight: 700; margin-left: 4px; color: var(--text); }
   .cu-top b.up { color: var(--accent); }
   .cu-top b.down { color: var(--err); }

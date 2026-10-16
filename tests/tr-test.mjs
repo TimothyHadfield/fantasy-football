@@ -3937,6 +3937,51 @@ SCENARIOS.customSuggest = async function customSuggest() {
   };
 };
 
+/**
+ * WHO NO SUGGESTION HANDS OVER (Tim, 2026-10-16): live stub league with
+ * Values (FF_VALUE). One of his men ticked, then one of yours; reads the
+ * Suggested rows each time, the finder's rows, and which men on the two
+ * rosters are a kicker or D/ST or worth under 1.
+ */
+SCENARIOS.suggestSkip = async function suggestSkip() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live', 'trade.team': 1 }),
+  };
+  const { document, window, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const rowsOf = () => [...document.querySelectorAll('#cuListA .cu-man[data-man], #cuListB .cu-man[data-man]')];
+  const kd = rowsOf().filter((r) => /^(K|D\/ST|DST)$/.test(text(r.querySelector('.pos')).trim())).map((r) => String(r.getAttribute('data-man')));
+  // Men worth under 1, by the Values the page was handed.
+  let low = [];
+  try {
+    low = Object.entries(JSON.parse(process.env.FF_VALUE).players).filter(([, p]) => p.value < 1).map(([id]) => String(id));
+  } catch { low = []; }
+  const max = scaledBudget(30000, machineFactor());
+  const waitList = async () => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < max) {
+      const h = $('cuSug');
+      if (!h || h.hidden || h.getAttribute('data-rows')) break;
+      await settle(50);
+    }
+    await settle(50);
+    return readOfferRows($('cuSugTable')).map((r) => ({ send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)) }));
+  };
+  const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
+  const pick = (id) => boxes(id).find((b) => !kd.includes(String(b.value)) && !low.includes(String(b.value)));
+  const his = pick('cuListB');
+  his.checked = true; fire(his, 'change');
+  const one = await waitList();
+  const mine = pick('cuListA');
+  mine.checked = true; fire(mine, 'change');
+  const two = await waitList();
+  const finder = $('tradeTable') ? readOfferRows($('tradeTable')).map((r) => ({ send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)) })) : [];
+  return { errors, kd, low, ticked: [String(his.value), String(mine.value)], rows: [...one, ...two], finder };
+};
+
 /** A reload with an assumed trade stored (`TR_ASSUMED` = the prefs to seed). */
 SCENARIOS.assumeReload = async function assumeReload() {
   const seed = { 'ff.prefs': process.env.TR_ASSUMED || '{}' };
@@ -9524,6 +9569,24 @@ if (!bm.boot) {
   // and so a Total (without one the Total range can never be met).
   const ch = run('customHint', { stub: true, env: {
     FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players }), TR_PAST_TRADES, TR_SEASON_AVG: '1' } });
+  // WHO NO SUGGESTION HANDS OVER (Tim, 2026-10-16): "stop suggesting to trade
+  // K and DEF in the suggested trades list", "don't suggest to trade with any
+  // player who has a value under 1". A man he ticked himself is his choice.
+  // Two men a list would otherwise hand over (seen on 2026-10-16: 110 and 209
+  // were in its rows) are made worth 0.5.
+  const lowPlayers = JSON.parse(JSON.stringify(players));
+  for (const id of [stub.playerId(1, 10), stub.playerId(2, 9)]) if (lowPlayers[id]) lowPlayers[id].value = 0.5;
+  const sk = run('suggestSkip', { stub: true, env: {
+    FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players: lowPlayers }), TR_SEASON_AVG: '1' } });
+  ok('SKIP: the scenario boots', !sk.boot, sk.boot);
+  if (!sk.boot) {
+    const shut = (id) => (sk.kd.includes(id) || sk.low.includes(id)) && !sk.ticked.includes(id);
+    const bad = (rows) => rows.filter((r) => [...r.send, ...r.receive].some(shut)).map((r) => `${r.send.join('+')} for ${r.receive.join('+')}`);
+    ok('SKIP: no console errors', sk.errors.length === 0, sk.errors.slice(0, 2).join(' | '));
+    ok('SKIP: the rosters have kickers, D/STs and men worth under 1 to leave out', sk.kd.length >= 2 && sk.low.length >= 1, `K/DST ${sk.kd.length}, low ${sk.low.length}`);
+    ok('SKIP: Suggested hands over none of them', sk.rows.length >= 3 && bad(sk.rows).length === 0, `${sk.rows.length} rows; ` + bad(sk.rows).join(' | '));
+    ok('SKIP: nor does the finder', sk.finder.length > 0 && bad(sk.finder).length === 0, `${sk.finder.length} rows; ` + bad(sk.finder).slice(0, 3).join(' | '));
+  }
   ok('the custom-hint scenario boots', !ch.boot, ch.boot);
   if (!ch.boot) {
     ok('HINT: no console errors', ch.errors.length === 0, ch.errors.slice(0, 2).join(' | '));

@@ -2311,6 +2311,28 @@ function outForSeasonIds() {
 }
 
 /**
+ * MEN NO SUGGESTION HANDS OVER, in the finder and the Suggested list: `ids`
+ * plus every kicker and D/ST (Tim, 2026-10-16: "stop suggesting to trade K and
+ * DEF in the suggested trades list") and every man whose Value is under 1
+ * (same day: "don't suggest to trade with any player who has a value under
+ * 1"). A man with no Value yet is not judged. A man the reader ticked himself
+ * is still his choice (js/trade.js `skip`).
+ */
+function notToSuggest(ids) {
+  const out = new Set(ids);
+  const valued = typeof valueLookup === 'function';
+  for (const t of (state.data ? state.data.teams : [])) {
+    for (const p of (t.players || [])) {
+      const v = valued ? valueLookup(p.playerId) : null;
+      if (p.position === 'K' || p.position === 'DST' || (typeof v === 'number' && Number.isFinite(v) && v < 1)) {
+        out.add(String(p.playerId));
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * THE WEEKS YOU PLAY HIM. Tim, 2026-09-21: "add a little arrow pointing to the
  * week that the user is playing you in the preview … In a trade with nick … it
  * will show an arrow on week 4 when I play him."
@@ -5314,7 +5336,7 @@ function runSearch({ keepDeal = false } = {}) {
       theirMinPerWeek: W && !state.bothWin ? THEIR_MIN_PER_WEEK : null,
       // One row per trade, never its near-copies (`dropVariants`).
       distinct: true,
-      skip: weeks ? outForSeasonIds() : null,
+      skip: weeks ? notToSuggest(outForSeasonIds()) : null,
       limit: FINDER_ROWS * 4,
       // KEPT BY EXPECTED VALUE, not by your gain alone: weighted gain × the
       // chance he says yes — the same product the final ranking uses. Without
@@ -9877,8 +9899,7 @@ function renderCustomPreviewAt(priced) {
     $('cuGainA').innerHTML = CU_BLANK;
     $('cuGainB').innerHTML = CU_BLANK;
     $('cuTop').innerHTML = '';
-    $('cuMovesA').innerHTML = '';
-    $('cuMovesB').innerHTML = '';
+    for (const id of ['cuMovesA', 'cuMovesB']) { $(id).innerHTML = ''; $(id).removeAttribute('title'); }
     $('cuSave').disabled = true;
     $('cuOpen').disabled = true;
   };
@@ -9913,6 +9934,8 @@ function renderCustomPreviewAt(priced) {
   // repaint that did not change who moves costs nothing.
   $('cuMovesA').innerHTML = customMovesHtml(priced.teamA, priced.forA);
   $('cuMovesB').innerHTML = customMovesHtml(priced.teamB, priced.forB);
+  // One line only (trade.html): the whole list on the title, for one cut short.
+  for (const id of ['cuMovesA', 'cuMovesB']) $(id).title = $(id).textContent;
   const s = basis() === 'weeks'
     ? scoreGoalCached(customOffer(state.custom, priced), state.custom.a, priced.weeks)
     : null;
@@ -10148,7 +10171,9 @@ function findSuggestions() {
       : null,
     theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
     meetWeeks: meetWeeksOf(c.a),
-    skip: outForSeasonIds(),
+    // No kicker, D/ST or man worth under 1 is ADDED to a suggestion
+    // (`notToSuggest`); one he ticked himself stays.
+    skip: notToSuggest(outForSeasonIds()),
     partnerId: c.b,
     mustSend: c.sendA,
     mustReceive: c.sendB,

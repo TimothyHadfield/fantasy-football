@@ -611,10 +611,16 @@ if (!process.argv[2]) {
     const rP = rowsOf(P.finder);
     const r0 = new Set(rowsOf(none.first.finder));
     const both = rP.filter((r) => r0.has(r)).length;
-    ok('lines, on Proj: the finder rows are the rows with no lines, less any over a Value gap of 5',
-      rP.length >= 5 && both >= Math.ceil(rP.length * 0.6), `${both} of ${rP.length} rows on both`);
+    // REWRITTEN 2026-10-16 (Tim: "don't suggest to trade with any player who
+    // has a value under 1"; and no K or D/ST): this fixture's squads are thin,
+    // and with lines most of their men are worth under 1, so the finder keeps
+    // a row or two and the overlap with the no-lines list says nothing. What
+    // is held now: there are rows, and none hands over a man worth under 1.
+    const lowIn = (P.finderValue || []).filter((r) => [...r.send, ...r.get].some((id) => players[id] && players[id].value < 1));
+    ok('lines, on Proj: the finder still has rows, and none hands over a man worth under 1',
+      rP.length >= 1 && (P.finderValue || []).length >= 1 && lowIn.length === 0, `${both} of ${rP.length} rows on both; ${JSON.stringify(lowIn.slice(0, 2))}`);
     const over = (P.finderValue || []).filter((r) => Number.isFinite(r.v) && Math.abs(r.v) > 5);
-    ok('lines: no finder row has a Value change over 5 either way', (P.finderValue || []).length > 3 && over.length === 0,
+    ok('lines: no finder row has a Value change over 5 either way', (P.finderValue || []).length >= 1 && over.length === 0,
       JSON.stringify(over.slice(0, 2)));
   }
   ok('lines: the tucked note says what Value is',
@@ -806,19 +812,19 @@ if (!process.argv[2]) {
     // no Him half"; on the split page of that morning `cls` was "split value",
     // `halves` 4 and `labels` You,Him, so the first, second and fourth fail.
     ok('row Value, no lines: every row has the one cell, a dash with no number behind it, no colour and no halves',
-      rows0.length > 3 && rows0.every((r) => r.cells === 1 && r.cls === 'value val-change' && r.v === null && r.txt === '—' &&
+      rows0.length >= 1 && rows0.every((r) => r.cells === 1 && r.cls === 'value val-change' && r.v === null && r.txt === '—' &&
         r.sign === '' && r.halves === 0 && r.labels.length === 0),
       JSON.stringify(rows0.slice(0, 2)));
     ok('row Value, lines: every row has the one cell, a whole `td.value.val-change` and not a split one',
-      rowsP.length > 3 && rowsP.every((r) => r.cells === 1 && r.cls === 'value val-change'),
+      rowsP.length >= 1 && rowsP.every((r) => r.cells === 1 && r.cls === 'value val-change'),
       JSON.stringify(rowsP.slice(0, 2)));
     const sumOf = (ids) => ids.reduce((t, id) => t + ((players[id] && Number.isFinite(players[id].value)) ? players[id].value : 0), 0);
     const off = rowsP.filter((r) => r.v !== r1(sumOf(r.get) - sumOf(r.send)));
     ok('row Value, lines: the figure is YOURS — the Value of the men you get less the men you give, by hand from the fixture — and the cell sorts by it',
-      rowsP.length > 3 && off.length === 0 && rowsP.some((r) => r.v !== 0),
+      rowsP.length >= 1 && off.length === 0 && rowsP.some((r) => r.v !== 0),
       JSON.stringify(off.slice(0, 2).map((r) => [r.send, r.get, r.v, r1(sumOf(r.get) - sumOf(r.send))])));
     ok('row Value, lines: there is no Him half — no "You"/"Him" label, no halves, and one number in the cell',
-      rowsP.length > 3 && rowsP.every((r) => r.halves === 0 && r.labels.length === 0 && /^[+−]?\d+\.\d$/.test(r.txt)),
+      rowsP.length >= 1 && rowsP.every((r) => r.halves === 0 && r.labels.length === 0 && /^[+−]?\d+\.\d$/.test(r.txt)),
       JSON.stringify(rowsP.slice(0, 3).map((r) => [r.txt, r.halves, r.labels])));
     ok('row Value, lines: it prints its number to the tenth with its sign, and is coloured by that sign',
       rowsP.every((r) => r.txt === (r1(r.v) === 0 ? r.txt : sgn(r.v)) && r.sign === (r.v > 0 ? 'pos' : r.v < 0 ? 'neg' : '')),
