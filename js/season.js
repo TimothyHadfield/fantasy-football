@@ -688,6 +688,15 @@ export function forgetCloud() {
  * this page was handed more than six hours ago. For a live league only — the
  * caller never asks on the synced copy.
  */
+/** Every man's projection in a week, as one string to compare. */
+function projectionsOf(teams) {
+  const out = [];
+  for (const t of teams || []) {
+    for (const p of (t && t.players) || []) out.push(`${p.playerId}:${p.done === true ? p.pregame : p.projected}`);
+  }
+  return out.sort().join('|');
+}
+
 export async function recheck() {
   const cfg = storable();
   if (!cfg) return false;
@@ -707,6 +716,13 @@ export async function recheck() {
       const due = !held || (!held.final && held.ageMs > LIVE_FRESH_MS);
       await checkCurrent();
       if (due && weekInPlay(cur)) changed = true;
+      // ESPN MOVED A PROJECTION and nobody changed teams (Tim, 2026-10-16: ESPN
+      // said 18.3, an open Trade page still said 16.8). The week was just read
+      // again; if its numbers differ from the ones this page was handed, load.
+      if (due && held && !held.final) {
+        const now2 = store.peekWeek(cfg.leagueId, cfg.season, cur);
+        if (now2 && now2.at !== held.at && projectionsOf(now2.teams) !== projectionsOf(held.teams)) changed = true;
+      }
     }
     if (changed) {
       espn.clearReadCache();

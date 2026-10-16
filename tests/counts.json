@@ -51,7 +51,7 @@
       "scenarios": 12
     },
     "test-store.mjs": {
-      "assertions": 171
+      "assertions": 175
     },
     "nav-check.mjs": {
       "assertions": 225

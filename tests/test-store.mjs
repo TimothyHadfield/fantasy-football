@@ -608,6 +608,31 @@ const SCENARIOS = {
     eq(ownerOf(got.get(7)), 2, 'and still shows the trade');
   },
 
+  // ---- an open tab: ESPN changes a PROJECTION, nobody moves ---------------
+  // Tim, 2026-10-16: ESPN said Cousins 18.3 and an open Trade page still said
+  // 16.8. The tab's look-again (`recheck`) re-read the week but only reloaded
+  // for a roster move — a projection-only change never reached the page.
+  async recheckProjection() {
+    const { storage, espn, season } = await boot();
+    installFetch(TRADE_SEASON);
+    await season.fetchSchedule();
+    await season.fetchWeeksRosters([4, 5, 6, 7]);
+
+    // Six minutes on, the same projections: nothing to load again.
+    ageEverything(storage, 6 * MINUTE);
+    espn.clearReadCache();
+    let calls = installFetch(TRADE_SEASON);
+    eq(await season.recheck(), false, 'the same numbers: the page stays as it is');
+    eq(weeksAsked(calls), [5], 'after looking at the current week once');
+
+    // Six minutes on again, and ESPN has moved the projections.
+    ageEverything(storage, 6 * MINUTE);
+    espn.clearReadCache();
+    calls = installFetch({ ...TRADE_SEASON, bump: 3 });
+    eq(await season.recheck(), true, 'a changed projection in the current week loads the page again');
+    eq(weeksAsked(calls), [5], 'for the one request');
+  },
+
   // ---- a man goes OUT: the weeks ahead are read again (audit finding 11) ----
   async goesOut() {
     const { storage, espn, season, store } = await boot();
