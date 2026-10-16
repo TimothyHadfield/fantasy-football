@@ -20,7 +20,10 @@
 //   receivers to spare; Ana is the other way round. Two holes rather than one
 //   is what lets two DISJOINT Ana/Cy deals both be worth making, which is what
 //   puts a merged row — two trades with one manager, shown as one offer — on
-//   the page at all.
+//   the page at all. Since Tim's rule (2026-10-16, "stop suggesting to trade K
+//   and DEF") the finder never hands a defence over, so the defence hole fills
+//   nothing any more; `TR_SPARE_QB` (see `specOf`) builds the second hole at
+//   quarterback instead, for the merged-row checks.
 //
 //   Di is filler: a balanced squad with a junk bench, so the league is four
 //   teams rather than two.
@@ -41,11 +44,15 @@
 //   span except week 8, where ESPN returns 0.00. Nine weeks are priced, so his
 //   per-week figure must be 88 / 8 = 11.0 — not 88 / 9 = 9.8. Hand-computable,
 //   and far enough apart that a page still dividing by the whole span cannot
-//   round into agreement.
+//   round into agreement. The finder no longer offers a D/ST (Tim, 2026-10-16),
+//   so where a check needs the bye on a FINDER row, `TR_BYE_MAN=110` puts the
+//   same week-8 zero on `Ana TE2` (see `specOf`).
 //
-//   A D/ST WORTH TRADING. Ana carries TWO defences: she starts the 12 and the
-//   11 sits on her bench, and Cy is on a 2. That is what puts a defence into a
-//   rendered package at all, so the "no position tag on a D/ST" rule has
+//   A D/ST WORTH TRADING — once. Ana carries TWO defences: she starts the 12
+//   and the 11 sits on her bench, and Cy is on a 2. That used to put a defence
+//   into the finder's packages; since Tim's rule it no longer does, and the
+//   tests assert it is absent there. Defences are still drawn (the custom box,
+//   the scalar basis), so the "no position tag on a D/ST" rule still has
 //   something to be tested against — and they are named the way ESPN names
 //   them (`"<Franchise> D/ST"`, per docs/espn-draft-api.md), which is the whole
 //   reason the tag is redundant.
@@ -186,7 +193,7 @@ export function rosterIds(teamId) {
 /** What the stub says ESPN projects for one man in one week. */
 export function projectionFor(teamId, i, week) {
   const team = TEAMS.find((t) => t.id === teamId);
-  return team ? team.players[i].week(week) : null;
+  return team ? specOf(team, i).week(week) : null;
 }
 
 /**
@@ -231,20 +238,25 @@ function injuredAs(id) {
 /**
  * THE PRESEASON ARROWS (Tim, 2026-09-29), off unless `TR_TREND` is set.
  *
- * Five stub men take a real ESPN id from the committed preseason copy
+ * Six stub men take a real ESPN id from the committed preseason copy
  * (data/baselines/2026-preseason.json) and keep their stub names and flat
  * projections. The league is half PPR (`fetchSchedule` below), so by hand
  * (tests/test-proj-trend.mjs) the preseason per week and the arrow are:
  *   105 Ana TE1      → Tyler Warren  9.9, flat 12 = +2.1  green ▲ (the edge)
  *   107 Ravens D/ST  → Ravens D/ST   7.0, flat 12 = +5.0  green ▲
+ *   110 Ana TE2      → a real TE     7.0, flat 11 = +4.0  green ▲ (119.54 / 17 games)
  *   108 Ana K        → Wil Lutz      8.0, flat 7  = −1.0  none
  *   309 Cy RB3       → Jahmyr Gibbs 19.7, flat 15 = −4.7  red ▼
  *   303 Cy WR1       → Puka Nacua   17.2, flat 16 = −1.2  none
  * Every other man keeps a stub id the copy has never heard of: no arrow.
+ * 110 is the one on the finder's rows: since Tim's no-K-or-D/ST rule
+ * (2026-10-16) the Ravens D/ST is drawn only in the custom box, so the arrow,
+ * the bye pill and the injury underline are checked together on `Ana TE2`.
  */
 export const TREND_IDS = {
   105: { id: 4431459, want: 'up' },
   107: { id: -16033, want: 'up' },
+  110: { id: 4036133, want: 'up' },
   108: { id: 2985659, want: null },
   309: { id: 4429795, want: 'down' },
   303: { id: 4426515, want: null },
@@ -351,8 +363,42 @@ function poSpike(id, week) {
   return null;
 }
 
+/**
+ * NO KICKER OR D/ST IN A SUGGESTION (Tim, 2026-10-16: "stop suggesting to
+ * trade K and DEF in the suggested trades list"). The finder no longer hands
+ * `Bills D/ST` over, so the marks that used to be checked on him in a finder row
+ * are checked on a man the rule allows. Two knobs, both off unless set, both
+ * read when a roster is built (so a test can price the same league itself):
+ *
+ *   TR_BYE_MAN=110   that man (a stub id) projects ESPN's 0.00 in BYE_WEEK and
+ *                    his usual number in every other week. `Ana TE2` (110) is
+ *                    the man the finder sends to Cy on every row, so the bye
+ *                    arithmetic (11 a week, 0.00 in week 8: 99 / 9 = 11.0, not
+ *                    99 / 10) is checked on a finder row again.
+ *   TR_SPARE_QB=1    the second hole, for the merged row. Cy used to be thin at
+ *                    defence and Ana's spare D/ST filled it, which is what made
+ *                    two DISJOINT Ana/Cy deals both worth making. With that deal
+ *                    gone the same shape is built at quarterback: Ana's slot 12
+ *                    is `Ana QB3` (15 a week, on her bench — she already starts a
+ *                    19 every week), and `Cy QB1` projects 2, so Cy starts his
+ *                    6-point backup. Unset, slot 12 is `Bills D/ST` as before.
+ */
+function specOf(team, i) {
+  const spec = team.players[i];
+  const env = typeof process !== 'undefined' && process.env ? process.env : {};
+  if (env.TR_SPARE_QB) {
+    if (team.id === 1 && i === 12) return P('Ana QB3', 'QB', SLOT.BE, flat(15), 15);
+    if (team.id === 3 && i === 0) return P('Cy QB1', 'QB', SLOT.QB, flat(2), 2);
+  }
+  const off = Number(env.TR_BYE_MAN);
+  if (off && playerId(team.id, i) === off) {
+    return { ...spec, week: (w) => (w === BYE_WEEK ? 0 : spec.week(w)) };
+  }
+  return spec;
+}
+
 function playersFor(team, week) {
-  return team.players.map((spec, i) => ({
+  return team.players.map((_, i) => specOf(team, i)).map((spec, i) => ({
     playerId: pickupApplies(team, i, week) ? PICKUP.added : trendId(playerId(team.id, i)),
     name: pickupApplies(team, i, week) ? PICKUP.name : spec.name,
     position: spec.position,

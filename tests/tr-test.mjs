@@ -2852,9 +2852,13 @@ SCENARIOS.weekPeekNarrow = async function weekPeekNarrow() {
 /**
  * The bye rule on the Trade page (2026-09-16): a 0.00 is a bye only in his NFL
  * team's bye week. Same stub league, with TR_BYES saying where team 1's bye
- * really is; reads `Bills D/ST` (id 112, 0.00 in week 8) wherever he is drawn.
+ * really is; reads the man with the week-8 zero wherever he is drawn — the one
+ * `TR_BYE_MAN` names (`Ana TE2`, 110, on the finder's rows), or `Bills D/ST`
+ * (112) without it. `finderIds` is every man on a finder row, so a test can
+ * see that no D/ST is handed over there (Tim, 2026-10-16).
  */
 SCENARIOS.liveByes = async function liveByes() {
+  const BYE_MAN = Number(process.env.TR_BYE_MAN) || 112;
   const seed = {
     'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
     'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
@@ -2866,15 +2870,17 @@ SCENARIOS.liveByes = async function liveByes() {
   const rows = [...document.querySelectorAll('#tradeTable tbody tr')];
   const idx = readTrades(document).findIndex((t) => t.partner === 'Cy');
   if (idx >= 0) await openRowDeal(document, rows[idx], 1500);
+  const finderIds = [...document.querySelectorAll('#tradeTable tbody tr .man')]
+    .map(readMan).map((m) => m.id).filter((id) => id !== null);
   const men = [...document.querySelectorAll('.man')].map(readMan);
-  const bills = men.find((m) => m.id === 112) || null;
+  const man = men.find((m) => m.id === BYE_MAN) || null;
   const probe = [...document.querySelectorAll('.man')].find((m) => {
     const a = m.querySelector('a.pref');
-    return a && /player=112$/.test(a.getAttribute('href'));
+    return a && new RegExp(`player=${BYE_MAN}$`).test(a.getAttribute('href'));
   });
   if (probe) probe.setAttribute('data-probe', '1');
   const card = probe ? openCard(document, '.man[data-probe="1"]') : null;
-  return { errors, bills, card };
+  return { errors, man, card, finderIds, men };
 };
 
 /**
@@ -7414,33 +7420,44 @@ if (!live.boot) {
 
   // ---- ask 3: the per-week figure ignores the bye, hand-computed ----------
   //
-  // `Bills D/ST` is Ana's spare defence: 11 a week, and 0.00 in week 8 because
-  // his NFL team is off. Nine weeks are priced and one of them is a bye, so the
-  // arithmetic is 88 / 8 and not 88 / 9. Both are written out here rather than
-  // imported, because a test that took the divisor from the code it is testing
-  // would agree with any divisor.
-  const BILLS = 112;   // team 1, roster slot 12 — see tr-stub-season.mjs
-  const run112 = unplayed.map((w) => L.stub.projectionFor(1, 12, w));
-  const byeCount = run112.filter((v) => v === 0).length;
-  const total112 = run112.reduce((a, v) => a + v, 0);
-  const perPlayed = total112 / (unplayed.length - byeCount);
-  const perSpan = total112 / unplayed.length;
+  // The man with the bye is `Ana TE2` — the man the finder sends to Cy on
+  // every row — with `TR_BYE_MAN=110` putting ESPN's 0.00 on him in week 8
+  // (tr-stub-season.mjs `specOf`): 11 a week otherwise. Ten weeks are priced
+  // and one of them is a bye, so the arithmetic is 99 / 9 and not 99 / 10. Both
+  // are written out here rather than imported, because a test that took the
+  // divisor from the code it is testing would agree with any divisor. (It used
+  // to be `Bills D/ST`, Ana's spare defence; since Tim's rule of 2026-10-16 —
+  // "stop suggesting to trade K and DEF" — the finder never shows him.)
+  const BYE_MAN = 110;   // team 1, roster slot 10 — see tr-stub-season.mjs
+  const BILLS = 112;     // team 1, roster slot 12: the D/ST that carried it before
+  const runBye = unplayed.map((w) => (w === L.stub.BYE_WEEK ? 0 : L.stub.projectionFor(1, 10, w)));
+  const byeCount = runBye.filter((v) => v === 0).length;
+  const totalBye = runBye.reduce((a, v) => a + v, 0);
+  const perPlayed = totalBye / (unplayed.length - byeCount);
+  const perSpan = totalBye / unplayed.length;
 
   eq(byeCount, 1, 'the fixture really does put a bye inside the priced span');
   ok('and the two readings of it are far enough apart to tell apart',
     Math.abs(perPlayed - perSpan) > 0.5,
     `${perPlayed.toFixed(1)} vs ${perSpan.toFixed(1)}`);
 
-  const bills = live.men.find((m) => m.id === BILLS);
-  ok('the man with the bye is on screen', !!bills,
-    live.men.map((m) => m.id).join(','));
-  if (bills) {
-    eq(bills.val, `${perPlayed.toFixed(1)}/wk`,
-      `his per-week figure is ${total112} over ${unplayed.length - byeCount} weeks he PLAYS`);
+  const byeRun = run('liveByes', { stub: true, env: { TR_BYE_MAN: String(BYE_MAN) } });
+  const byeMan = byeRun.man && (byeRun.finderIds || []).includes(BYE_MAN) ? byeRun.man : null;
+  ok('the man with the bye is on screen', !!byeMan,
+    byeRun.boot || (byeRun.finderIds || []).join(','));
+  if (byeMan) {
+    eq(byeMan.val, `${perPlayed.toFixed(1)}/wk`,
+      `his per-week figure is ${totalBye} over ${unplayed.length - byeCount} weeks he PLAYS`);
     ok('and it is not the average that counts the bye as a week',
-      bills.val !== `${perSpan.toFixed(1)}/wk`,
-      `${bills.val} is ${total112}/${unplayed.length}, which counts his bye`);
+      byeMan.val !== `${perSpan.toFixed(1)}/wk`,
+      `${byeMan.val} is ${totalBye}/${unplayed.length}, which counts his bye`);
   }
+  // Tim's rule, on this same run and on the plain one: the spare D/ST is never
+  // handed over by a finder row.
+  ok('and the spare D/ST that used to carry the bye is on no finder row (no K or D/ST is suggested)',
+    !(byeRun.finderIds || [BILLS]).includes(BILLS) &&
+    !live.after.trades.some((t) => [...t.send, ...t.receive].some((m) => m.id === BILLS)),
+    (byeRun.finderIds || []).join(','));
 
   // ---- ask 4: no position label on a defence, and still one on a QB -------
 
@@ -7471,9 +7488,24 @@ if (!live.boot) {
   //
   // On the whole finder the combo now takes the 2-for-2 (Cy's 104+110 for
   // 301+303) as ONE deal, so nothing needs merging there. Narrowed to 1-for-2
-  // deals the same stub still packs two Cy deals, which is what these checks
-  // are about — the merge itself, not which kind of deal wins.
-  const lm = run('live', { stub: true, env: { TR_KIND: 'depth' } });
+  // deals the stub packs two Cy deals, which is what these checks are about —
+  // the merge itself, not which kind of deal wins.
+  //
+  // The second deal used to be Ana's spare D/ST into Cy's defence hole. Tim's
+  // rule (2026-10-16: "stop suggesting to trade K and DEF") takes that deal off
+  // the finder, so `TR_SPARE_QB` builds the same shape at quarterback: Ana's
+  // bench `Ana QB3` (15) into Cy's hole (his QB1 projects 2). Everything priced
+  // here by hand uses that same league (`LM`).
+  const SPARE = { TR_SPARE_QB: '1' };
+  const lm = run('live', { stub: true, env: { TR_KIND: 'depth', ...SPARE } });
+  const withSpare = async (fn) => {
+    const was = process.env.TR_SPARE_QB;
+    process.env.TR_SPARE_QB = SPARE.TR_SPARE_QB;
+    try { return await fn(); } finally {
+      if (was === undefined) delete process.env.TR_SPARE_QB; else process.env.TR_SPARE_QB = was;
+    }
+  };
+  const LM = await withSpare(() => stubLeague());
   ok('the narrowed live scenario boots', !lm.boot, lm.boot);
   ok('and it really is narrowed to 1-for-2 deals',
     (lm.after.combo.rows || []).every((r) => r.receive.length > r.send.length),
@@ -7485,6 +7517,10 @@ if (!live.boot) {
   ok('two deals with one manager are shown as ONE offer',
     !!merged, JSON.stringify(lm.after.combo.rows.map((r) => [r.partner, r.merged])));
   if (merged) {
+    const posIn = (m) => (LM.byId.get(m.id) || {}).position;
+    ok('and neither of its deals hands over a kicker or a D/ST (Tim, 2026-10-16)',
+      [...merged.send, ...merged.receive].every((m) => posIn(m) && posIn(m) !== 'K' && posIn(m) !== 'DST'),
+      JSON.stringify([...merged.send, ...merged.receive].map((m) => [m.id, posIn(m)])));
     ok('and the row says so, because a four-player trade is a different conversation',
       /deals? as one/.test(merged.mergedText), merged.mergedText);
 
@@ -7524,20 +7560,25 @@ if (!live.boot) {
     // these deals must show what BOTH of them together do to him — the
     // engine's `entry.partners` figure — not one of the two. Re-derived here
     // from his own roster rather than read back off the page.
-    const partner = L.teams.find((t) => t.id === 3);
-    const hisSide = priceTradeAcrossWeeks({
+    const partner = LM.teams.find((t) => t.id === 3);
+    const hisSide = await withSpare(() => priceTradeAcrossWeeks({
       players: partner.players,
-      send: incoming.map((id) => L.byId.get(id)).filter(Boolean),
-      receive: merged.send.map((m) => L.byId.get(m.id)).filter(Boolean),
-      slots: L.slots, weeks: unplayed, projFor: L.projFor, zeroIsBye: true,
-    });
+      send: incoming.map((id) => LM.byId.get(id)).filter(Boolean),
+      receive: merged.send.map((m) => LM.byId.get(m.id)).filter(Boolean),
+      slots: LM.slots, weeks: unplayed, projFor: LM.projFor, zeroIsBye: true,
+    }));
     ok('the manager’s own gain on the row is HIS COMBINED side, priced once',
       Math.abs(hisSide.delta - merged.theirGain) <= 0.2,
       `page ${merged.theirGain}, a fresh priceTradeAcrossWeeks ${hisSide.delta}`);
 
     // The whole-packing figure the headline leads with still re-prices, which
     // is the number that replaced the column.
-    const re = priceOver(unplayed, merged.send.map((m) => m.id), incoming);
+    const re = await withSpare(() => priceTradeAcrossWeeks({
+      players: LM.teams.find((t) => t.id === 1).players,
+      send: merged.send.map((m) => LM.byId.get(m.id) || m.id),
+      receive: incoming.map((id) => LM.byId.get(id)).filter(Boolean),
+      slots: LM.slots, weeks: unplayed, projFor: LM.projFor, zeroIsBye: true,
+    }));
     ok('and the merged move itself still prices as one roster change',
       Number.isFinite(re.delta), String(re.delta));
   }
@@ -7593,8 +7634,10 @@ if (!live.boot) {
 // exactly what HANDOFF's rule 4 describes, so it is REPLACED rather than
 // relaxed — and replaced with the stronger claim, that the two runs now agree.
 //
-// Bills D/ST: 11 a week over weeks 5–14, 0.00 in week 8. Either way the figure
-// is 99 / 9 = 11.0, by hand and not from the code.
+// `Ana TE2` with TR_BYE_MAN=110: 11 a week over weeks 5–14, 0.00 in week 8.
+// Either way the figure is 99 / 9 = 11.0, by hand and not from the code. (This
+// was `Bills D/ST` until Tim's 2026-10-16 rule took D/STs off the finder; the
+// man must be on a finder row, so it is the TE the finder sends to Cy.)
 //
 // WHAT THE BYE STILL DECIDES IS WHAT IS DRAWN. Rule 2 is untouched: a 0.00 in
 // his team's bye week renders "Bye" and a 0.00 anywhere else renders "0.0",
@@ -7607,15 +7650,26 @@ if (!live.boot) {
   for (let w = 5; w <= 14; w++) span.push(w);
   const total = span.reduce((a, w) => a + (w === 8 ? 0 : 11), 0);
   const scoring = span.length - 1;   // every zero leaves the divisor now, bye or not
-  const byeRight = run('liveByes', { stub: true, env: { TR_BYES: '{"1":8}' } });
-  const byeElsewhere = run('liveByes', { stub: true, env: { TR_BYES: '{"1":9}' } });
+  const { TEAMS: STUB_TEAMS } = await import('./tr-stub-season.mjs');
+  const byeRight = run('liveByes', { stub: true, env: { TR_BYES: '{"1":8}', TR_BYE_MAN: '110' } });
+  const byeElsewhere = run('liveByes', { stub: true, env: { TR_BYES: '{"1":9}', TR_BYE_MAN: '110' } });
   ok('both bye runs boot', !byeRight.boot && !byeElsewhere.boot, byeRight.boot || byeElsewhere.boot);
-  ok('and draw Bills D/ST', !!(byeRight.bills && byeElsewhere.bills),
-    JSON.stringify([byeRight.bills, byeElsewhere.bills]));
-  if (byeRight.bills && byeElsewhere.bills) {
-    eq(byeRight.bills.val, `${(total / scoring).toFixed(1)}/wk`,
+  const onFinder = (r) => (r.man && (r.finderIds || []).includes(110) ? r.man : null);
+  ok('and draw Ana TE2 on a finder row', !!(onFinder(byeRight) && onFinder(byeElsewhere)),
+    JSON.stringify([byeRight.man, byeElsewhere.man, byeRight.finderIds]));
+  ok('and no D/ST on any finder row in either run (Tim: no K or D/ST is suggested)',
+    [byeRight, byeElsewhere].every((r) => (r.finderIds || []).length > 0 &&
+      r.finderIds.every((id) => {
+        const p = STUB_TEAMS.find((t) => t.id === Math.floor(id / 100));
+        const pos = p && p.players[id % 100] ? p.players[id % 100].position : null;
+        return pos !== 'DST' && pos !== 'K';
+      })),
+    JSON.stringify([byeRight.finderIds, byeElsewhere.finderIds]));
+  const te2 = { right: onFinder(byeRight), elsewhere: onFinder(byeElsewhere) };
+  if (te2.right && te2.elsewhere) {
+    eq(te2.right.val, `${(total / scoring).toFixed(1)}/wk`,
       'week 8 IS his bye: a week with no points is out of the per-week divisor');
-    eq(byeElsewhere.bills.val, `${(total / scoring).toFixed(1)}/wk`,
+    eq(te2.elsewhere.val, `${(total / scoring).toFixed(1)}/wk`,
       'week 8 is NOT his bye: the zero is still out, because it is still a week ' +
       'he scores nothing in — this is the rule Tim asked for');
     // THE SHARP VERSION OF BOTH. Asserting two values that happen to be equal
@@ -7623,11 +7677,11 @@ if (!live.boot) {
     // two numbers coincided for some other reason; asserting they are EQUAL,
     // and that the figure is above every week he actually scores in, is the
     // claim he made — "100% of his future weeks are proj above" the average.
-    eq(byeElsewhere.bills.val, byeRight.bills.val,
+    eq(te2.elsewhere.val, te2.right.val,
       'and the two agree: where the bye falls no longer moves the per-week figure at all');
     ok('the per-week figure is not below every week he scores in',
-      Number.parseFloat(byeRight.bills.val) >= 11,
-      `${byeRight.bills.val} against a man who scores 11 in every week he plays`);
+      Number.parseFloat(te2.right.val) >= 11,
+      `${te2.right.val} against a man who scores 11 in every week he plays`);
   }
   const at8 = (card) => (card ? card.projs[card.weeks.indexOf('8')] : null);
   ok('his card reads Bye in week 8 when that is his bye', at8(byeRight.card) === 'Bye',
@@ -7858,25 +7912,31 @@ if (!live.boot) {
 // "underline a player's name if they are on the injury report in the home
 // section." Home's rule (js/injury.js): any status but ACTIVE/NORMAL. Bench men
 // too — Home lists starters only because it is about this week's lineup.
-// Bills D/ST (112, Ana's, sent to Cy and on bye in the meeting week) is
-// QUESTIONABLE, so the underline must sit WITH the green pill; Cy WR2 (304) is
-// on IR. Everybody else is healthy and must not be underlined.
+// Ana TE2 (110, Ana's, sent to Cy on every finder row and on bye in the meeting
+// week) is QUESTIONABLE, so the underline must sit WITH the green pill; Cy WR2
+// (304) is on IR. Everybody else is healthy and must not be underlined. (The
+// questionable man was Bills D/ST, 112, until Tim's 2026-10-16 rule took D/STs
+// off the finder; he is still in the custom box, and on no finder row.)
 {
   const r = run('byeMark', { stub: true, env: {
-    TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}', TR_INJURED: '112:QUESTIONABLE,304:INJURY_RESERVE',
+    TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}', TR_INJURED: '110:QUESTIONABLE,304:INJURY_RESERVE',
   } });
   ok('injury run boots', !r.boot, r.boot);
   ok('injury run has no errors', !r.errors || r.errors.length === 0, JSON.stringify(r.errors));
   const everyone = [...(r.finder || []).flatMap((x) => x.men), ...(r.combo || []),
     ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r.listB || []), ...(r.saved || [])];
   const dump = (x) => JSON.stringify(x).slice(0, 240);
-  const q = everyone.filter((m) => m.id === 112);
+  const Q = 110;
+  const q = everyone.filter((m) => m.id === Q);
   const ir = everyone.filter((m) => m.id === 304);
-  const rest = everyone.filter((m) => m.id !== 112 && m.id !== 304);
+  const rest = everyone.filter((m) => m.id !== Q && m.id !== 304);
   ok('the questionable man is drawn in the finder, the pop-up and the custom box',
-    (r.finder || []).some((x) => x.men.some((m) => m.id === 112)) &&
-    (r.deal || []).some((s) => s.men.some((m) => m.id === 112)) &&
-    (r.listA || []).some((m) => m.id === 112), dump(q));
+    (r.finder || []).some((x) => x.men.some((m) => m.id === Q)) &&
+    (r.deal || []).some((s) => s.men.some((m) => m.id === Q)) &&
+    (r.listA || []).some((m) => m.id === Q), dump(q));
+  ok('the spare D/ST (112) is in your custom list but on no finder row (no K or D/ST is suggested)',
+    (r.listA || []).some((m) => m.id === 112) &&
+    !(r.finder || []).some((x) => x.men.some((m) => m.id === 112)), dump((r.finder || []).map((x) => x.men.map((m) => m.id))));
   ok('the questionable man is underlined everywhere he is drawn',
     q.length > 0 && q.every((m) => /\binj\b/.test(m.injCls)), dump(q));
   ok('with "Questionable" in his tooltip, as Home words it',
@@ -7901,13 +7961,16 @@ if (!live.boot) {
 // proj/week has increased or decreased by more than 2 than it was at the
 // begginning of the season. make the down arrow red and up arrow green. make
 // sure it's small so it's not too distracting."
-// TR_TREND gives five stub men real ids from the preseason copy (tr-stub-season
+// TR_TREND gives six stub men real ids from the preseason copy (tr-stub-season
 // TREND_IDS) in a half-PPR league; the bye pill and the underline run alongside,
-// so all three marks are checked sitting on one man.
+// so all three marks are checked sitting on one man — Ana TE2 (110), whom the
+// finder sends to Cy. It was the Ravens D/ST (107) until Tim's 2026-10-16 rule
+// took D/STs off the finder; the Ravens keep their arrow in the custom box.
 {
   const { TREND_IDS } = await import('./tr-stub-season.mjs');
+  const TE2 = TREND_IDS[110].id;
   const r = run('byeMark', { stub: true, env: {
-    TR_TREND: '1', TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}', TR_INJURED: '107:QUESTIONABLE',
+    TR_TREND: '1', TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}', TR_INJURED: '110:QUESTIONABLE',
     TR_DEAL_WITH: '4429795',
   } });
   ok('trend run boots', !r.boot, r.boot);
@@ -7932,11 +7995,12 @@ if (!live.boot) {
   const WORDS = {
     4431459: SAYS('Up', '2\\.1', '9\\.9', '12\\.0'),
     [-16033]: SAYS('Up', '5\\.0', '7\\.0', '12\\.0'),
+    [TE2]: SAYS('Up', '4\\.0', '7\\.0', '11\\.0'),
     4429795: SAYS('Down', '4\\.7', '19\\.7', '15\\.0'),
   };
   // Not vacuous: each arrowed man is drawn where he must be.
-  ok('the custom lists draw Ana’s TE1 (Warren), her Ravens D/ST and Cy’s RB3 (Gibbs)',
-    [4431459, -16033].every((id) => places['your custom list'].some((m) => m.id === id)) &&
+  ok('the custom lists draw Ana’s TE1 (Warren), her TE2, her Ravens D/ST and Cy’s RB3 (Gibbs)',
+    [4431459, TE2, -16033].every((id) => places['your custom list'].some((m) => m.id === id)) &&
     places['his custom list'].some((m) => m.id === 4429795),
     dump([places['your custom list'].map((m) => m.id), places['his custom list'].map((m) => m.id)]));
   for (const [where, list] of Object.entries(places)) {
@@ -7960,17 +8024,21 @@ if (!live.boot) {
   const CARD = {
     4431459: /up 2\.1 a week since preseason \(9\.9 → 12\.0\)/,
     [-16033]: /up 5\.0 a week since preseason \(7\.0 → 12\.0\)/,
+    [TE2]: /up 4\.0 a week since preseason \(7\.0 → 11\.0\)/,
     4429795: /down 4\.7 a week since preseason \(19\.7 → 15\.0\)/,
   };
   ok('the arrow carries no tooltip of its own', arrowed.every((m) => m.trendTitle === ''),
     dump(arrowed.map((m) => m.trendTitle)));
   ok('and the man’s card says the same thing in its heading', arrowed.every((m) => CARD[m.id] && CARD[m.id].test(m.card)),
     dump(arrowed.map((m) => [m.id, m.card])));
-  // Coexisting marks: the Ravens D/ST is sent to Cy in the bye week AND questionable.
-  const ravens = everyone.filter((m) => m.id === -16033 && m.cell === 'send');
+  // Coexisting marks: Ana TE2 is sent to Cy in the bye week AND questionable.
+  const te2 = everyone.filter((m) => m.id === TE2 && m.cell === 'send');
   ok('the arrow sits with the green bye pill and the injury underline on one man',
-    ravens.length > 0 && ravens.every((m) => m.trend === 'up' && /bye-send/.test(m.cls) && /\binj\b/.test(m.injCls)),
-    dump(everyone.filter((m) => m.id === -16033)));
+    te2.length > 0 && places.finder.some((m) => m.id === TE2) &&
+    te2.every((m) => m.trend === 'up' && /bye-send/.test(m.cls) && /\binj\b/.test(m.injCls)),
+    dump(everyone.filter((m) => m.id === TE2)));
+  ok('and the Ravens D/ST that carried them before is on no finder row (no K or D/ST is suggested)',
+    !places.finder.some((m) => m.id === -16033), dump(places.finder.map((m) => m.id)));
   ok('the finder key names the arrow', /Green ▲ \/ red ▼ by a name/.test(r.finderKey || ''), r.finderKey);
   // Once on the page (2026-10-06): the custom box no longer repeats the finder's.
   for (const re of [/Green name:/, /Underlined:/, /preseason/]) {
