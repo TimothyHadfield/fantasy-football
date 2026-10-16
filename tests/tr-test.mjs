@@ -3982,6 +3982,63 @@ SCENARIOS.suggestSkip = async function suggestSkip() {
   return { errors, kd, low, ticked: [String(his.value), String(mine.value)], rows: [...one, ...two], finder };
 };
 
+/**
+ * THE SUGGESTED LIST'S PLAYOFFS SWITCH (Tim, 2026-10-16: "make a switch in the
+ * suggested trade section that targets trades that increase proj for the
+ * playoffs"). Live stub league on "Don't finish last" (the playoff weeks are
+ * outside the priced span there), `TR_PO_SPIKE` making one of Bo's bench men a
+ * monster in the playoff weeks only. One of Bo's men ticked; the list read
+ * with the switch off, on, and off again; the stored pref after each flip.
+ */
+SCENARIOS.suggestPlayoffs = async function suggestPlayoffs() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live', 'trade.team': 1, 'trade.goal': 'last' }),
+  };
+  const { document, window, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const max = scaledBudget(30000, machineFactor());
+  const read = () => {
+    const h = $('cuSug');
+    const sw = $('sugPlayoffs');
+    const label = sw ? sw.closest('label') : null;
+    return {
+      hidden: !h || !!h.hidden,
+      switch: sw ? { checked: !!sw.checked, hidden: !!(label && label.hidden), inHead: !!(label && label.closest('#cuSug')) } : null,
+      poGains: h && h.getAttribute('data-po-gains') ? h.getAttribute('data-po-gains').split(',').map(Number) : null,
+      rows: readOfferRows($('cuSugTable')).map((r) => ({ send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)), gainText: r.gainText })),
+    };
+  };
+  const waitList = async () => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < max) {
+      const h = $('cuSug');
+      if (!h || h.hidden || h.getAttribute('data-rows')) break;
+      await settle(50);
+    }
+    await settle(50);
+    return read();
+  };
+  const prefs = () => { try { return JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}')['trade.sugPlayoffs'] ?? null; } catch { return 'unreadable'; } };
+  const partner = $('cuTeamB').value;
+  const his = [...$('cuListB').querySelectorAll('input[type="checkbox"]')][1];
+  his.checked = true; fire(his, 'change');
+  const off = await waitList();
+  const flip = async (on) => {
+    const sw = $('sugPlayoffs');
+    if (!sw) return null;
+    sw.checked = on; fire(sw, 'change');
+    return waitList();
+  };
+  const on = await flip(true);
+  const prefOn = prefs();
+  const offAgain = await flip(false);
+  const prefOff = prefs();
+  return { errors, partner, ticked: String(his.value), off, on, offAgain, prefOn, prefOff };
+};
+
 /** A reload with an assumed trade stored (`TR_ASSUMED` = the prefs to seed). */
 SCENARIOS.assumeReload = async function assumeReload() {
   const seed = { 'ff.prefs': process.env.TR_ASSUMED || '{}' };
@@ -9586,6 +9643,37 @@ if (!bm.boot) {
     ok('SKIP: the rosters have kickers, D/STs and men worth under 1 to leave out', sk.kd.length >= 2 && sk.low.length >= 1, `K/DST ${sk.kd.length}, low ${sk.low.length}`);
     ok('SKIP: Suggested hands over none of them', sk.rows.length >= 3 && bad(sk.rows).length === 0, `${sk.rows.length} rows; ` + bad(sk.rows).join(' | '));
     ok('SKIP: nor does the finder', sk.finder.length > 0 && bad(sk.finder).length === 0, `${sk.finder.length} rows; ` + bad(sk.finder).slice(0, 3).join(' | '));
+  }
+  // THE PLAYOFFS SWITCH (Tim, 2026-10-16: "make a switch in the suggested trade
+  // section that targets trades that increase proj for the playoffs"). Bo's
+  // bench WR (210, 4 a week) projects 30 in the playoff weeks only; on "Don't
+  // finish last" the list as it was never sees those weeks.
+  {
+    const SPIKE = String(stub.playerId(2, 10));
+    const po = run('suggestPlayoffs', { stub: true, env: { TR_PO_SPIKE: `${SPIKE}:30` } });
+    ok('PLAYOFFS: the scenario boots', !po.boot, po.boot);
+    if (!po.boot) {
+      const sig = (r) => r.rows.map((x) => `${x.send.join('+')}>${x.receive.join('+')}`).join(' | ');
+      const gets = (r) => r.receive.includes(SPIKE);
+      ok('PLAYOFFS: no console errors', po.errors.length === 0, po.errors.slice(0, 2).join(' | '));
+      ok('PLAYOFFS: the switch sits in the Suggested block, shown, off by default',
+        !!po.off.switch && po.off.switch.inHead && !po.off.switch.hidden && !po.off.switch.checked, JSON.stringify(po.off.switch));
+      ok('PLAYOFFS: off, the list is the old one (at least 3 rows, no playoff figures)',
+        po.off.rows.length >= 3 && po.off.poGains === null, `${po.off.rows.length} rows; ${sig(po.off)}`);
+      ok('PLAYOFFS: on, the list is searched again (3-5 rows, each with its playoff gain)',
+        !!po.on && po.on.rows.length >= 3 && po.on.rows.length <= 5 && !!po.on.poGains && po.on.poGains.length === po.on.rows.length,
+        po.on ? `${po.on.rows.length} rows; gains ${po.on.poGains}` : 'no switch');
+      ok('PLAYOFFS: on, ordered by your playoff gain, largest first',
+        !!po.on && !!po.on.poGains && po.on.poGains.every((g, i, a) => Number.isFinite(g) && (i === 0 || a[i - 1] >= g)),
+        po.on ? String(po.on.poGains) : 'no switch');
+      ok('PLAYOFFS: on, the top row brings in the playoff monster; off, it never leads',
+        !!po.on && po.on.rows.length > 0 && gets(po.on.rows[0]) && !(po.off.rows[0] && gets(po.off.rows[0])),
+        `on: ${po.on ? sig(po.on) : '-'} / off: ${sig(po.off)}`);
+      ok('PLAYOFFS: every row still carries the ticked man', !!po.on && po.on.rows.every((r) => r.receive.includes(po.ticked)), po.on ? sig(po.on) : '-');
+      ok('PLAYOFFS: off again is the first list exactly', !!po.offAgain && sig(po.offAgain) === sig(po.off) && po.offAgain.poGains === null,
+        po.offAgain ? `${sig(po.offAgain)} vs ${sig(po.off)}` : 'no switch');
+      ok('PLAYOFFS: the switch is remembered (true, then false)', po.prefOn === true && po.prefOff === false, `${po.prefOn} / ${po.prefOff}`);
+    }
   }
   ok('the custom-hint scenario boots', !ch.boot, ch.boot);
   if (!ch.boot) {

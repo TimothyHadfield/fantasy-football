@@ -337,6 +337,20 @@ function progressFields(team, i, week, proj) {
   return { done: false };
 }
 
+/**
+ * A MAN WHO IS A MONSTER ONLY IN THE PLAYOFFS, only when `TR_PO_SPIKE` is set
+ * ("210:30" = id 210 projects 30 in every week after the regular season). For
+ * the Suggested list's Playoffs switch (Tim, 2026-10-16). Unset, nothing changes.
+ */
+function poSpike(id, week) {
+  if (week <= WEEKS) return null;
+  for (const pair of String(process.env.TR_PO_SPIKE || '').split(',')) {
+    const [pid, pts] = pair.split(':').map(Number);
+    if (pid === id && Number.isFinite(pts)) return pts;
+  }
+  return null;
+}
+
 function playersFor(team, week) {
   return team.players.map((spec, i) => ({
     playerId: pickupApplies(team, i, week) ? PICKUP.added : trendId(playerId(team.id, i)),
@@ -347,7 +361,7 @@ function playersFor(team, week) {
     lineupSlotId: spec.slot,
     slot: LABEL[spec.slot],
     started: spec.slot !== SLOT.BE,
-    projected: spec.week(week),
+    projected: poSpike(playerId(team.id, i), week) ?? spec.week(week),
     // A played week has a result; a week still to come does not. That is what
     // the card's Act row reads, and it must stay a fact about the DATA rather
     // than about the calendar.

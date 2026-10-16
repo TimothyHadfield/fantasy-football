@@ -286,6 +286,7 @@ const state = {
   kind: 'all',         // which package shapes the finder searches
   bothWin: false,      // the finder keeps only deals that raise BOTH lineups (the switch)
   benchValue: false,   // the finder keeps and orders deals by YOUR bench value gain (the switch)
+  sugPlayoffs: false,  // the Suggested list targets YOUR playoff-week gain (its switch)
   partner: 'all',      // limit the results to one manager
   search: null,        // the last finder result
   searching: false,
@@ -10141,13 +10142,45 @@ function renderCustomSaved() {
 const cuSug = { key: null, rows: null, token: 0, timer: null, minH: 0, tickAt: 0, ms: null };
 const CU_SUG_DELAY = 180;
 
+// THE PLAYOFFS SWITCH (Tim, 2026-10-16: "Could you also make a switch in the
+// suggested trade section that targets trades that increase proj for the
+// playoffs?"). Off, the list is exactly what it was. On, the SAME search runs —
+// the page's own span, gates, `barred` rules, `skip` and 3–5 rows — but every
+// completion is KEPT AND ORDERED by YOUR lineup's projected gain over the
+// playoff weeks still to come (`rankBy`, priced by `priceTradeAcrossWeeks` on
+// those weeks with the same floors), and the rows are put in that order.
+// Why `rankBy` and not the playoff weeks as `weeks`: the rows then print the
+// same figures as every other row of the page (and as the deal in the box once
+// loaded), rather than a playoff-only "a week" no other row is on. The switch
+// is hidden, and counts as off, when no playoff week is left in the span the
+// box's send week allows.
+
+/** The playoff weeks a Suggested deal can still reach (after the box's send week). */
+function sugPlayoffWeeks() {
+  const po = bracketWeeksAhead();
+  return sendCut === null ? po : weeksAfter(po, sendCut);
+}
+
+/** Is the Playoffs switch in force for the list being drawn? */
+const sugOnPlayoffs = () => state.sugPlayoffs && sugPlayoffWeeks().length > 0;
+
+/** YOUR lineup's projected gain over `weeks` from one offer, unrounded. */
+function playoffGainOf(offer, mine, weeks) {
+  const p = priceTradeAcrossWeeks({
+    players: mine.players, send: offer.send, receive: offer.receive, slots: state.slots,
+    weeks, projFor, zeroIsBye: zeroIsBye(), floors: state.floors,
+  });
+  return p.after.total - p.before.total;
+}
+
 /** Everything the suggestions depend on; a change in any of it is a new list. */
 function cuSugKey() {
   const sig = customSignature();
   if (!sig) return null;
   const ctx = basis() === 'weeks' ? goalContext() : null;
   return [sig, state.goal, state.floors ? state.floors.size : 0, assume.movesSig || '',
-    ctx && ctx.key ? ctx.key : '', ctx && ctx.base ? 1 : 0].join('#');
+    ctx && ctx.key ? ctx.key : '', ctx && ctx.base ? 1 : 0,
+    sugOnPlayoffs() ? `po:${sugPlayoffWeeks().join(',')}` : ''].join('#');
 }
 
 /** The finder's search, narrowed to completions of the ticked deal. */
@@ -10156,8 +10189,14 @@ function findSuggestions() {
   const weeks = weeklySpan();
   const ctx = goalContext();
   const W = ctx && ctx.inputs ? goalWeightsFor(ctx, c.a, weeks) : null;
+  const teams = customTeams();
+  // The Playoffs switch (see `sugPlayoffWeeks`): your playoff-week gain is the
+  // figure every completion is kept and ordered by.
+  const po = sugOnPlayoffs() ? sugPlayoffWeeks() : null;
+  const mineNow = po ? teams.find((t) => t.id === c.a) : null;
+  const byPlayoffs = po && mineNow ? (o) => (o.poGain = playoffGainOf(o, mineNow, po)) : null;
   const result = findTrades({
-    teams: customTeams(),
+    teams,
     myTeamId: c.a,
     slots: state.slots,
     weeks,
@@ -10166,9 +10205,9 @@ function findSuggestions() {
     floors: state.floors,
     weights: W ? W.weights : null,
     theirMinPerWeek: W ? THEIR_MIN_PER_WEEK : null,
-    rankBy: W
+    rankBy: byPlayoffs || (W
       ? (o) => o.goalPoints * (acceptFor(o.theirGain, o.send, o.receive, weeks, o.theirWeeks ?? weeks.length) ?? 1)
-      : null,
+      : null),
     theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
     meetWeeks: meetWeeksOf(c.a),
     // No kicker, D/ST or man worth under 1 is ADDED to a suggestion
@@ -10194,6 +10233,9 @@ function findSuggestions() {
     o.goalScore = scoreGoalCached(o, c.a, weeks);
     o.altGoal = altScore(o, c.a);
   }
+  // Playoffs: largest playoff-week gain first (stable, so equal ones keep the
+  // search's order) — the list's whole point, so no other key goes above it.
+  if (byPlayoffs) return offers.sort((x, y) => y.poGain - x.poGain);
   if (offers.every((o) => o.goalScore)) offers.sort(compareByGoalNet);
   // Then by net increase, as the finder's list is (Tim, 2026-10-09), with the
   // finder's goal guard (Tim, 2026-10-14: "Yes, add that guard"): a suggestion
@@ -10211,6 +10253,9 @@ function renderCustomSuggestAt() {
   const host = $('cuSug');
   if (!host) return;
   const c = state.custom;
+  // The Playoffs switch shows only while a playoff week is left to reach.
+  const poWrap = $('sugPlayoffsWrap');
+  if (poWrap) poWrap.hidden = !sugPlayoffWeeks().length;
   const key = c.a !== null && c.b !== null && basis() === 'weeks' && weeklySpan().length ? cuSugKey() : null;
   const hide = () => {
     cuSug.token++;
@@ -10265,6 +10310,7 @@ function drawCustomSuggest() {
   if (rows && !rows.length) {
     host.hidden = true;
     host.style.minHeight = '';
+    host.removeAttribute('data-po-gains');
     state.cuSugRows = [];
     $('cuSugRows').innerHTML = '';
     return;
@@ -10276,6 +10322,10 @@ function drawCustomSuggest() {
   $('cuSugRows').innerHTML = (rows || []).map((o, i) =>
     offerRow(o, i, `sg:${i}`, { ...scales, goal: true, attrs: ' data-sg="1"' })).join('');
   host.setAttribute('data-rows', rows ? String(rows.length) : '');
+  // Each row's playoff-week gain under the Playoffs switch (read by tests).
+  if (rows && rows.length && rows.every((o) => Number.isFinite(o.poGain))) {
+    host.setAttribute('data-po-gains', rows.map((o) => round1(o.poGain)).join(','));
+  } else host.removeAttribute('data-po-gains');
   if (rows && Number.isFinite(cuSug.ms)) host.setAttribute('data-ms', String(cuSug.ms));
   else host.removeAttribute('data-ms');
   // HOLD THE HEIGHT: never shorter than the tallest it has been since the first tick.
@@ -11429,6 +11479,12 @@ $('benchValue').addEventListener('change', (e) => {
   state.benchValue = !!e.target.checked;
   prefs.set('benchValue', state.benchValue);
   runSearch();
+});
+// The Suggested list's Playoffs switch: only that list is searched again (its key changes).
+$('sugPlayoffs').addEventListener('change', (e) => {
+  state.sugPlayoffs = !!e.target.checked;
+  prefs.set('sugPlayoffs', state.sugPlayoffs);
+  renderCustomSuggest();
 });
 
 $('kindToggle').addEventListener('click', (e) => {
@@ -12606,6 +12662,8 @@ state.bothWin = prefs.get('bothWin', false) === true;
 $('bothWin').checked = state.bothWin;
 state.benchValue = prefs.get('benchValue', false) === true;
 $('benchValue').checked = state.benchValue;
+state.sugPlayoffs = prefs.get('sugPlayoffs', false) === true;
+$('sugPlayoffs').checked = state.sugPlayoffs;
 const rememberedKind = prefs.get('kind', null);
 if (rememberedKind === 'all' || PACKAGE_KINDS.includes(rememberedKind)) {
   state.kind = rememberedKind;
