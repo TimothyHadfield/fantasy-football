@@ -281,6 +281,133 @@ eq(rows.filter((tr) => tr.querySelector('td.name [data-tip]')).length, rows.leng
   ok(tip && !tip.hidden && /Proj/.test(txt) && /Week/.test(txt), 'hovering a name opens the card: Week and Proj rows', txt.slice(0, 120));
   ok(PO.every((w) => txt.includes(`${w}`)) && /PO/.test(txt), 'the card runs through the playoff weeks, marked PO', txt.slice(0, 300));
 }
+// ---------------------------------------------------------------- Proj | Value
+// Tim, 2026-10-16: "make a proj / value switch in the playoffs section just
+// like the other sectoins." The Players page's switch: a "Show" box, Proj |
+// Value, shown once the league's lines are known; on Value every projection x
+// prints as valueOf(lines, his position, x) — worked out here BY HAND from the
+// sample league's frozen lines, never through the module.
+const seasonMod = await import(url('js/season.js'));
+const BASE = await seasonMod.fetchValueBase({ demo: true });
+ok(BASE && BASE.lines && Object.keys(BASE.lines).length > 0, 'the sample league has Value lines', JSON.stringify(BASE && BASE.lines));
+/** js/value.js valueOf, by hand: over the waiver line, below the starter line at half, to the tenth. */
+const vOf = (pos, a) => {
+  const l = BASE.lines[pos];
+  if (!l || typeof a !== 'number') return null;
+  if (a <= l.waiver) return 0;
+  return Math.round(((Math.min(a, l.starter) - l.waiver) * 0.5 + Math.max(0, a - l.starter)) * 10) / 10;
+};
+const waitFor = async (pred, ms = 3000) => {
+  const t0 = Date.now();
+  while (!pred() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 20));
+  return pred();
+};
+const strip = (s) => s.replace(/[▲▼]/g, '').trim();
+const showCtl = () => host.querySelector('#poShowCtl');
+ok(await waitFor(() => showCtl() && !showCtl().hidden), 'the Proj | Value box is shown once the lines are known');
+{
+  const box = showCtl();
+  const label = box && box.querySelector('.ctl-label');
+  eq(label ? label.textContent.trim() : null, 'Show', 'the box is labelled "Show", as on the Players page');
+  const seg = box && box.querySelector('.segmented.seg-sm[role="group"]');
+  ok(Boolean(seg), 'the control is the site’s small segmented control');
+  const btns = seg ? [...seg.querySelectorAll('button[data-show]')].map((b) => `${b.dataset.show}:${b.textContent.trim()}`) : [];
+  eq(btns.join('|'), 'proj:Proj|value:Value', 'Proj then Value');
+  ok(box && box.closest('.toolbar') && box.closest('.toolbar').querySelector('#poPosFilter'), 'it sits in the filter box beside Position');
+  eq(seg && seg.querySelector('button.on') ? seg.querySelector('button.on').dataset.show : null, 'proj', 'it starts on Proj');
+}
+
+// The men to sample: every rostered man projected through the playoffs at a
+// position with a line, at least one of whose weeks is worth something.
+const sample = [...rostered].filter((id) => {
+  const r = runOf(id, PO);
+  const pos = cellText(rowOf(id), col('Pos'));
+  return r.all && BASE.lines[pos] && r.vals.some((v) => v > 0 && vOf(pos, v) > 0);
+}).slice(0, 12);
+if (poZeroMen[0] && !sample.includes(poZeroMen[0]) && BASE.lines[cellText(rowOf(poZeroMen[0]), col('Pos'))]) sample.push(poZeroMen[0]);
+ok(sample.length >= 5, 'enough men to sample on Value', String(sample.length));
+const projHtml = table.querySelector('tbody').innerHTML;
+const projHead = table.querySelector('thead').innerHTML;
+
+click('#poShowToggle button[data-show="value"]');
+eq(host.querySelector('#poShowToggle button.on') ? host.querySelector('#poShowToggle button.on').dataset.show : null, 'value', 'Value is lit after the click');
+let differs = 0, weekCells = 0;
+for (const id of sample) {
+  const tr = rowOf(id);
+  const pos = cellText(tr, col('Pos'));
+  const r = runOf(id, PO);
+  PO.forEach((w, i) => {
+    const v = r.vals[i];
+    const txt = strip(cellText(tr, FIXED.length + i));
+    if (v === 0) { ok(/^0\.0/.test(txt), `Value: man ${id} week ${w}: a 0 week still prints 0.0`, txt); return; }
+    weekCells++;
+    eq(txt, vOf(pos, v).toFixed(1), `Value: man ${id} week ${w} = valueOf(${pos}, ${v})`);
+    if (vOf(pos, v).toFixed(1) !== v.toFixed(1)) differs++;
+  });
+  // Playoff: the mean of the weeks' Values, every week counted (a 0 week is 0).
+  const poV = r1(r.vals.reduce((a, v) => a + (v === 0 ? 0 : vOf(pos, v)), 0) / r.vals.length);
+  eq(strip(cellText(tr, col('Playoff'))), poV.toFixed(1), `Value: man ${id} Playoff = mean of his weeks' Values`);
+  // Future: the mean of the Values of his non-zero regular weeks left.
+  const fr = runOf(id, FUTURE);
+  if (fr.all) {
+    const kept = fr.vals.filter((v) => v > 0);
+    const futV = kept.length ? r1(kept.reduce((a, v) => a + vOf(pos, v), 0) / kept.length) : null;
+    eq(strip(cellText(tr, col('Future'))), futV === null ? '—' : futV.toFixed(1), `Value: man ${id} Future = mean of his non-zero weeks' Values`);
+    if (futV !== null) eq(cellText(tr, col('PO − Fut')), sign(r1(poV - futV)), `Value: man ${id} PO − Fut of the printed Values`);
+  }
+  // Avg: ESPN's season average as a Value.
+  const avg = glance.byId.get(id) ? glance.byId.get(id).avg : null;
+  if (avg !== null && avg !== undefined) {
+    const avgV = vOf(pos, avg);
+    eq(strip(cellText(tr, col('Avg'))), avgV.toFixed(1), `Value: man ${id} Avg = valueOf(${pos}, ESPN avg ${avg})`);
+    eq(cellText(tr, col('PO − Avg')), sign(r1(poV - avgV)), `Value: man ${id} PO − Avg of the printed Values`);
+  }
+}
+ok(weekCells >= 20, 'enough week cells sampled', String(weekCells));
+ok(differs > 0, 'on Value the cells really change (the check has teeth)', String(differs));
+ok(/as a Value/.test(table.querySelector('thead').innerHTML), 'the headers say the numbers are Values');
+eq(fetchCalls.length, 0, 'Value asks the network for nothing');
+
+click('#poShowToggle button[data-show="proj"]');
+// (The player card's handle is a fresh counter on every paint; everything else must match.)
+const noTip = (s) => s.replace(/data-tip="[^"]*"/g, 'data-tip');
+eq(noTip(table.querySelector('tbody').innerHTML) === noTip(projHtml), true, 'back on Proj every cell is what it was');
+eq(table.querySelector('thead').innerHTML === projHead, true, 'and the headers too');
+
+// Remembered: Value chosen, a new mount opens on Value.
+click('#poShowToggle button[data-show="value"]');
+
+// No lines: no box, and the numbers stay projections even with Value remembered.
+{
+  const host2 = document.createElement('section');
+  host2.className = 'panel';
+  document.body.appendChild(host2);
+  await mod.mountPlayoffPlayers(host2, { fetchValueBase: async () => null });
+  await new Promise((r) => setTimeout(r, 100));
+  const box = host2.querySelector('#poShowCtl');
+  ok(Boolean(box) && box.hidden, 'with no Value lines the Proj | Value box is hidden');
+  const id = sample[0];
+  const tr = host2.querySelector(`tbody tr[data-player="${id}"]`);
+  const r = runOf(id, PO);
+  const i = r.vals.findIndex((v) => v > 0);
+  eq(tr ? strip(cellText(tr, FIXED.length + i)) : null, r.vals[i].toFixed(1), 'with no lines a week cell is still his projection');
+  host2.remove();
+}
+{
+  const host3 = document.createElement('section');
+  host3.className = 'panel';
+  document.body.appendChild(host3);
+  await mod.mountPlayoffPlayers(host3);
+  ok(await waitFor(() => host3.querySelector('#poShowToggle button.on[data-show="value"]')), 'a new visit opens on the Value it was left on');
+  const id = sample[0];
+  const pos = cellText(rowOf(id), col('Pos'));
+  const r = runOf(id, PO);
+  const i = r.vals.findIndex((v) => v > 0);
+  const tr = host3.querySelector(`tbody tr[data-player="${id}"]`);
+  eq(tr ? strip(cellText(tr, FIXED.length + i)) : null, vOf(pos, r.vals[i]).toFixed(1), 'and draws Values');
+  host3.remove();
+}
+
 eq(fetchCalls.length, 0, 'the sample league asks the network for nothing');
 eq(rejections.length, 0, 'no unhandled rejection');
 

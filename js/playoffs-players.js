@@ -28,8 +28,22 @@
 //
 // One export: `mountPlayoffPlayers(host)`. It never throws; a failure is the
 // site's usual short red line inside `host`.
+//
+// PROJ | VALUE (Tim, 2026-10-16: "make a proj / value switch in the playoffs
+// section just like the other sectoins"). The Players page's switch, the same
+// control in the same "Show" box, shown only once the league's frozen Value
+// lines are known (`season.fetchValueBase`), remembered per page like every
+// other page's (`playoffs.show`). On Value every projection x is drawn as
+// `valueOf(lines, his position, x)` (js/value.js), exactly as the Players page
+// draws it: each week's cell, and Future / Playoff as the mean of those
+// Values over the same weeks by the same zero rules. Avg is ESPN's season
+// average, not a mean of weeks this page holds, so it is turned into a Value
+// as one number. PO − Avg / PO − Fut are the printed Values subtracted. A Bye,
+// a 0.0 and a blank stay as drawn (a 0 is worth 0). Colour and sorting follow
+// the numbers on screen; the Teams table and the player card do not change.
 
 import * as season from './season.js';
+import * as value from './value.js';
 import * as espn from './espn.js';
 import { savedConfig, onConnection } from './connection.js';
 // The ONE definition of the playoff weeks (the league's last regular week plus
@@ -55,6 +69,7 @@ const FLEX = 'FLEX';
 const FLEX_POSITIONS = ['RB', 'WR', 'TE'];
 const FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', FLEX, 'K', 'DST'];
 const FILTER_CHOICE = (v) => (FILTERS.includes(String(v)) ? String(v) : 'ALL');
+const SHOW_CHOICE = (v) => (v === 'value' ? 'value' : 'proj');
 
 // The Players page's own injury tags, word for word (js/waivers-page.js INJURY).
 const INJURY = {
@@ -109,16 +124,21 @@ const weekRange = (weeks) => {
  *   avg."): every 0 week — bye or ruled out — leaves the divisor.
  * @returns {{mean:number|null, n:number}} mean unrounded; null when no week has a number
  */
-export function spanMean(values, byeBlank = [], { skipZeros = false } = {}) {
+export function spanMean(values, byeBlank = [], { skipZeros = false, map = null } = {}) {
   let sum = 0;
   let n = 0;
+  let unsaid = false;
   values.forEach((v, i) => {
     if (typeof v === 'number' && Number.isFinite(v)) {
       if (skipZeros && v === 0) return;  // Future: a 0 week is left out
-      sum += v; n++;
+      // On Value (`map`), which weeks count is still judged on the projection;
+      // only the number added is its Value.
+      const x = map ? map(v) : v;
+      if (typeof x !== 'number' || !Number.isFinite(x)) { unsaid = true; return; }
+      sum += x; n++;
     } else if (byeBlank[i] && !skipZeros) n++;   // a bye with no number: a 0 week
   });
-  return { mean: n ? sum / n : null, n };
+  return { mean: n && !unsaid ? sum / n : null, n };
 }
 
 /**
@@ -181,9 +201,9 @@ function currentWeekOf(schedule) {
  * Returns a promise that settles once the first full read has been drawn; it
  * never rejects.
  */
-export function mountPlayoffPlayers(host) {
+export function mountPlayoffPlayers(host, opts = {}) {
   try {
-    return mount(host).catch((err) => { failed(host, err); });
+    return mount(host, opts || {}).catch((err) => { failed(host, err); });
   } catch (err) {
     failed(host, err);
     return Promise.resolve();
@@ -207,8 +227,15 @@ const prefs = scope('playoffs');
 // switch: Tim, 2026-10-16, "synced to the available players switch").
 const playersPrefs = scope('waivers');
 
-async function mount(host) {
+/**
+ * @param {Element} host
+ * @param {{fetchValueBase?: Function}} [opts] tests only: where the Value lines
+ *   come from (default `season.fetchValueBase`)
+ */
+async function mount(host, opts = {}) {
   if (!host) throw new Error('no host');
+  const linesFrom = typeof opts.fetchValueBase === 'function' ? opts.fetchValueBase
+    : typeof season.fetchValueBase === 'function' ? season.fetchValueBase : null;
 
   const state = {
     token: 0,
@@ -230,7 +257,30 @@ async function mount(host) {
     error: '',
     position: FILTER_CHOICE(prefs.get('position', 'ALL')),
     showMine: playersPrefs.get('showMine', true) !== false,
+    // Proj | Value: this page's own remembered choice (every page keeps its
+    // own, as Analysis, Players and Trade do), and the league's frozen lines.
+    show: SHOW_CHOICE(prefs.get('show', 'proj')),
+    base: null,
   };
+
+  /** Proj | Value is on Value, and there are lines to measure from. */
+  const valueOn = () => state.show === 'value' && state.base !== null;
+  /** A projection as its Value at his position; null when it cannot be said. */
+  const asValue = (p, x) => value.valueOf(state.base, p.position, x);
+
+  /** The league's frozen lines, once per league read. None: no switch, no Value. */
+  function loadLines(demo) {
+    if (!linesFrom) return;
+    const token = state.token;
+    Promise.resolve()
+      .then(() => linesFrom({ demo: Boolean(demo) }))
+      .then((base) => {
+        if (token !== state.token || !value.isBase(base)) return;
+        state.base = base;
+        render();
+      })
+      .catch(() => { /* no lines: the page stays as it was */ });
+  }
 
   host.innerHTML = shellHtml();
   const $ = (sel) => host.querySelector(sel);
@@ -250,6 +300,7 @@ async function mount(host) {
     state.byes = {};
     state.error = '';
     state.read = { done: 0, of: 0 };
+    state.base = null;
   }
 
   /** Every week a column or an average needs: the regular weeks left, then the playoffs. */
@@ -320,6 +371,7 @@ async function mount(host) {
     const token = state.token;
     state.isDemo = true;
     wireValue(true);
+    loadLines(true);
     state.loading = true;
     state.leagueId = null;
     render();
@@ -371,6 +423,8 @@ async function mount(host) {
     state.loading = true;
     state.leagueId = String(saved.leagueId);
     espn.configure({ leagueId: saved.leagueId, season: saved.season });
+    // After configure, so the lines asked for are this league's.
+    loadLines(false);
     render();
 
     let schedule;
@@ -477,13 +531,21 @@ async function mount(host) {
 
   function buildRows() {
     const rows = [];
+    const on = valueOn();
     for (const [id, man] of state.men) {
       const p = man.p;
       const future = state.futureWeeks.map((w) => projOf(id, w));
       const po = state.poWeeks.map((w) => projOf(id, w));
-      const f = spanMean(future, state.futureWeeks.map((w, i) => byeBlank(p, w, future[i])), { skipZeros: true });
-      const pl = spanMean(po, state.poWeeks.map((w, i) => byeBlank(p, w, po[i])));
-      const avg = num(man.seasonAvg);
+      // On Value each week counts as its projection's Value; which weeks count
+      // is unchanged (Future leaves its 0 weeks out, Playoff counts them as 0).
+      const map = on ? (v) => asValue(p, v) : null;
+      const f = spanMean(future, state.futureWeeks.map((w, i) => byeBlank(p, w, future[i])), { skipZeros: true, map });
+      const pl = spanMean(po, state.poWeeks.map((w, i) => byeBlank(p, w, po[i])), { map });
+      const espnAvg = num(man.seasonAvg);
+      const avg = on && espnAvg !== null ? asValue(p, espnAvg) : espnAvg;
+      // Week i as drawn: on Value a number projected above 0 is its Value (null
+      // when none can be said); a Bye, a 0.0, a blank stay as they are (undefined).
+      const poShownWeeks = on ? po.map((v) => (num(v) !== null && v > 0 ? asValue(p, v) : undefined)) : null;
       // Printed to the tenth, and the difference is of the two printed figures
       // (the site's rule: a printed difference is its two printed ends subtracted).
       const avgShown = avg === null ? null : round1(avg);
@@ -497,7 +559,7 @@ async function mount(host) {
         // Tim, 2026-10-16: "make another derived column for these playoff
         // players that is playoff avg - future proj avg."
         diffFut: diffOf(poShown, futShown),
-        futureValues: future, poValues: po,
+        futureValues: future, poValues: po, poShown: poShownWeeks, espnAvg,
       });
     }
     return rows;
@@ -538,6 +600,13 @@ async function mount(host) {
     host.querySelectorAll('#poPosFilter button[data-pos]').forEach((b) => {
       b.classList.toggle('on', b.dataset.pos === state.position);
     });
+    // Proj | Value: on no page until the league's lines are known, so a page
+    // without them is the page it always was (the Players page's rule).
+    const showCtl = $('#poShowCtl');
+    if (showCtl) showCtl.hidden = state.base === null;
+    host.querySelectorAll('#poShowToggle button[data-show]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.show === state.show);
+    });
     const sw = $('#poShowMine');
     if (sw) sw.checked = state.showMine;
   }
@@ -570,8 +639,11 @@ async function mount(host) {
     const weekScales = new Map();
     for (const pos of new Set(all.map((r) => r.p.position))) {
       const men = all.filter((r) => r.p.position === pos);
-      weekScales.set(pos, weeks.map((_, i) =>
-        heatScale(men.map((r) => r.poValues[i]).filter((v) => num(v) !== null && v > 0))));
+      // The scale reads the number on screen: the projection, or on Value its Value.
+      weekScales.set(pos, weeks.map((_, i) => heatScale(men
+        .filter((r) => num(r.poValues[i]) !== null && r.poValues[i] > 0)
+        .map((r) => (r.poShown ? r.poShown[i] : r.poValues[i]))
+        .filter((v) => num(v) !== null))));
     }
     view = { rows: new Map(all.map((r) => [String(r.id), r])) };
 
@@ -608,16 +680,23 @@ async function mount(host) {
   }
 
   function headHtml(weeks) {
+    const on = valueOn();
+    const asV = on ? ', as Values: points over the waiver line at his position' : '';
     const futTitle = state.futureWeeks.length
-      ? `His average projection over ${weekRange(state.futureWeeks)}, the regular season left. A 0 week — bye or ruled out — is left out.`
+      ? `His average projection over ${weekRange(state.futureWeeks)}, the regular season left${asV}. A 0 week — bye or ruled out — is left out.`
       : 'The regular season is over: no weeks left to average.';
-    const poTitle = `His average projection over the playoff weeks (${weekRange(weeks)}). Every week counts — a bye or a ruled-out 0 included.`;
+    const poTitle = `His average projection over the playoff weeks (${weekRange(weeks)})${asV}. Every week counts — a bye or a ruled-out 0 included.`;
+    const avgTitle = on
+      ? 'His season average so far — ESPN’s figure — as a Value: points over the waiver line at his position.'
+      : 'His season average so far — ESPN’s figure.';
     const wk = weeks.map((w, i) => {
       const start = i === 0;
       const failedWeek = state.failed.has(w);
       const title = failedWeek
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
-        : `ESPN’s projected points for week ${w}, a playoff week.`;
+        : on
+          ? `ESPN’s projected points for week ${w}, a playoff week, as a Value: points over the waiver line at his position.`
+          : `ESPN’s projected points for week ${w}, a playoff week.`;
       const cls = [start ? 'po-start' : '', failedWeek ? 'muted' : ''].filter(Boolean).join(' ');
       return `<th data-sort${cls ? ` class="${cls}"` : ''} title="${title}">${w}` +
         `${start ? '<span class="po-tag" aria-hidden="true">PO</span>' : ''}` +
@@ -628,7 +707,7 @@ async function mount(host) {
        <th class="left" data-sort title="His position.">Pos</th>
        <th class="left" data-sort title="His NFL team.">Tm</th>
        <th class="left" data-sort title="Whose roster he is on this week, by first name.">Owner</th>
-       <th class="grouped" data-sort title="His season average so far — ESPN’s figure.">Avg</th>
+       <th class="grouped" data-sort title="${avgTitle}">Avg</th>
        <th data-sort title="${futTitle}">Future</th>
        <th data-sort title="${poTitle}">Playoff</th>
        <th data-sort title="Playoff minus Avg, as printed: green = projected above his average in the playoffs.">PO − Avg</th>
@@ -671,7 +750,7 @@ async function mount(host) {
   }
 
   /** One playoff week's cell: the Players page's own Bye / 0.0 OUT / — / number. */
-  function weekCell(r, week, v, scale) {
+  function weekCell(r, week, v, scale, shown) {
     const { p } = r;
     if (v === undefined) {
       return state.failed.has(week)
@@ -694,8 +773,14 @@ async function mount(host) {
       }
       return `<td class="zero" data-v="0" title="${why}">0.0</td>`;
     }
-    const heat = heatOf(v, scale);
-    return `<td${heat ? ` class="${heat.cls}"` : ''} data-v="${v}">${fmt(v)}${heatMarkHtml(heat)}</td>`;
+    // On Value (`shown`) the cell prints that projection's Value, coloured and
+    // sorted by it — the Players page's own rule.
+    const n = shown === undefined ? v : shown;
+    if (n === null) {
+      return `<td title="No Value can be said at ${esc(p.position)}.">${dash}</td>`;
+    }
+    const heat = heatOf(n, scale);
+    return `<td${heat ? ` class="${heat.cls}"` : ''} data-v="${n}">${fmt(n)}${heatMarkHtml(heat)}</td>`;
   }
 
   function rowHtml(r, weeks, heat) {
@@ -718,7 +803,7 @@ async function mount(host) {
       ${meanCell(r.playoff, heat.playoff, 'po', 'avg')}
       ${diffCell}
       ${weeks.map((w, i) => {
-        const c = weekCell(r, w, r.poValues[i], heat.weeks[i] || null);
+        const c = weekCell(r, w, r.poValues[i], heat.weeks[i] || null, r.poShown ? r.poShown[i] : undefined);
         return i === 0 ? c.replace(/^<td(?: class="([^"]*)")?/, (m, cls) => `<td class="${cls ? `${cls} ` : ''}po-start"`) : c;
       }).join('')}
     </tr>`;
@@ -737,6 +822,8 @@ async function mount(host) {
       if (v === null) return { label: `Week ${w}`, note: 'no projection, left out', value: null };
       if (v === 0 && skip) return { label: `Week ${w}`, note: zero === 'out' ? 'ruled out, left out' : '0, left out', value: null };
       if (v === 0) return { label: `Week ${w}`, note: zero === 'out' ? 'ruled out, counts 0' : 'counts 0', value: 0 };
+      // On Value the row is the Value the mean was taken of, beside its projection.
+      if (valueOn()) return { label: `Week ${w}`, note: `Value of ${fmt(v)}`, value: asValue(r.p, v) };
       return { label: `Week ${w}`, value: v };
     });
     return {
@@ -753,6 +840,14 @@ async function mount(host) {
     if (!r) return null;
     switch (el.getAttribute('data-c')) {
       case 'avg':
+        if (valueOn()) {
+          return {
+            title: r.p.name,
+            sub: 'Avg, as a Value',
+            rows: [{ label: 'Season average so far', note: 'ESPN', value: r.espnAvg === null ? null : round1(r.espnAvg) }],
+            total: { label: `Value at ${r.p.position}`, value: r.avg },
+          };
+        }
         return {
           title: r.p.name,
           sub: 'Avg',
@@ -816,6 +911,11 @@ async function mount(host) {
       lead('PO − Fut') + 'Playoff minus Future, as printed: green means projected higher in the playoffs than in the regular weeks left.',
       lead('Colour') + 'Avg, Future, Playoff and each week compare men at the same position, ' +
         'the whole list at once — a filter never moves a colour.',
+      // What Value is (rule 7) — only while there are lines, the Players page's words.
+      ...(state.base ? [lead('Value') +
+        'Points a week over the waiver line at his position; points below the starter line count ' +
+        'half, and both lines are fixed for the season. On Value, each projection is shown that way, ' +
+        'Future and Playoff are the means of them, and Avg is ESPN’s season average turned into a Value the same way.'] : []),
       state.isDemo
         ? lead('Cost') + 'Demo data costs nothing.'
         : lead('Cost') + `Each week from ${state.currentWeek ?? 'now'} through the last playoff week is read twice ` +
@@ -826,6 +926,15 @@ async function mount(host) {
 
   // --------------------------------------------------------------- wiring
 
+  // Proj | Value is a repaint and nothing more: the lines are already held.
+  host.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('#poShowToggle button[data-show]');
+    if (!btn || btn.dataset.show === state.show) return;
+    state.show = SHOW_CHOICE(btn.dataset.show);
+    prefs.set('show', state.show);
+    hidePop();
+    render();
+  });
   host.addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('#poPosFilter button[data-pos]');
     if (!btn || btn.dataset.pos === state.position) return;
@@ -900,6 +1009,13 @@ function shellHtml() {
           ${btn('ALL', 'All')}${btn('QB')}${btn('RB')}${btn('WR')}${btn('TE')}
           ${btn('FLEX', 'FLEX', 'Every running back, receiver and tight end at once. A filter only: each keeps his own position.')}
           ${btn('K')}${btn('DST')}
+        </div>
+      </div>
+      <div class="ctl" id="poShowCtl" hidden>
+        <span class="ctl-label" id="poShowLabel">Show</span>
+        <div class="segmented seg-sm" id="poShowToggle" role="group" aria-labelledby="poShowLabel">
+          <button type="button" data-show="proj" class="on">Proj</button>
+          <button type="button" data-show="value">Value</button>
         </div>
       </div>
     </div>
