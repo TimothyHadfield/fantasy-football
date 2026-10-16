@@ -535,7 +535,9 @@ const SCENARIOS = {
     ok('sent after week 4: week 4 is real', after.weeks[4].bHas200 && !after.weeks[4].bHas104, JSON.stringify(after.weeks[4]));
     ok('sent after week 4: weeks 5 and 6 have it', [5, 6].every((w) => after.weeks[w].bHas104 && !after.weeks[w].bHas200));
     const live = await child('child-season', 'live4');
-    ok('a week under way (scores in, not decided) keeps the real squads', live.weeks[4].bHas200 && !live.weeks[4].bHas104,
+    // Flipped 2026-10-15 (Tim: "I can't see the chagnes in the other
+    // sections" — the week under way was held real): it has the trade now.
+    ok('a week under way (scores in, not decided) has the trade', live.weeks[4].bHas104 && !live.weeks[4].bHas200,
       JSON.stringify(live.weeks[4]));
     ok('... and the week after it has the trade', live.weeks[5].bHas104 && !live.weeks[5].bHas200);
   },

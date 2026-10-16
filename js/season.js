@@ -956,9 +956,12 @@ export async function fetchWeekRosters(week, { byes, fresh = false, raw = false,
 // The Trade page keeps the assumed trade's moves (js/assumed-trade.js); every
 // roster this file hands a page is made with them, ON THE WAY OUT and on a
 // copy — so the store, the synced copy and every frozen record stay exactly as
-// ESPN sent them. Only weeks still to play: a week ESPN has decided, or one
-// under way (a kickoff has passed, or anybody in it has a score), keeps its
-// real squads, and so does every week up to the trade's "send after week N".
+// ESPN sent them. Only weeks ESPN has DECIDED keep their real squads, and so
+// does every week up to the trade's "send after week N". THE WEEK UNDER WAY
+// HAS THE TRADE (Tim, 2026-10-15: "I have a trade assumed in trade section and
+// I can't see the chagnes in the other sections" — on a Thursday night, with
+// week 6's first game kicked off, every page's current week was held real), as
+// the Trade page's own selected week always has.
 //
 // `assumed: false` asks for the real squads. The Trade page (which makes the
 // trade itself and also prices the real world), the readings that are KEPT
@@ -975,11 +978,7 @@ async function withAssumed(week, teams) {
     if (!moves) return teams;
     // Which weeks are played is the SCHEDULE's word; unknown is not "unplayed".
     if (!(await decidedKnown())) return teams;
-    const underWay = teams.some((t) => ((t && t.players) || []).some((p) =>
-      p && (typeof p.actual === 'number' || p.done === true)));
-    return assumedTrade.applyAssumed(teams, week, moves, {
-      played: (w) => weekIsFinal(w) || weekInPlay(w) || underWay,
-    });
+    return assumedTrade.applyAssumed(teams, week, moves, { played: (w) => weekIsFinal(w) });
   } catch {
     return teams;
   }
