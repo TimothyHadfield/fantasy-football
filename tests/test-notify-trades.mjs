@@ -461,7 +461,10 @@ if (!process.argv[2]) {
     deal.send.length === r.sendMen && deal.get.length === r.getMen &&
     same2(asPrinted(deal).send, r.sendNames) && same2(asPrinted(deal).get, r.getNames);
 
-  const live = run('live');
+  // TR_SPARE_QB: with no kicker or D/ST offered (Tim, 2026-10-16) the base
+  // stub keeps only three good rows, so the cap of three would prove nothing;
+  // the QB hole (tests/tr-stub-season.mjs, `specOf`) adds good rows.
+  const live = run('live', { TR_SPARE_QB: '1' });
   ok('live: the page boots clean and the list finishes', !live.boot && live.errors.length === 0 && !!live.ranked && live.rows.length > 0,
     live.boot || JSON.stringify([live.errors, live.ranked, live.rows && live.rows.length]));
   if (!live.boot) {

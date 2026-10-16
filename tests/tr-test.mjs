@@ -4537,7 +4537,8 @@ SCENARIOS.progress = async function progressScenario() {
     done: card('cuListA', 100),      // Ana QB1: finished
     mid: card('cuListB', 303),       // Cy WR1: mid-game, a running score
     wait: card('cuListB', 304),      // Cy WR2: not kicked off
-    bye: card('cuListA', 112),       // Bills D/ST: no game in week 8
+    // Bills D/ST, no game in week 8; or the man `TR_BYE_MAN` gives that bye.
+    bye: card('cuListA', Number(process.env.TR_BYE_MAN) || 112),
   };
   const tick = document.querySelector('#cuListB [data-man="301"] input[type="checkbox"]');
   if (tick) { tick.checked = true; fire(tick, 'change'); }

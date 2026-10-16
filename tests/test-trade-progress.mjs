@@ -36,7 +36,12 @@ const ok = (name, cond, detail = '') => {
 const eq = (a, b, msg) => ok(msg, Object.is(a, b), `got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
 
 function run(variant) {
-  const env = { ...process.env, TR_DEADLINE: String(Date.now() + 60 * 86400000) };
+  // TR_SPARE_QB: since the finder stopped offering kickers and D/STs (Tim,
+  // 2026-10-16, "stop suggesting to trade K and DEF") the base stub has three
+  // rows, all netting +10, so the order checks below could not tell one order
+  // from another; the QB hole gives rows of different nets. It takes the slot
+  // `Bills D/ST` sat in, so TR_BYE_MAN puts the week-8 bye on `Ana TE2` (110).
+  const env = { ...process.env, TR_DEADLINE: String(Date.now() + 60 * 86400000), TR_SPARE_QB: '1', TR_BYE_MAN: '110' };
   delete env.TR_PROGRESS;
   if (variant) env.TR_PROGRESS = variant;
   // Unmarked, the stub knows no kickoffs unless told: the coming week's first
@@ -93,9 +98,15 @@ const value = (list, name) => ((list.find((x) => x.name === name) || {}).v || ''
       ok('the offers run from the largest net increase (You gain + He gains, as printed) to the smallest',
         net.length === r.page.trades && net.length > 3 && net.every((v, i) => i === 0 || net[i - 1] >= v),
         r.page.rows.map((t, i) => `${t.gainText.split('/wk')[0]}${t.theirText.split('/wk')[0]}=${net[i] / 10}`).join(' '));
-      ok('and that is a different order from your own gain alone',
-        r.page.rows.some((t, i, a) => i > 0 && tenths(a[i - 1].gainText) < tenths(t.gainText)),
-        r.page.rows.map((t) => t.gainText.split('/wk')[0]).join(' '));
+      // REPLACED, 2026-10-16. Was "and that is a different order from your
+      // own gain alone". With no kicker or D/ST offered (Tim, 2026-10-16) the
+      // rows this stub keeps net the same or run the same way by either order,
+      // and rows of equal net keep the goal's order, so the claim has nothing
+      // to stand on here. It is still held in tr-test on the sample league
+      // ("NOR the order of your own gain alone"). What this stub can still
+      // show is that the order above is a real test: rows of more than one net.
+      ok('and the rows are of more than one net increase, so their order means something',
+        new Set(net).size > 1, net.map((v) => v / 10).join(' '));
       // AND WHEN THE OFFERS CANNOT BE PLAYED OUT — "The selected week" prices
       // one week, so the goal has nothing to simulate. The list used to fall
       // back to the finder's own order ("Ranked by points").

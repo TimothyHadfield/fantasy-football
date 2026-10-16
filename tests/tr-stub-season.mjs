@@ -339,7 +339,10 @@ function progressKickoff(t, week, now) {
 /** The contract's fields for one man in one week not yet final. */
 function progressFields(team, i, week, proj) {
   if (!progress() || week <= PLAYED_THROUGH) return {};
-  if (team.players[i].name === 'Bills D/ST' && week === BYE_WEEK) {
+  // The bye man: `Bills D/ST`, or the man `TR_BYE_MAN` names (see `specOf`),
+  // read off the roster as built — under `TR_SPARE_QB` slot 12 is not a D/ST.
+  const byeMan = Number(process.env.TR_BYE_MAN) === playerId(team.id, i) || specOf(team, i).name === 'Bills D/ST';
+  if (byeMan && week === BYE_WEEK) {
     return { done: true, pregame: proj, projected: 0, actual: null };
   }
   if (week !== LIVE_WEEK) return { done: false };
