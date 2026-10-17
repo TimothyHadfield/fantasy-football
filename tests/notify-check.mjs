@@ -245,6 +245,20 @@ if (process.argv[2]) {
       const lines = await mod.refresh();
       ok(Array.isArray(lines) && lines.length === r.length && lines.every((n) => n.id && n.level), 'refresh() resolves with the lines', lines && lines.length);
       ok(p.calls('schedule').length === before + 1, 'and works them out again');
+      // ANOTHER TEAM WHILE A RUN IS IN THE AIR (sweep 2026-10-16 #7): the second
+      // ask must not join the first, which is working out team 4's lines.
+      {
+        const first = mod.load();
+        p.map.set('ff.connection', JSON.stringify({ ...conn, teamId: 2 }));
+        const second = mod.load();
+        const [a, b] = await Promise.all([first, second]);
+        eq([a && a.teamId, b && b.teamId].map(Number), [ME, 2], 'ROW 7: A RUN FOR ANOTHER TEAM IS NOT JOINED TO THE ONE IN THE AIR');
+        p.map.set('ff.connection', JSON.stringify(conn));
+        const c1 = mod.load();
+        const c2 = mod.load();
+        ok(c1 === c2, 'while the same team’s ask still joins it');
+        await c1;
+      }
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }
 

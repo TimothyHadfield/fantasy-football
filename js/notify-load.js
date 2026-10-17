@@ -378,7 +378,11 @@ let inflight = null;
  * change) and never shares an earlier run.
  */
 export function load({ onUpdate = null, fresh = false } = {}) {
-  if (inflight && !fresh) {
+  const cfg = savedConfig();
+  // Joined only when it is working out the SAME league, season and team: a run
+  // for the team picked a moment ago is not this one's (sweep 2026-10-16 #7).
+  const key = cfg ? `${cfg.leagueId}|${cfg.season}|${cfg.teamId}` : 'demo';
+  if (inflight && !fresh && inflight.key === key) {
     if (onUpdate) inflight.listeners.add(onUpdate);
     return inflight.promise;
   }
@@ -388,8 +392,7 @@ export function load({ onUpdate = null, fresh = false } = {}) {
       try { fn(state); } catch { /* a listener's own problem */ }
     }
   };
-  const cfg = savedConfig();
-  const job = { listeners, promise: null };
+  const job = { listeners, promise: null, key };
   job.promise = (cfg ? runLive(cfg, emit, { fresh }) : runDemo(emit))
     .catch((err) => ({
       status: 'error', isDemo: false, notes: [], pending: false, week: null,
