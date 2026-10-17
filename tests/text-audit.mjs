@@ -219,7 +219,10 @@ async function settle(document) {
   // longer staged wording read as +7 over the ceiling). `.searching` is the
   // class every "working on it" span carries.
   const working = () => !!document.querySelector('.searching');
-  const STEP = 200, MIN = 1500, MAX = 25000, STABLE = 4;
+  // TEXT_AUDIT_MAX_MS lengthens the wait on a loaded machine (CPU at 100%), where
+// the Trade page can take longer than 25 s to price itself; a count still only
+// counts when settled.
+  const STEP = 200, MIN = 1500, MAX = Number(process.env.TEXT_AUDIT_MAX_MS) || 25000, STABLE = 4;
   let waited = 0, last = -1, stable = 0;
   while (waited < MAX) {
     await new Promise((r) => setTimeout(r, STEP));
