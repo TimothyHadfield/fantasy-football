@@ -96,3 +96,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Open:**
   - CI red on 894c243 (bell-check 11, done-check 1, notify-check, text-audit trade.html 444/429): first job next chat.
   - Tim's calls: the Playoffs "Avg" label and nav spot, the hover-only card on Playoffs names, a rostered name on Players no longer opening his row, playoff gain on Suggested rows, and the trade.html ceiling.
+
+## 2026-10-17 · Manager batch 1 (portfolio manager chat + builders)
+- **Asked (Tim, standing):** "any fixes or improvements you feel confident about go ahead and do, pretty much always. You don't have to ask me."
+- **Built (live, last 4aa14cf):** CI fixes (manager push 0f8bdfc); sweep rows 18+10 d07e270, 8 ca1afce, 14 887f80f, 17 fead285, 19 90c217f, 20 fb76585, 9 3d60de3 (extension: reload it); row 4 already fixed by 6b4c283; test-projhist-cloud expectation fixed 4aa14cf (sync reads the index once, on purpose).
+- **Verified how:** CI run 39065492885 green on all 5 shards and deployed (re-run after a test-store goesOut flake). Touched suites locally (projhist-cloud 132, cloud 247, cloud-wiring 356, leagues 140, extension 335, wv-test 1284 and others). New checks for rows 9, 18, 19, 20 seen failing first.
+- **Open:** test-store goesOut flaky (load-order race). Rows 8, 10, 14, 17 have no new tests (timing races, read only). Row 9 depends on ESPN sending `mStatus` for earlier seasons.
