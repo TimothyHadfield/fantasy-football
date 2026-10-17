@@ -190,6 +190,10 @@ for (const bad of ['../2026', '2026/../..', '20261', '202', 'abcd', '', '20 6'])
   const u = new URL(w.calls[0].url);
   const views = u.searchParams.getAll('view');
   eq(views.join(','), 'mTeam,mRoster,kona_player_info', 'unknown views are dropped, known ones kept in order');
+  // js/leagues.js asks for mStatus (status.previousSeasons) through the bridge
+  // too (sweep 2026-10-16 row 9): it must pass the allow-list.
+  await w.send(okMsg({ views: ['mTeam', 'mSettings', 'mStatus'] }));
+  eq(new URL(w.calls[1].url).searchParams.getAll('view').join(','), 'mTeam,mSettings,mStatus', 'the league lookup keeps mStatus');
 }
 {
   const w = makeWorker();

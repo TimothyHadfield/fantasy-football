@@ -94,7 +94,7 @@ const TRADE_PATH = '/football/team/trade';
 
 const ALLOWED_VIEWS = new Set([
   'mSettings', 'mTeam', 'mRoster', 'mMatchup', 'mMatchupScore',
-  'mDraftDetail', 'mTransactions2', 'mNav', 'mStandings',
+  'mDraftDetail', 'mTransactions2', 'mNav', 'mStandings', 'mStatus',
   'kona_player_info', 'mPositionalRatings', 'mPendingTransactions',
   // ESPN's injury details (out for the season, return date): js/espn.js
   // `fetchInjuryDetails`. A read like kona_player_info, with a filterIds filter.
