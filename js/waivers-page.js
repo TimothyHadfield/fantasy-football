@@ -972,7 +972,9 @@ async function fetchWeeks(missing, token) {
       } catch {
         ok = false;
       }
-      state.inFlight.delete(`wire:${week}`);
+      // Only this league's marker: a reply from a league already left must not
+      // clear the new league's claim on the same week number.
+      if (token === state.token) state.inFlight.delete(`wire:${week}`);
 
       // A response about a league we have already left is dropped here, before
       // it can repaint a table it is no longer about.
@@ -991,7 +993,7 @@ async function fetchWeeks(missing, token) {
         } catch {
           got = new Map();
         }
-        rosters.forEach((w) => state.inFlight.delete(`roster:${w}`));
+        if (token === state.token) rosters.forEach((w) => state.inFlight.delete(`roster:${w}`));
 
         if (token !== state.token) return;
         for (const week of rosters) {
@@ -1568,7 +1570,7 @@ async function ensurePast(wire) {
     } catch {
       got = new Map();
     }
-    need.forEach((w) => state.past.inFlight.delete(`roster:${w}`));
+    if (token === state.token) need.forEach((w) => state.past.inFlight.delete(`roster:${w}`));
     if (token !== state.token) return;
     for (const w of need) {
       if (got.has(w)) absorbPastRosters(got.get(w), w);
@@ -1588,7 +1590,7 @@ async function ensurePast(wire) {
       } catch {
         players = null;
       }
-      state.past.inFlight.delete(`wire:${w}`);
+      if (token === state.token) state.past.inFlight.delete(`wire:${w}`);
       if (token !== state.token) return;
       if (players) absorbPastWire(players, w);
       else state.past.failed.add(`wire:${w}`);
