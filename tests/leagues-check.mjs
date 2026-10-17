@@ -25,13 +25,13 @@ import { REPO, moduleUrl } from './repo.mjs';
 import { emit } from './emit.mjs';
 
 const PAGE = 'leagues.html';
-const SCENARIOS = ['list', 'add', 'remove', 'empty', 'fill'];
+const SCENARIOS = ['list', 'add', 'remove', 'empty', 'fill', 'fill-once'];
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 const words = (s) => (String(s || '').trim().match(/\S+/g) || []).length;
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
-async function boot(stub) {
+async function boot(stub, seed = {}) {
   const html = readFileSync(path.join(REPO, PAGE), 'utf8');
   const { window, document } = parseHTML(html);
   const assigned = [];
@@ -43,7 +43,7 @@ async function boot(stub) {
     assign: (href) => assigned.push(String(href)),
   };
   window.postMessage = () => {};
-  const map = new Map();
+  const map = new Map(Object.entries(seed));
   const localStorage = {
     get length() { return map.size; },
     key: (i) => [...map.keys()][i] ?? null,
@@ -127,6 +127,30 @@ if (process.argv[2]) {
       ok(p.calls().filter((c) => c[0] === 'lookup').map((c) => c[1]).join() === '777', 'and only that league is looked up', JSON.stringify(p.calls()));
       ok(r[1] && r[1].seasons.join() === '2026,2025', 'a league whose seasons are known is left alone', r[1] && r[1].seasons);
       ok(p.errors.length === 0 && p.msg() === '', 'quietly: no message, no error', p.errors.join(' | ') + p.msg());
+    }
+    if (scenario === 'fill-once') {
+      // Sweep 2026-10-16 row 19: a league ESPN knows for one season only was
+      // looked up again on every menu load. Checked once, it is left alone.
+      const one = { leagueId: '777', name: 'Bar League', teamCount: 10, seasons: [2026], teams: {}, lastOpened: null };
+      const solo = { 777: { ok: true, leagueId: '777', name: 'Bar League', teamCount: 10, seasons: [2026], teams: [] } };
+      const first = await boot({ list: [one], current: { leagueId: '777', season: 2026, teamId: null }, lookups: solo });
+      await tick(40);
+      const looked = first.calls().filter((c) => c[0] === 'lookup').length;
+      ok(looked === 1, 'the first menu load looks it up once', JSON.stringify(first.calls()));
+      const kept = {};
+      for (let i = 0; i < localStorage.length; i++) kept[localStorage.key(i)] = localStorage.getItem(localStorage.key(i));
+      // The next menu load, in a fresh child, with what this one left behind.
+      const next = spawnSync(process.execPath, ['--import', './leagues-register.mjs', fileURLToPath(import.meta.url), 'fill-again', JSON.stringify(kept)],
+        { encoding: 'utf8', cwd: path.dirname(fileURLToPath(import.meta.url)), timeout: 60000 });
+      const again = Number(((next.stdout || '').match(/LOOKUPS=(\d+)/) || [])[1]);
+      ok(again === 0, 'the next menu load does not ask ESPN again', (next.stdout || '') + (next.stderr || ''));
+    }
+    if (scenario === 'fill-again') {
+      const one = { leagueId: '777', name: 'Bar League', teamCount: 10, seasons: [2026], teams: {}, lastOpened: null };
+      const solo = { 777: { ok: true, leagueId: '777', name: 'Bar League', teamCount: 10, seasons: [2026], teams: [] } };
+      const p = await boot({ list: [one], current: { leagueId: '777', season: 2026, teamId: null }, lookups: solo }, JSON.parse(process.argv[3] || '{}'));
+      await tick(40);
+      ok(true, `LOOKUPS=${p.calls().filter((c) => c[0] === 'lookup').length}`);
     }
     if (scenario === 'list') {
       // The stub reads its settings when it is first imported, so: boot first.

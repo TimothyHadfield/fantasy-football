@@ -267,13 +267,27 @@ window.addEventListener('focus', refresh);
 // A league that came in through the connection bar is known for one season
 // only. Its earlier seasons are asked for once, here, quietly: a failure (or
 // the phone's synced copy, which asks ESPN nothing) leaves the row as it is.
+//
+// A league ESPN answers for with one season only is remembered as checked for
+// a day, so the menu does not ask about it again on every load.
+const SEASONS_CHECKED = 'ff.seasonsChecked';
+const SEASONS_RECHECK_MS = 24 * 3600 * 1000;
+function seasonsChecked() {
+  try { return JSON.parse(localStorage.getItem(SEASONS_CHECKED) || '{}') || {}; } catch { return {}; }
+}
 async function fillSeasons() {
   let filled = false;
+  const checked = seasonsChecked();
+  const now = Date.now();
   for (const l of readList()) {
     if ((l.seasons || []).length > 1) continue;
+    const id = String(l.leagueId);
+    if (now - (Number(checked[id]) || 0) < SEASONS_RECHECK_MS) continue;
     let r = null;
-    try { r = await leagues.lookup(String(l.leagueId)); } catch { r = null; }
+    try { r = await leagues.lookup(id); } catch { r = null; }
     if (!r || !r.ok || !(r.seasons || []).length) continue;
+    checked[id] = now;
+    try { localStorage.setItem(SEASONS_CHECKED, JSON.stringify(checked)); } catch { /* checked again next load */ }
     try {
       leagues.add({ leagueId: String(l.leagueId), name: r.name, teamCount: r.teamCount, seasons: r.seasons });
     } catch { continue; }
