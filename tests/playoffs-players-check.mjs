@@ -439,6 +439,21 @@ click('#poShowToggle button[data-show="value"]');
   host3.remove();
 }
 
+// The one-line "Reading the league's players…" row spans the whole table, as
+// drawn before the list is in (sweep 2026-10-16 #11: it stopped one short).
+{
+  const host4 = document.createElement('section');
+  host4.className = 'panel';
+  document.body.appendChild(host4);
+  const going = mod.mountPlayoffPlayers(host4);
+  const td = host4.querySelector('tbody tr.empty-row td');
+  const nHeads = host4.querySelectorAll('thead th').length;
+  ok(Boolean(td), 'a list still loading draws its one-line row');
+  eq(td ? Number(td.getAttribute('colspan')) : null, nHeads, 'and that row spans every column of the head');
+  await going;
+  host4.remove();
+}
+
 eq(fetchCalls.length, 0, 'the sample league asks the network for nothing');
 eq(rejections.length, 0, 'no unhandled rejection');
 

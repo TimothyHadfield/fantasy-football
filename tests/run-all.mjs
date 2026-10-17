@@ -133,6 +133,7 @@ const SUITES = [
   ['wv-marks-check.mjs', 'Players: Show my players, the diamond / coin by a name and its filter, and the green name for a bye already played'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
   ['playoffs-players-check.mjs', 'the Playoffs page’s player list: its columns, first-name owners, Future and Playoff as means with every 0 week counted, Playoff − Avg, free agents'],
+  ['playoffs-live-check.mjs', 'Playoffs player list on a live league: Values asked under the league being read, and a league connected mid-load is read (sweep 2026-10-16 rows 12, 13)'],
   ['done-check.mjs', 'the Players page mid-week: a finished game shows the score, plain, in both tables'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
   ['an-test.mjs', 'the analysis page'],

@@ -419,11 +419,12 @@ async function mount(host, opts = {}) {
     reset();
     const token = state.token;
     state.isDemo = false;
-    wireValue(false);
     state.loading = true;
     state.leagueId = String(saved.leagueId);
     espn.configure({ leagueId: saved.leagueId, season: saved.season });
-    // After configure, so the lines asked for are this league's.
+    // Both after configure, so the Values and the lines asked for are this
+    // league's (sweep 2026-10-16 #12: Values were asked under the last one).
+    wireValue(false);
     loadLines(false);
     render();
 
@@ -648,7 +649,8 @@ async function mount(host, opts = {}) {
     view = { rows: new Map(all.map((r) => [String(r.id), r])) };
 
     table.querySelector('thead').innerHTML = headHtml(weeks);
-    const cols = 8 + weeks.length;
+    // Nine fixed columns (Player … PO − Fut, `headHtml`), then one per week.
+    const cols = 9 + weeks.length;
     const tbody = table.querySelector('tbody');
     if (!shown.length) {
       const why = state.loading ? 'Reading the league’s players…'
@@ -974,8 +976,10 @@ async function mount(host, opts = {}) {
     onConnection((conn) => {
       if (!conn) return;
       const saved = savedConfig();
+      // The same league is already on screen or loading. A DIFFERENT league
+      // loads even while one is loading (sweep 2026-10-16 #13); the token
+      // stops the older read drawing.
       if (!saved || (!state.isDemo && state.leagueId === String(saved.leagueId))) return;
-      if (state.loading && !state.isDemo) return;
       loadLive(saved).catch((err) => failed(host, err));
     });
     document.addEventListener('ff:refresh', (e) => {
