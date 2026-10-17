@@ -576,6 +576,19 @@ fake.log.reads = 0;
 await cloud.cloudStatus(LEAGUE, SEASON);
 eq(fake.log.reads, 1, 'cloudStatus costs exactly ONE read — it is what a page asks before deciding to read at all');
 
+// One wire week at a time, right after a page's first read (sweep 2026-10-16
+// row 20): the index just read is reused, so each week is ONE document.
+fake.log.reads = 0;
+const oneWire = await cloud.readDown(LEAGUE, SEASON, { shapes: ['wire'], weeks: [4], metaMaxAgeMs: 60000 });
+eq(fake.log.reads, 1, 'a wire week read just after the index costs one read, not two');
+eq(oneWire.wire.size, 1, 'and still returns that week');
+fake.log.reads = 0;
+await cloud.readDown(LEAGUE, SEASON, { shapes: ['wire'], weeks: [4] });
+eq(fake.log.reads, 2, 'without the option it reads the index as before');
+// Schedule alongside the weeks, not after them: same answer, same order of `missing`.
+const together = await cloud.readDown(LEAGUE, SEASON, { weeks: [1, 2] });
+ok('the schedule still comes back with the weeks', together.schedule && together.rosters.size === 2 && together.wire.size === 2);
+
 // =========================================================================
 // 4. THE SYNC TIMESTAMP, AND STALENESS PER SHAPE
 // =========================================================================
@@ -916,6 +929,8 @@ same(r.missing.sort(), ['week 6 rosters', 'week 9 rosters'], 'and both are named
   const dropFake = makeFake();
   cloud.configure({ transport: dropFake, ownerUid: '' });
   const first = await cloud.syncUp(LEAGUE, SEASON, payload);
+  // The index a readDown remembers (row 20) is dropped by the next sync.
+  await cloud.readDown(LEAGUE, SEASON, { shapes: ['wire'], weeks: [1] });
   await new Promise((res) => setTimeout(res, 5)); // a later sync has a later stamp
   const half = await cloud.syncUp(LEAGUE, SEASON, {
     ...payload,
@@ -923,6 +938,8 @@ same(r.missing.sort(), ['week 6 rosters', 'week 9 rosters'], 'and both are named
     wire: new Map(),
   });
   eq(half.ok, true, 'a sync that read only some weeks still goes up');
+  const memo = await cloud.readDown(LEAGUE, SEASON, { shapes: ['wire'], weeks: [1], metaMaxAgeMs: 60000 });
+  eq(memo.ages.rosters.syncedAt, half.syncedAt, 'a sync drops the remembered index: the next read sees the new one');
   ok('(the two syncs carry different stamps, so the age checks below mean something)', half.syncedAt !== first.syncedAt);
   const st = await cloud.cloudStatus(LEAGUE, SEASON);
   same(st.weeks.rosters, WEEKS, 'A SYNC THAT DROPPED PARTWAY STILL LISTS EVERY WEEK OF ROSTERS SYNCED BEFORE');

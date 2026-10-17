@@ -1551,7 +1551,9 @@ async function wireWeekNow(week, limit = WIRE_LIMIT) {
     const { leagueId, season } = espn.getConfig();
     if (realLeague(leagueId)) {
       try {
-        const res = await cloud.readDown(leagueId, season, { shapes: ['wire'], weeks: [w] });
+        // The index this page just read is reused for a minute: one document a
+        // week instead of two (sweep 2026-10-16 row 20).
+        const res = await cloud.readDown(leagueId, season, { shapes: ['wire'], weeks: [w], metaMaxAgeMs: 60000 });
         const players = res && res.ok && res.wire instanceof Map ? res.wire.get(w) : null;
         // Sliced to the limit asked for: the sync stores WIRE_LIMIT men, and a
         // page asking for fewer must list the same ones it would list live.

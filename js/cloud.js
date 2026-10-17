@@ -1129,6 +1129,7 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
     })),
   };
 
+  metaMemo = null;
   try {
     await t.setDoc(base, meta);
     wrote++;
@@ -1645,7 +1646,13 @@ export async function cloudStatus(leagueId, season, { now = Date.now() } = {}) {
  * @param {number[]} [opts.weeks]   only these weeks; default every week synced
  * @param {string[]} [opts.shapes]  any of 'rosters', 'wire', 'schedule'
  */
-export async function readDown(leagueId, season, { weeks, shapes, now = Date.now() } = {}) {
+// The league index the last readDown read, for a caller that asks again within
+// moments (`metaMaxAgeMs`): the Players page reading the phone's copy one wire
+// week at a time re-read it for every week (sweep 2026-10-16 row 20). A sync
+// that writes the index drops it.
+let metaMemo = null; // { base, at, meta }
+
+export async function readDown(leagueId, season, { weeks, shapes, now = Date.now(), metaMaxAgeMs = 0 } = {}) {
   // Every shape a caller might reach for, present on EVERY return including
   // the failures. A page that has to guard each field before drawing is a page
   // that will one day forget to, and the whole rule here is that the absence
@@ -1676,11 +1683,17 @@ export async function readDown(leagueId, season, { weeks, shapes, now = Date.now
   let reads = 0;
 
   let meta;
-  try {
-    meta = await t.getDoc(base);
-    reads++;
-  } catch (err) {
-    return { ...empty, ok: false, found: false, reads, reason: readable(err, 'Could not read the league index.') };
+  const memo = Number(metaMaxAgeMs) > 0 && metaMemo && metaMemo.base === base &&
+    Date.now() - metaMemo.at <= Number(metaMaxAgeMs) ? metaMemo : null;
+  if (memo) meta = memo.meta;
+  else {
+    try {
+      meta = await t.getDoc(base);
+      reads++;
+    } catch (err) {
+      return { ...empty, ok: false, found: false, reads, reason: readable(err, 'Could not read the league index.') };
+    }
+    metaMemo = meta && meta.v === SCHEMA ? { base, at: Date.now(), meta } : null;
   }
   if (!meta || meta.v !== SCHEMA) {
     return {
@@ -1741,23 +1754,29 @@ export async function readDown(leagueId, season, { weeks, shapes, now = Date.now
     }
   };
 
-  if (want.has('rosters')) {
-    await runBatched(pick(meta.weeks && meta.weeks.rosters), async (week) => {
-      const got = await fetchOne(`${base}/rosters/${enc(week)}`);
-      if (got && Array.isArray(got.teams)) out.rosters.set(Number(week), got.teams.map(growTeam));
-      else out.missing.push(`week ${week} rosters`);
-    });
-  }
+  // The schedule is read alongside the weeks rather than after them (sweep
+  // 2026-10-16 row 20); `missing` keeps its order: rosters, wire, schedule.
+  const missWeeks = [];
+  const missSchedule = [];
+  const readWeeks = async () => {
+    if (want.has('rosters')) {
+      await runBatched(pick(meta.weeks && meta.weeks.rosters), async (week) => {
+        const got = await fetchOne(`${base}/rosters/${enc(week)}`);
+        if (got && Array.isArray(got.teams)) out.rosters.set(Number(week), got.teams.map(growTeam));
+        else missWeeks.push(`week ${week} rosters`);
+      });
+    }
+    if (want.has('wire')) {
+      await runBatched(pick(meta.weeks && meta.weeks.wire), async (week) => {
+        const got = await fetchOne(`${base}/wire/${enc(week)}`);
+        if (got && Array.isArray(got.players)) out.wire.set(Number(week), got.players);
+        else missWeeks.push(`week ${week} wire`);
+      });
+    }
+  };
 
-  if (want.has('wire')) {
-    await runBatched(pick(meta.weeks && meta.weeks.wire), async (week) => {
-      const got = await fetchOne(`${base}/wire/${enc(week)}`);
-      if (got && Array.isArray(got.players)) out.wire.set(Number(week), got.players);
-      else out.missing.push(`week ${week} wire`);
-    });
-  }
-
-  if (want.has('schedule')) {
+  const readSchedule = async () => {
+    if (!want.has('schedule')) return;
     const got = await fetchOne(`${base}/parts/schedule`);
     if (got && Array.isArray(got.games)) {
       // Rebuild `byWeek` rather than storing it: it is a pure regrouping of
@@ -1769,9 +1788,12 @@ export async function readDown(leagueId, season, { weeks, shapes, now = Date.now
       }
       out.schedule = { ...got, byWeek };
     } else {
-      out.missing.push('schedule');
+      missSchedule.push('schedule');
     }
-  }
+  };
+
+  await Promise.all([readWeeks(), readSchedule()]);
+  out.missing.push(...missWeeks, ...missSchedule);
 
   const s = meta.syncedShapes || {};
   out.reads = reads;
