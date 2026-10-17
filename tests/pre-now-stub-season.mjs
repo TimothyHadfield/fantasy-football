@@ -14,6 +14,7 @@
 import {
   SEASON, WEEKS, PLAYED, TEAMS, SCORING, CURRENT, hasRest, restOf, teamsForWeek, wireForWeek,
 } from './pre-now-fixture.mjs';
+import { syncedCopy } from './cloud-copy-shape.mjs';
 
 const SCEN = process.env.FF_SCEN || 'live';
 export const calls = [];
@@ -84,8 +85,15 @@ export async function fetchWireWeek(week) {
 
 export async function cloudSource() {
   calls.push('cloudSource');
-  if (SCEN === 'synced') return { weeks: { rosters: WEEKS, wire: [] }, byes: {} };
-  if (SCEN === 'syncedwire') return { weeks: { rosters: WEEKS, wire: [3] }, byes: {} };
+  // js/cloud.js `readDown`'s own shape (tests/cloud-copy-shape.mjs, held to
+  // the real one by test-cloud.mjs).
+  const copy = (wire) => syncedCopy({
+    season, leagueName: 'Fixture League', teams: TEAMS.map((t) => ({ ...t })),
+    rosters: new Map(WEEKS.map((w) => [w, rosters(w)])),
+    weeks: { rosters: WEEKS, wire },
+  });
+  if (SCEN === 'synced') return copy([]);
+  if (SCEN === 'syncedwire') return copy([3]);
   return null;
 }
 

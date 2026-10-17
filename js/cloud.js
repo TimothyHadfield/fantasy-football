@@ -1082,6 +1082,24 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
     }
   }
 
+  // THE WEEKS AN EARLIER SYNC WROTE STAY LISTED. A week ESPN refused this time
+  // (a dropped connection partway through `buildCloudPayload`) is simply left
+  // out of the payload, and its document from the last sync is still up
+  // there. Listing only this sync's weeks would hide those documents from the
+  // phone (sweep 2026-10-16 row 6). One read of the index this sync is about
+  // to replace; a failed read merges nothing, as before.
+  let prev = null;
+  try {
+    const got = await t.getDoc(base);
+    if (got && got.v === SCHEMA) prev = got;
+  } catch { /* nothing to merge with */ }
+  const prevWeeks = (prev && prev.weeks) || {};
+  const prevShapes = (prev && prev.syncedShapes) || {};
+  const union = (now, before) => [...new Set([
+    ...now,
+    ...(Array.isArray(before) ? before.map(Number).filter(Number.isFinite) : []),
+  ])].sort((a, b) => a - b);
+
   const meta = {
     v: SCHEMA,
     kind: 'meta',
@@ -1093,15 +1111,16 @@ export async function syncUp(leagueId, season, payload = {}, { onProgress, decis
     syncedAt,
     // Per SHAPE, because they do not decay at the same rate. A page needs to
     // be able to say "these rosters are four days old" while refusing to draw
-    // a wire of the same age at all.
+    // a wire of the same age at all. A shape this sync wrote none of keeps the
+    // age of the sync that did.
     syncedShapes: {
-      rosters: rosterWeeks.length ? syncedAt : null,
-      wire: wireWeeks.length ? syncedAt : null,
-      schedule: hasSchedule ? syncedAt : null,
+      rosters: rosterWeeks.length ? syncedAt : (prevShapes.rosters || null),
+      wire: wireWeeks.length ? syncedAt : (prevShapes.wire || null),
+      schedule: hasSchedule ? syncedAt : (prevShapes.schedule || null),
     },
     weeks: {
-      rosters: rosterWeeks.map(([w]) => w),
-      wire: wireWeeks.map(([w]) => w),
+      rosters: union(rosterWeeks.map(([w]) => w), prevWeeks.rosters),
+      wire: union(wireWeeks.map(([w]) => w), prevWeeks.wire),
     },
     json: toChunks(JSON.stringify({
       leagueName: payload.leagueName || '',
@@ -1641,6 +1660,7 @@ export async function readDown(leagueId, season, { weeks, shapes, now = Date.now
     missing: [],
     reads: 0,
     syncedAt: null,
+    weeks: { rosters: [], wire: [] },
     ages: noAges(now),
   };
 
@@ -1691,6 +1711,13 @@ export async function readDown(leagueId, season, { weeks, shapes, now = Date.now
     rosters: new Map(),
     wire: new Map(),
     missing: [],
+    // Which weeks the copy HOLDS, whatever `weeks` narrowed this read to: the
+    // same list cloudStatus reports. Notifications and Stats read it off
+    // `season.cloudSource()` to know which weeks they may ask for.
+    weeks: {
+      rosters: ((meta.weeks && meta.weeks.rosters) || []).slice(),
+      wire: ((meta.weeks && meta.weeks.wire) || []).slice(),
+    },
     reason: '',
   };
 

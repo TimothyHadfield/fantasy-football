@@ -533,6 +533,22 @@ eq(down.leagueName, payload.leagueName, 'the league name survives');
 same(down.teams, payload.teams, 'the team list survives');
 same(down.byes, payload.byes, 'the bye weeks survive');
 
+// WHICH WEEKS THE COPY HOLDS, as cloudStatus says it. `season.cloudSource()`
+// hands readDown's result straight to Notifications (`cloud.weeks`, for the
+// coming weeks' notes and pick-ups) and Stats (the pre-now wire). Without it
+// both read "nothing held" on the phone (sweep 2026-10-16 row 1).
+same(down.weeks, { rosters: WEEKS, wire: WEEKS }, 'READDOWN SAYS WHICH WEEKS OF ROSTERS AND WIRE THE COPY HOLDS');
+
+// The stubs' synced copy (tests/cloud-copy-shape.mjs) has exactly readDown's
+// keys, so no stub can invent a field the phone never gets.
+{
+  const { syncedCopy } = await import('./cloud-copy-shape.mjs');
+  const stub = syncedCopy();
+  same(Object.keys(stub).sort(), Object.keys(down).sort(), 'the test stubs’ synced copy has exactly the keys readDown returns');
+  same(Object.keys(stub.ages).sort(), Object.keys(down.ages).sort(), 'and the same per-shape ages');
+  same(Object.keys(stub.ages.wire).sort(), Object.keys(down.ages.wire).sort(), 'each with the same fields');
+}
+
 // =========================================================================
 // 3. WHAT A PAGE LOAD COSTS
 // =========================================================================
@@ -554,6 +570,7 @@ const short = await cloud.readDown(LEAGUE, SEASON, { weeks: [1, 2, 3] });
 eq(fake.log.reads, 8, 'a three-week span costs 8 reads: index, schedule, three rosters, three wire');
 eq(short.rosters.size, 3, 'a narrowed span returns only the weeks asked for');
 same([...short.rosters.keys()], [1, 2, 3], 'and they are the right weeks');
+same(short.weeks && short.weeks.rosters, WEEKS, 'a narrowed read still says every week the copy holds');
 
 fake.log.reads = 0;
 await cloud.cloudStatus(LEAGUE, SEASON);
@@ -852,6 +869,7 @@ cloud.configure({ transport: brokenReads });
 r = await mustReturn('readDown when Firestore refuses the read', () => cloud.readDown(LEAGUE, SEASON));
 eq(r.ok, false, 'a refused read fails quietly');
 ok('and still hands back empty shapes', r.rosters instanceof Map && r.wire instanceof Map);
+same(r.weeks, { rosters: [], wire: [] }, 'including an empty week list, never an undefined one');
 r = await mustReturn('cloudStatus when Firestore refuses the read', () => cloud.cloudStatus(LEAGUE, SEASON));
 eq(r.ok, false, 'a refused status read fails quietly');
 
@@ -887,6 +905,33 @@ eq(r.rosters.size, 11, 'the eleven good weeks come back');
 ok('the missing week is absent from the Map, not present and empty', !r.rosters.has(6));
 ok('the corrupt week is absent too', !r.rosters.has(9));
 same(r.missing.sort(), ['week 6 rosters', 'week 9 rosters'], 'and both are named so a page can say which');
+
+// --- a sync whose ESPN reads drop partway (sweep 2026-10-16 row 6) ---
+//
+// `buildCloudPayload` leaves out a week ESPN refused, and the index is written
+// whole from what this sync read. A dropped connection after the schedule used
+// to write `weeks.rosters: []` and the phone lost every week synced before,
+// though their documents were still there.
+{
+  const dropFake = makeFake();
+  cloud.configure({ transport: dropFake, ownerUid: '' });
+  const first = await cloud.syncUp(LEAGUE, SEASON, payload);
+  await new Promise((res) => setTimeout(res, 5)); // a later sync has a later stamp
+  const half = await cloud.syncUp(LEAGUE, SEASON, {
+    ...payload,
+    rosters: new Map(WEEKS.filter((w) => w <= 4).map((w) => [w, payload.rosters.get(w)])),
+    wire: new Map(),
+  });
+  eq(half.ok, true, 'a sync that read only some weeks still goes up');
+  ok('(the two syncs carry different stamps, so the age checks below mean something)', half.syncedAt !== first.syncedAt);
+  const st = await cloud.cloudStatus(LEAGUE, SEASON);
+  same(st.weeks.rosters, WEEKS, 'A SYNC THAT DROPPED PARTWAY STILL LISTS EVERY WEEK OF ROSTERS SYNCED BEFORE');
+  same(st.weeks.wire, WEEKS, 'and a sync that read no wire at all keeps every wire week');
+  eq(st.ages.wire.syncedAt, first.syncedAt, 'the wire keeps the age of the sync that wrote it, not "never"');
+  eq(st.ages.rosters.syncedAt, half.syncedAt, 'rosters this sync did write carry its stamp');
+  const back = await cloud.readDown(LEAGUE, SEASON, { shapes: ['rosters', 'wire'] });
+  eq([back.rosters.size, back.wire.size].join(), '13,13', 'and the phone still reads all thirteen weeks of each');
+}
 
 // --- a document written by a future version of this module ---
 

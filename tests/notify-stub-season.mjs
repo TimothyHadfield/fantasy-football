@@ -34,6 +34,8 @@
 // Only what js/notify-load.js reads is here. It asks for each read by name
 // and goes without one that is missing, so nothing else is needed.
 
+import { syncedCopy } from './cloud-copy-shape.mjs';
+
 const cfg = () => (globalThis.__notifyStub ||= {});
 const log = (entry) => { (cfg().calls ||= []).push(entry); };
 
@@ -136,11 +138,18 @@ export async function fetchWireWeek(week) {
 export async function fetchFloors() { return new Map(); }
 
 export async function cloudSource() {
-  // `weeks` as js/cloud.js `readDown` reports them: the weeks the copy holds.
+  // js/cloud.js `readDown`'s own shape (tests/cloud-copy-shape.mjs, held to
+  // the real one by test-cloud.mjs): `weeks` are the weeks the copy holds.
+  // Two hours old, as `weekReadAt` below says.
+  if (!cfg().cloud) return null;
   const all = Array.from({ length: 17 }, (_, i) => i + 1);
-  return cfg().cloud
-    ? { byes: { ...BYES }, at: Date.now() - 2 * 60 * 60 * 1000, weeks: { rosters: all, wire: cfg().cloudWire || [NOW_WEEK] } }
-    : null;
+  return syncedCopy({
+    leagueName: 'Stub League',
+    byes: { ...BYES },
+    rosters: new Map(all.map((w) => [w, buildTeams(w)])),
+    weeks: { rosters: all, wire: cfg().cloudWire || [NOW_WEEK] },
+    ageMs: 2 * 60 * 60 * 1000,
+  });
 }
 export function weekReadAt() { return Date.now() - 2 * 60 * 60 * 1000 - 1000; }
 
