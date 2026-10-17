@@ -3483,6 +3483,18 @@ SCENARIOS.customHint = async function customHint() {
   $('cuTeamB').value = '2';
   fire($('cuTeamB'), 'change');
   await settle(800);
+  // TR_HINT_CUT=1: Send = "after week N", the first week offered (sweep
+  // 2026-10-16 #4: the hint was priced with no send week).
+  let cut = null;
+  if (process.env.TR_HINT_CUT && $('cuSendAfter')) {
+    const opt = [...$('cuSendAfter').querySelectorAll('option')].find((o) => o.getAttribute('value'));
+    if (opt) {
+      cut = Number(opt.getAttribute('value'));
+      $('cuSendAfter').value = opt.getAttribute('value');
+      fire($('cuSendAfter'), 'change');
+      await settle(400);
+    }
+  }
   const panel = $('customPanel');
   const waitDone = async () => {
     for (let i = 0; i < 400; i++) {
@@ -3542,7 +3554,8 @@ SCENARIOS.customHint = async function customHint() {
     }
     await setTick(id, false);
   }
-  return { errors, heads, untouched, tries: tries.slice(-6), triedN: tries.length, found };
+  const cutShown = $('cuSendAfter') ? $('cuSendAfter').value : null;
+  return { errors, heads, untouched, tries: tries.slice(-6), triedN: tries.length, found, cut, cutShown };
 };
 
 /**
@@ -4869,6 +4882,16 @@ SCENARIOS.sendAfter = async function sendAfter() {
   await waitSug();
   await settle(400);
   out.later = read();
+  // The orange hint must finish under the send week too (sweep 2026-10-16 #4:
+  // it was priced with no cut and its key taken under another, so `data-hint`
+  // stayed 'wait' for good). 'none' is final as well.
+  out.laterHint = await (async () => {
+    const panel = $('customPanel');
+    const t0 = Date.now();
+    while (Date.now() - t0 < max && !/^(done|none)$/.test(panel.getAttribute('data-hint') || '')) await settle(50);
+    return { hint: panel.getAttribute('data-hint'),
+      orange: [...document.querySelectorAll('.cu-man.cu-hint')].map((r) => r.getAttribute('data-man')) };
+  })();
 
   // The pop-up of the deal being built, under the same send week.
   fire($('cuOpen'), 'click');
@@ -9784,6 +9807,26 @@ if (!bm.boot) {
       ok('HINT: once in range, no orange (the deal is kept)', f.after.orange.length === 0, JSON.stringify(f.after.orange));
       ok('RED: a ticked red man stays red, not orange',
         !!f.redTicked && f.redTicked.red.includes(f.redTicked.id) && !f.redTicked.orange.includes(f.redTicked.id), JSON.stringify(f.redTicked));
+    }
+  }
+  // The same with Send = "after week N" (sweep 2026-10-16 #4): the hint was
+  // priced over every week and keyed under another cut, so it never finished.
+  const cc = run('customHint', { stub: true, env: {
+    FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players }), TR_PAST_TRADES, TR_SEASON_AVG: '1', TR_HINT_CUT: '1' } });
+  ok('HINT AFTER WEEK N: the scenario boots, Send on a week', !cc.boot && Number.isFinite(cc.cut) && cc.cutShown === String(cc.cut),
+    cc.boot || JSON.stringify([cc.cut, cc.cutShown]));
+  if (!cc.boot) {
+    const val = (s, word) => num((String(s || '').match(new RegExp(`${word}\\s*([+−-]?\\d+(?:\\.\\d+)?)`)) || [])[1] || 'NaN');
+    const wk = (s) => num((String(s || '').match(/([+−-]?\d+(?:\.\d+)?)\s*\/wk/) || [])[1] || 'NaN');
+    const inRange = (x) => val(x.top, 'Value') > 0 && wk(x.you) >= 1 && wk(x.you) <= 4 && val(x.top, 'Total') >= 0 && val(x.top, 'Total') <= 5;
+    ok('HINT AFTER WEEK N: no console errors', cc.errors.length === 0, cc.errors.slice(0, 2).join(' | '));
+    ok('HINT AFTER WEEK N: every tick finishes its hint', cc.tries.every((t) => t.hint === 'done'), JSON.stringify(cc.tries).slice(0, 400));
+    const f = cc.found;
+    ok('HINT AFTER WEEK N: a real tick turned some man orange', !!f, `${cc.triedN} ticks tried; ${JSON.stringify(cc.tries).slice(0, 400)}`);
+    if (f) {
+      ok('HINT AFTER WEEK N: ticking the orange man puts Value, You and Total in range, as printed under that week',
+        inRange(f.after), JSON.stringify(f.after));
+      ok('HINT AFTER WEEK N: once in range, no orange', f.after.orange.length === 0, JSON.stringify(f.after.orange));
     }
   }
 }

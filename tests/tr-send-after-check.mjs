@@ -64,6 +64,9 @@ ok('each choice reads "after week N"', opts.slice(1).every((o) => o.text === `af
 const n = d.n;
 ok('the scenario picked a week with weeks on both sides', Number.isFinite(n) && nowWeeks.some((w) => w <= n) && nowWeeks.some((w) => w > n), n);
 ok('the control shows the chosen week', d.later?.selected === String(n), d.later?.selected);
+// Sweep 2026-10-16 #4: the orange hint was priced with no send week and keyed
+// under a different one, so after week N it never finished.
+ok('after week N the orange hint finishes (data-hint "done")', d.laterHint?.hint === 'done', JSON.stringify(d.laterHint));
 
 // ----------------------------------------------------- 2. the inline breakdown
 const L = d.later || {};
