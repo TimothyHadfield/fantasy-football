@@ -655,6 +655,9 @@ const SCENARIOS = {
 
     // HE GOES OUT. Only the current week's five minutes lapse — weeks 6 and 7
     // are minutes old and would otherwise be served for another six hours.
+    // (Aged a minute so a fast machine cannot write them in the same
+    // millisecond the re-read starts — `olderThan` keeps a tie.)
+    ageEverything(storage, MINUTE, [6, 7]);
     ageEverything(storage, 6 * MINUTE, [5]);
     espn.clearReadCache();
     calls = installFetch({ ...TRADE_SEASON, status: 'OUT', bump: 2 });
@@ -682,6 +685,7 @@ const SCENARIOS = {
     espn.clearReadCache();
     installFetch({ ...TRADE_SEASON, status: 'QUESTIONABLE' });
     await season.fetchWeeksRosters([5, 6, 7]);
+    ageEverything(storage, MINUTE, [6, 7]);
     ageEverything(storage, 6 * MINUTE, [5]);
     espn.clearReadCache();
     calls = installFetch({ ...TRADE_SEASON, status: 'INJURY_RESERVE' });
@@ -704,6 +708,7 @@ const SCENARIOS = {
     await season.fetchSchedule();
     await season.fetchWeeksRosters([5, 6, 7]);
 
+    ageEverything(storage, MINUTE, [6, 7]); // no same-millisecond tie with the re-read
     ageEverything(storage, 6 * MINUTE, [5]);
     espn.clearReadCache();
     calls = installFetch({ ...TRADE_SEASON, moved: true });
