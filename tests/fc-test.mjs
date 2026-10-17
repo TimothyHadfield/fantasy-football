@@ -631,6 +631,26 @@ const SCENARIOS = {
     prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
   },
+  // DEMO PRESSED WHILE THE LIVE SCHEDULE IS STILL LOADING (sweep 2026-10-16 #2).
+  // The slow live reply used to land after the sample league and draw the
+  // real league under a toggle that says Demo.
+  'demo-race': {
+    label: '(j) Demo pressed while live is loading stays Demo when live lands',
+    stub: true,
+    env: { FC_SCHEDULE_DELAY: '1500' },
+    prefs: { 'schedule.source': 'live', 'schedule.week': 'all' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    early: async ({ document, window }) => {
+      globalThis.__race = { loadingAtClick: (document.getElementById('sourceStatus')?.textContent || '') };
+      document.querySelector('#sourceToggle button[data-src="demo"]')
+        .dispatchEvent(new window.Event('click', { bubbles: true }));
+    },
+    after: async ({ waitFor }) => {
+      // Past the live reply, then settled again.
+      await new Promise((r) => setTimeout(r, 2500));
+      await waitFor();
+    },
+  },
   'live-rosterfail': {
     label: '(d) same, roster fetch rejects',
     stub: true,
@@ -769,6 +789,8 @@ async function boot(scenario) {
     settles.push(r);
     return r;
   };
+  // Something the reader does at once, before the first load has landed.
+  if (cfg.early) await cfg.early({ document, window });
   await waitFor();
   if (cfg.after) {
     await cfg.after({ document, window, CustomEvent: window.CustomEvent, waitFor });
@@ -1047,7 +1069,9 @@ async function check(scenario, boot) {
   }
 
   // ---- request budget, for the stubbed live scenarios ---------------------
-  if (boot.cfg.stub) {
+  // Not `demo-race`: its live load is abandoned for the sample league, so it
+  // rightly buys no weeks.
+  if (boot.cfg.stub && scenario !== 'demo-race') {
     const season = await import('./fc-stub-season.mjs');
     const espn = await import('./fc-stub-espn.mjs');
     c.ok('one fetchSchedule per load', season.calls.schedule === loads, `saw ${season.calls.schedule}`);
@@ -1134,7 +1158,7 @@ async function check(scenario, boot) {
     // And the budget is one the page really spends, or neither line means much.
     // Not in `live-rosterfail`, where every roster request rejects: a load that
     // bought nothing has nothing to bank, and that is the correct behaviour.
-    if (scenario !== 'live-rosterfail') {
+    if (scenario !== 'live-rosterfail' && scenario !== 'demo-race') {
       c.ok('and it really does bank what it bought',
         residentBytes > 1024, storageDetail);
     }
@@ -2781,6 +2805,17 @@ async function check(scenario, boot) {
     c.ok('and the link is not written over the saved week', w.savedAfterOpen === 6, `saved week is ${w.savedAfterOpen}`);
     c.ok('a week picked by hand outranks the link from then on, through a reload',
       w.reloaded === '3', `reloaded on week ${w.reloaded}`);
+  }
+  if (scenario === 'demo-race') {
+    const race = globalThis.__race || {};
+    c.ok('the click came while the live schedule was loading', /Loading your schedule/.test(race.loadingAtClick), race.loadingAtClick);
+    const on = d.querySelector('#sourceToggle button.on');
+    c.ok('the toggle says Demo', on && on.dataset.src === 'demo', on ? on.dataset.src : 'none');
+    const status = txt($('sourceStatus'));
+    c.ok('ROW 2: THE LATE LIVE REPLY DOES NOT REPLACE THE SAMPLE LEAGUE (status)', /sample data/i.test(status), status);
+    const names = [...d.querySelectorAll('#matchups .tname')].map(txt);
+    c.ok('ROW 2: AND THE MATCHUPS ARE THE SAMPLE LEAGUE’S, not the stub’s "Team N"',
+      names.length > 0 && !names.some((n) => /^Team \d+$/.test(n)), names.slice(0, 4).join(' | '));
   }
   if (scenario === 'week-all') {
     c.ok('"All weeks" is kept', $('weekSelect').value === 'all', $('weekSelect').value);

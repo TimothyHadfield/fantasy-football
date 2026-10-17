@@ -38,6 +38,9 @@ function fixturesFor(week) {
 
 export async function fetchSchedule() {
   calls.schedule++;
+  // FC_SCHEDULE_DELAY: ESPN is slow to answer, so the reader can switch to the
+  // sample league while this read is still in the air (sweep 2026-10-16 #2).
+  if (process.env.FC_SCHEDULE_DELAY) await new Promise((r) => setTimeout(r, Number(process.env.FC_SCHEDULE_DELAY)));
   const nameById = new Map(TEAMS.map((t) => [t.id, t.name]));
   const byWeek = new Map();
 

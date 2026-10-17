@@ -379,16 +379,26 @@ async function syncedCopy() {
   }
 }
 
+// ONE LOAD AT A TIME: each load takes a ticket, and a load whose ticket is no
+// longer the latest draws nothing. Demo pressed while the live schedule is in
+// the air used to be drawn over by the late live reply, under a toggle saying
+// Demo (sweep 2026-10-16 #2).
+let loadTicket = 0;
+
 async function loadDemo() {
+  const ticket = ++loadTicket;
   setStatus('Generated sample data — not your real league.');
   state.myTeamId = null;
   state.synced = false;
   state.loadError = '';
   const raw = await demoSchedule();
+  if (ticket !== loadTicket) return;
   adopt(withDemoProjections(normalizeSchedule(raw, { isDemo: true })));
 }
 
 async function loadLive() {
+  const ticket = ++loadTicket;
+  const stale = () => ticket !== loadTicket || state.source !== 'live';
   // savedConfig() reads whichever key the connection bar or the Connection page
   // wrote; this page used to read one of them directly and silently never
   // found a league saved by the other.
@@ -414,6 +424,7 @@ async function loadLive() {
   // for a league that does not exist.
   try {
     const pulled = await snapshots.fetchRemote(saved.leagueId, saved.season);
+    if (stale()) return;
     // Which weeks are safely in the repo, so the panel can say which are still
     // only in this browser. An empty set is the honest answer when the fetch
     // found nothing — including when it failed — and the panel then treats
@@ -430,10 +441,13 @@ async function loadLive() {
 
   try {
     const raw = await season.fetchSchedule();
+    if (stale()) return;
     const data = normalizeSchedule(raw, { isDemo: false });
     // Where it came from, settled once per load. The cloud read is cached by
     // js/season.js, so asking again costs nothing.
-    state.synced = await syncedCopy();
+    const synced = await syncedCopy();
+    if (stale()) return;
+    state.synced = synced;
 
     if (!data.games.length) {
       state.loadError = 'ESPN returned no matchups for this season.';
@@ -453,6 +467,7 @@ async function loadLive() {
     setStatus(state.sourceSummary);
     adopt(data);
   } catch (err) {
+    if (stale()) return;
     state.loadError = `ESPN refused the schedule (${err.message}).`;
     setStatus(err.message, true);
     renderArchive();
