@@ -1139,15 +1139,18 @@ async function refreshOppProj(key) {
     const chances = await liveChances(schedule, weekTeams, floors);
     // The week being played, for the rest-of-season chart to leave out.
     const open = capture.openWeeks(capture.normalizeSchedule(schedule, { isDemo: false }))[0];
-    state.live = { key, chances, week: chances.size && open !== undefined ? open : null };
+    // A newer run (Sync now pressed while this one was reading) owns
+    // `state.live`: asked before writing, not after.
     if (stale()) return;
+    state.live = { key, chances, week: chances.size && open !== undefined ? open : null };
 
     state.oppProj = buildOppProj(key, schedule, weekTeams, floors, floorWeek);
   } catch (err) {
     if (stale()) return;
     state.oppProj = { key, error: esc(err.message || String(err)) };
   } finally {
-    if (state.oppPending === key) {
+    // Only this run's own marker: a newer run on the same key owns it now.
+    if (state.oppPending === key && token === state.oppToken) {
       state.oppPending = null;
       state.oppProgress = null;
     }
@@ -1786,7 +1789,7 @@ function accSpec(threshold) {
   const bucket = s && s.predictionAccuracy.find((a) => a.threshold === t);
   if (!bucket || !bucket.games) return null;
   const counted = gamesPlayed().filter((g) => g.proj > 0 && g.oppProj > 0 &&
-    g.proj !== g.oppProj && Math.abs(g.proj - g.oppProj) > t);
+    g.proj !== g.oppProj && g.pts !== g.oppPts && Math.abs(g.proj - g.oppProj) > t);
   const right = (g) => (g.proj > g.oppProj) === (g.pts > g.oppPts);
   if (counted.length !== bucket.games || counted.filter(right).length !== bucket.correct) return null;
   const weeks = [...new Set(counted.map((g) => g.week))].sort((a, b) => a - b);

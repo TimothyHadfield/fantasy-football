@@ -458,9 +458,13 @@ export function predictionAccuracy(games, thresholds = [0, 5, 10, 15, 20, 25, 30
   const read = games.filter((g) => g.homeProjected > 0 && g.awayProjected > 0);
   const predictive = read.filter((g) => g.homeProjected !== g.awayProjected);
   const ties = read.length - predictive.length;
+  // A game that ENDED tied proves the projection neither right nor wrong, so
+  // it is in no bucket either (it once counted as right whenever the away side
+  // was favoured).
+  const decided = predictive.filter((g) => g.homeActual !== g.awayActual);
 
   const buckets = thresholds.map((t) => {
-    const relevant = predictive.filter(
+    const relevant = decided.filter(
       (g) => Math.abs(g.homeProjected - g.awayProjected) > t
     );
     const correct = relevant.filter((g) => {

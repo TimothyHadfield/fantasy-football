@@ -395,6 +395,16 @@ check(typeof stdev([5, 7]) === 'number', 'stdev of two values should be a number
 check(boxStats([1, 2]) === null, 'boxStats of 2 values should be null');
 check(boxStats([1, 2, 3, 4, 5]) !== null, 'boxStats of 5 values should compute');
 check(predictionAccuracy([]).every((b) => b.accuracy === null), 'no games -> no accuracy');
+// A real tied game (sweep 2026-10-16 row 18) made the projection neither right
+// nor wrong: in no bucket, whichever side was favoured.
+{
+  const tied = predictionAccuracy([
+    { homeProjected: 90, awayProjected: 110, homeActual: 100, awayActual: 100 },
+    { homeProjected: 110, awayProjected: 90, homeActual: 100, awayActual: 100 },
+    { homeProjected: 110, awayProjected: 90, homeActual: 120, awayActual: 80 },
+  ]);
+  check(tied[0].games === 1 && tied[0].correct === 1, `actual tie in no bucket (All: ${tied[0].correct}/${tied[0].games})`);
+}
 
 const marginAt = {};
 for (const weeks of [0, 1, 2, 13]) {
