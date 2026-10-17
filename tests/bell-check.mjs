@@ -50,6 +50,9 @@ if (scenario) {
     // The real header, as index.html carries it, above an empty bar.
     const index = readFileSync(path.join(REPO, 'index.html'), 'utf8');
     const header = (index.match(/<header class="site">[\s\S]*?<\/header>/) || [''])[0];
+    // How many links the site's nav carries, read off index.html's own nav (the
+    // count changes when a page is added, as Playoffs was on 2026-10-16).
+    const navLinks = ((header.match(/<nav>[\s\S]*?<\/nav>/) || [''])[0].match(/<a\s/g) || []).length;
     const html = `<!DOCTYPE html><html><body>${header}<div class="wrap wide"><div id="connBar"></div></div></body></html>`;
 
     const conn = (extra = {}) => ({ leagueId: LEAGUE, season, teamId: 1, ...extra });
@@ -110,7 +113,7 @@ if (scenario) {
       const nav = b.parentNode.querySelector('nav');
       ok(brand && nav && kids.indexOf(b) === kids.indexOf(brand) + 1 && kids.indexOf(nav) === kids.indexOf(b) + 1,
         'it sits between the brand and the page links', kids.map((k) => k.tagName).join(' '));
-      ok(!b.closest('nav') && nav.querySelectorAll('a').length === 9, 'outside the nav, whose nine links are untouched', String(nav && nav.querySelectorAll('a').length));
+      ok(!b.closest('nav') && navLinks > 0 && nav.querySelectorAll('a').length === navLinks, `outside the nav, whose ${navLinks} links are untouched`, String(nav && nav.querySelectorAll('a').length));
       const svg = b.querySelector('svg');
       ok(svg && svg.getAttribute('aria-hidden') === 'true' && svg.querySelectorAll('path').length > 0, 'the icon is an inline SVG, hidden from a screen reader');
       ok(!b.hasAttribute('title'), 'no title (it draws nothing under a finger)');

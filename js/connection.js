@@ -1385,7 +1385,21 @@ function scheduleBell() {
   bellTimer = { idle, id };
 }
 
+// On a phone the page links are one row that scrolls sideways (css/app.css,
+// narrow screens, "header"). The current page's link is brought into view,
+// centred where it can be. Only the strip's own scrollLeft moves - never the
+// page - and where the links all fit (a laptop) nothing happens at all.
+function showActiveNavLink() {
+  const nav = document.querySelector('header.site nav');
+  const a = nav && nav.querySelector('a.active');
+  if (!a || nav.scrollWidth <= nav.clientWidth) return;
+  const n = nav.getBoundingClientRect();
+  const r = a.getBoundingClientRect();
+  nav.scrollLeft += (r.left + r.width / 2) - (n.left + n.width / 2);
+}
+
 async function init() {
+  showActiveNavLink();
   if (!$('connBar')) return;
   load();
   loadSyncRecord();

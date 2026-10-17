@@ -1375,22 +1375,39 @@ code { background: #0d0f13; padding: 1px 5px; border-radius: var(--r-1); font-si
   section.panel > h2 { margin-bottom: 11px; }
 
   /* --- header ---
-   * The nav is seven links and cannot sit on the brand's line at this width.
-   * Given its own row it wraps to two, and `flex: 1` spreads the links so each
-   * one is a full-width-sharing target rather than a 40px word — which also
-   * keeps them all VISIBLE. A horizontally scrolling strip would fit on one
-   * line and hide the last two pages behind a gesture nothing advertises. */
+   * The nav cannot sit on the brand's line at this width, so it gets its own.
+   * It used to wrap there, and at ten links that was three rows of buttons
+   * (~165px with the brand) and no page content above the fold on Home, Trade
+   * and Players (audit 2026-10-17). Now it is ONE row that scrolls sideways:
+   * same buttons, same order, the last one cut by the screen edge to show there
+   * is more. It runs to the screen edges (the negative margin undoes the
+   * .wrap's 14px gutter, the padding puts it back for the first and last link),
+   * and js/connection.js scrolls the current page's link into view on load.
+   * The 3px top/bottom padding (cancelled by the margin) keeps the focus ring
+   * from being cut by the scroll box. */
   header.site { padding: 10px 0; margin-bottom: 18px; }
   header.site .wrap { gap: 9px; }
   header.site .brand { flex: 1 1 100%; }
   header.site nav {
-    margin-left: 0;
-    width: 100%;
-    flex-wrap: wrap;
+    margin: -3px -14px;
+    padding: 3px 14px;
+    /* flex: none - the bell's rule below resets margin-right before the bell
+     * mounts; without this the strip would shrink by 14px and then grow. */
+    flex: none;
+    width: calc(100% + 28px);
+    flex-wrap: nowrap;
     gap: 5px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scroll-padding: 0 14px;
+    scrollbar-width: none;
   }
+  header.site nav::-webkit-scrollbar { display: none; }
   header.site nav a {
-    flex: 1 1 auto;
+    flex: none;
+    white-space: nowrap;
     display: flex;
     align-items: center;
     justify-content: center;

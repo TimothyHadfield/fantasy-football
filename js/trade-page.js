@@ -9782,7 +9782,10 @@ function applyCuMarks() {
   const red = new Set();
   for (const m of cuHintMen()) if (cuPastBarred(m)) red.add(m.id);
   cuHint.red = red;
-  const orange = cuHint.done && cuHint.done === cuHintKey() ? cuHint.orange : new Set();
+  // The key under the box's own send week, wherever this is called from: it is
+  // what `scheduleCuHint` stamped `done` with (sweep 2026-10-16 #4).
+  const hintKey = atCustomCut(cuHintKey);
+  const orange = cuHint.done && cuHint.done === hintKey ? cuHint.orange : new Set();
   for (const id of ['cuListA', 'cuListB']) {
     const host = $(id);
     if (!host) continue;
@@ -9807,14 +9810,18 @@ function applyCuMarks() {
   }
   const panel = $('customPanel');
   if (panel) {
-    panel.setAttribute('data-hint', !c.b || !cuHintKey() ? 'none' : cuHint.done === cuHintKey() ? 'done' : 'wait');
+    panel.setAttribute('data-hint', !c.b || !hintKey ? 'none' : cuHint.done === hintKey ? 'done' : 'wait');
     if (Number.isFinite(cuHint.ms)) panel.setAttribute('data-hint-ms', String(cuHint.ms));
   }
 }
 
 /** After a tick: price "these ticks + one more man" for every candidate, in slices. */
 function scheduleCuHint() {
-  const key = cuHintKey();
+  // Priced, and keyed, under the box's own send week, like everything else the
+  // box prints (sweep 2026-10-16 #4: with Send = "after week N" it was priced
+  // over every week and keyed under another cut, so it never finished).
+  const cut = cutOf(state.custom.sendAfter);
+  const key = withSendCut(cut, cuHintKey);
   if (key === cuHint.key) { applyCuMarks(); return; }
   cuHint.key = key;
   cuHint.done = null;
@@ -9829,7 +9836,7 @@ function scheduleCuHint() {
     try {
       const c = state.custom;
       const entry = { a: c.a, b: c.b, sendA: c.sendA.map(String), sendB: c.sendB.map(String) };
-      const it = hintSteps({
+      const it = withSendCut(cut, () => hintSteps({
         men: cuHintMen(),
         ticked: [...entry.sendA, ...entry.sendB],
         barred: cuPastBarred,
@@ -9840,10 +9847,10 @@ function scheduleCuHint() {
           sendA: m.side === 'a' ? entry.sendA.concat(m.id) : entry.sendA,
           sendB: m.side === 'b' ? entry.sendB.concat(m.id) : entry.sendB,
         }, { quick: true }),
-      });
+      }));
       let sliceAt = Date.now();
       for (;;) {
-        const s = it.next();
+        const s = withSendCut(cut, () => it.next());
         if (s.done) { cuHint.orange = s.value.orange; break; }
         if (Date.now() - sliceAt >= CU_HINT_SLICE_MS) {
           await new Promise((r) => setTimeout(r, 0));
