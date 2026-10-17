@@ -979,9 +979,14 @@ async function loadBench() {
 
 async function changeWeek(week) {
   state.week = week;
-  state.rosters = state.isDemo ? generateDemoWeekRosters(week) : await loadRosters(week);
+  const rosters = state.isDemo ? generateDemoWeekRosters(week) : await loadRosters(week);
+  // Another week was picked while this one was being read: its rosters are
+  // not this page's any more (the later pick paints its own).
+  if (state.week !== week) return;
+  state.rosters = rosters;
   const odds = startOdds();
   await loadBench();
+  if (state.week !== week) return;
   await paintWhenOdds(odds);
 }
 
