@@ -234,7 +234,10 @@ const SCENARIOS = {
       'and reports exactly what a sync without them reports');
     eq(first.projhist && [first.projhist.wrote, first.projhist.reason], [2, ''], 'two weeks held, two written');
     eq(fake.log.writes, [HIST(5), HIST(6), HIST('index'), BASE], 'each at …/projhist/<week>, then their list, the league index LAST');
-    eq(fake.log.reads.map(tail), ['index', '5', '6'], 'one look at the list, one look per week before writing it');
+    eq(fake.log.reads.filter(isHist).map(tail), ['index', '5', '6'], 'one look at the list, one look per week before writing it');
+    // Plus ONE read of the league index the sync is about to replace, so the
+    // weeks an earlier sync listed stay listed (sweep 2026-10-16 row 6).
+    eq(fake.log.reads.filter((p) => !isHist(p)), [BASE], 'and the league index once, to keep the weeks listed before');
     eq(bodyOf(fake, HIST(5)), makeRec(5), 'what is up is the stored copy, number for number');
     eq(Object.keys(bodyOf(fake, HIST('index')).docs).sort(), ['5', '6'], 'and the list names both');
     eq(Object.keys(first.projhist.marks).sort(), ['5', '6', 'index'], 'the sync hands back a mark for each');
@@ -244,7 +247,7 @@ const SCENARIOS = {
     const second = await sync(fake, io, first.projhist.marks);
     ok('the next sync succeeds', second.ok === true, second.reason);
     eq(fake.log.writes, [BASE], 'and writes nothing but the league index');
-    eq(fake.log.reads, [], 'and reads nothing at all');
+    eq(fake.log.reads, [BASE], 'and reads nothing but the league index it replaces');
     eq([second.projhist.wrote, second.projhist.skipped, second.projhist.reads], [0, 2, 0], 'both weeks skipped unread');
 
     // A new week arrives: it alone goes.
@@ -253,7 +256,7 @@ const SCENARIOS = {
     fake.log.reads.length = 0;
     const third = await sync(fake, io, second.projhist.marks);
     eq(fake.log.writes, [HIST(7), HIST('index'), BASE], 'a new week is one document and the list');
-    eq(fake.log.reads.map(tail), ['index', '7'], 'for two reads');
+    eq(fake.log.reads.filter(isHist).map(tail), ['index', '7'], 'for two reads');
     eq(Object.keys(bodyOf(fake, HIST('index')).docs).sort(), ['5', '6', '7'], 'and the list now names three');
     eq(fake.log.rewrites.filter((p) => p !== HIST('index') && p !== BASE), [], 'no copy was ever written over');
     ok('a third sync was a sync', third.ok === true);
@@ -302,7 +305,7 @@ const SCENARIOS = {
     fake.log.writes.length = 0;
     fake.log.reads.length = 0;
     await sync(fake, b);
-    eq(fake.log.reads.map(tail), ['index', '5'], 'not listed, so it looks before it writes');
+    eq(fake.log.reads.filter(isHist).map(tail), ['index', '5'], 'not listed, so it looks before it writes');
     eq(fake.log.writes.filter(isHist), [HIST('index')], 'finds the copy there, and writes only the list');
     ok('week 5 is still the first copy', fake.docs.get(HIST(5)) === original);
     ok('and the mended list is the list it was', JSON.parse(fake.docs.get(HIST('index'))).json.join('') === JSON.parse(listed).json.join(''));
@@ -312,7 +315,7 @@ const SCENARIOS = {
     fake.log.reads.length = 0;
     const forced = await sync(fake, a, null);
     eq(fake.log.writes.filter(isHist), [], 'a forced sync rewrites nothing');
-    eq(fake.log.reads.map(tail), ['index'], 'for one read of the list');
+    eq(fake.log.reads.filter(isHist).map(tail), ['index'], 'for one read of the list');
     ok('and the marks come back', Boolean(forced.projhist.marks['5']) && Boolean(first.projhist.marks['5']));
     eq(fake.log.rewrites.filter((p) => p !== HIST('index') && p !== BASE), [], 'no copy was ever replaced with different content');
   },
@@ -383,8 +386,8 @@ const SCENARIOS = {
     // A browser that holds no copy: the sync is, to the key, what it was.
     const bare = makeFake();
     const none = await sync(bare, browser());
-    eq([none.ok, 'projhist' in none, bare.log.reads, bare.log.writes], [true, false, [], [BASE]],
-      'a browser holding no copy asks for nothing, and its sync has no projhist key');
+    eq([none.ok, 'projhist' in none, bare.log.reads, bare.log.writes], [true, false, [BASE], [BASE]],
+      'a browser holding no copy asks for no projhist (only the league index it replaces), and its sync has no projhist key');
   },
 
   async phone() {
