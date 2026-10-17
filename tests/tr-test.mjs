@@ -4987,6 +4987,109 @@ SCENARIOS.yesWords = async function yesWords() {
   return { errors, goalOn, rows, comboGoal, comboCard, deal, custom };
 };
 
+/**
+ * Sweep 2026-10-16 rows 5, 15 and 16, read by tr-fixes-check.mjs:
+ *   5  an "Ask AI" key from a repaint ago no longer copies (the map is cleared
+ *      with the rows it was built for);
+ *  15  closing the pop-up puts focus back on what opened it (the combo's
+ *      headline button), not on <body>;
+ *  16  Enter on a saved row does what a click does (loads it into the box).
+ */
+SCENARIOS.trFixes = async function trFixes() {
+  const { document, window, errors } = await boot();
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const copied = [];
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { userAgent: 'test', clipboard: { writeText: (t) => { copied.push(String(t)); return Promise.resolve(); } } },
+  });
+  const focused = [];
+  const protos = new Set([window.HTMLElement.prototype,
+    Object.getPrototypeOf(document.createElement('button')),
+    Object.getPrototypeOf(document.createElement('tr'))]);
+  for (const p of protos) p.focus = function focus() { focused.push(this); };
+  const out = { errors };
+
+  // 5: a key from the first paint.
+  const firstAsk = document.querySelector('#tradeTable tbody tr button.ask-ai');
+  out.oldKey = firstAsk ? firstAsk.getAttribute('data-ask-ai') : null;
+
+  // 15: the combo's headline opens the pop-up; closing it repaints and refocuses.
+  let head = null;
+  for (let i = 0; i < 100 && !head; i++) {
+    head = document.querySelector('#comboPanel .wk-open[data-key]');
+    if (!head) await settle(100);
+  }
+  out.headKey = head ? head.getAttribute('data-key') : null;
+  if (head) {
+    fire(head, 'click');
+    await settle(300);
+    out.opened = !$('dealModal').hidden;
+    focused.length = 0;
+    fire($('dealClose'), 'click');
+    await settle(300);
+    out.closed = $('dealModal').hidden;
+    const last = focused[focused.length - 1] || null;
+    out.focusBack = last ? {
+      tag: last.tagName, cls: last.getAttribute('class') || '', key: last.getAttribute('data-key'),
+      inDoc: document.contains ? document.contains(last) : true,
+    } : null;
+  }
+
+  // 5 again, after those repaints: the old key is gone from the page; a button
+  // carrying it must copy nothing.
+  out.oldKeyInPage = out.oldKey ? !!document.querySelector(`[data-ask-ai="${out.oldKey}"]`) : null;
+  if (out.oldKey) {
+    const stale = document.createElement('button');
+    stale.setAttribute('type', 'button');
+    stale.setAttribute('class', 'ask-ai');
+    stale.setAttribute('data-ask-ai', out.oldKey);
+    stale.textContent = 'Ask AI';
+    document.body.appendChild(stale);
+    const before = copied.length;
+    fire(stale, 'click');
+    await settle(80);
+    out.staleCopied = copied.length > before;
+    stale.remove();
+    // and a live one still copies
+    const live = document.querySelector('#tradeTable tbody tr button.ask-ai');
+    const at = copied.length;
+    if (live) { fire(live, 'click'); await settle(80); }
+    out.liveCopied = copied.length > at;
+  }
+
+  // 16: save a one-for-one deal, then Enter on its row.
+  const b = [...$('cuTeamB').querySelectorAll('option')].map((o) => o.getAttribute('value')).find((v) => v);
+  $('cuTeamB').value = b;
+  fire($('cuTeamB'), 'change');
+  await settle(600);
+  const tick = (sel) => {
+    const box = document.querySelector(sel);
+    if (!box) return null;
+    box.checked = true;
+    fire(box, 'change');
+    return String(box.value);
+  };
+  const ticks = [tick('#cuListA input[type="checkbox"]'), tick('#cuListB input[type="checkbox"]')];
+  await settle(600);
+  fire($('cuSave'), 'click');
+  await settle(600);
+  const ticked = () => [...document.querySelectorAll('#cuListA input, #cuListB input')]
+    .filter((x) => x.checked || x.hasAttribute('checked')).map((x) => String(x.value)).sort();
+  out.saved = { ticks, rows: $('cuRows').querySelectorAll('tr[data-cu]').length, tickedAfterSave: ticked() };
+  const row = $('cuRows').querySelector('tr[data-cu]');
+  if (row) {
+    const ev = new window.Event('keydown', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'key', { value: 'Enter' });
+    row.dispatchEvent(ev);
+    await settle(600);
+  }
+  out.enter = { tickedAfterEnter: ticked(), want: ticks.filter(Boolean).sort() };
+  return out;
+};
+
 // --------------------------------------------------------------- child runner
 
 const self = fileURLToPath(import.meta.url);

@@ -142,6 +142,7 @@ const SUITES = [
   ['record-live-check.mjs', 'a record while its game is being played: 3–2 at 20% reads 3.2–2.8, the same on Stats, Summary and Schedule'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
   ['tr-send-after-check.mjs', 'Trade: Send now / after week N in the custom box — the weeks up to N unchanged, every figure over the weeks after it, kept on a saved trade'],
+  ['tr-fixes-check.mjs', 'Trade: Ask AI offers let go on repaint, focus back on what opened the pop-up, Enter on a saved row (sweep 2026-10-16 rows 5, 15, 16)'],
   ['tr-value-check.mjs','Trade: the Proj | Value switch on the custom lists, the season boxes and the assumed trade, and Value on its player cards'],
   ['tr-yes-check.mjs', 'Trade: will he say yes as a word (likely / maybe / unlikely) on every row, the pop-up and the custom box, its preview adding up, his lineup input flat'],
   ['test-notify-trades.mjs', 'Trade keeps its best deals for Notifications: both printed gains above zero, the page’s order, three at most, written when the list is final and never for demo, an earlier season or another squad'],

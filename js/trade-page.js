@@ -7873,7 +7873,10 @@ function closeDeal() {
   state.dealPeek = null;
   state.dealSide = 'mine';
   paint();
-  if (key) focusEl(document.querySelector(`[data-open="${cssKey(key)}"]`));
+  // Back to what opened it: an offer row or the combo's headline button, both of
+  // which carry `data-i` and the key (`[data-open]` went with the row's own
+  // button on 2026-10-12, which left focus on <body>; sweep 2026-10-16 #15).
+  if (key) focusEl(document.querySelector(`[data-i][data-key="${cssKey(key)}"]`));
 }
 
 /** Focus, when there is anything to focus and a layout to do it in. */
@@ -9047,6 +9050,9 @@ function paint() {
   // by counter and the Map has no other way of shrinking, so a repaint that did
   // not clear them would grow one entry per offer for the life of the page.
   ESPN_OFFERS.clear();
+  // And the offers behind "Ask AI", for the same reason (sweep 2026-10-16 #5):
+  // every row drawn below registers its own again.
+  ASK_OFFERS.clear();
   hideTip(); // it may be pointing at an element that is about to be replaced
   hidePop(); // and so may the stat card
   // IN PANEL ORDER — toolbar, finder, combo, depth map — and the modal last,
@@ -12573,6 +12579,17 @@ $('cuRows').addEventListener('click', (e) => {
   // the document is "outside the modal" to the handler that closes it, so
   // without this the pop-up opened and the very same click shut it again — it
   // looked like a row that did nothing at all.
+  e.stopPropagation();
+  openRow(offer, `cu:${i}`);
+});
+// The keyboard's way in: a saved row has tabindex 0, so Enter on it does what a
+// click does (sweep 2026-10-16 #16), as the finder's rows already do.
+$('cuRows').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !e.target || !e.target.matches || !e.target.matches('tr[data-cu]')) return;
+  const i = Number(e.target.getAttribute('data-cu'));
+  const offer = state.customRows[i];
+  if (!offer) return;
+  e.preventDefault();
   e.stopPropagation();
   openRow(offer, `cu:${i}`);
 });
