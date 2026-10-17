@@ -68,3 +68,31 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Verified how:** each builder fail-first; tr-test 1288/0 on 1649e39 (local, ~20 min); test-trade-cut 3254, test-floor-ros 26, test-floor 113, test-outlook-mark 92, test-list-order 129, test-cloud-wiring 356; phone card screenshot 393 (WebKit, demo) looked at; laptop finder pixel-diff 0; live files checked by fetch (trade.js cut text, floor.js, `data-gain`). Measured on 1241838: K floor 10.85→10.09, kicker slots floored 87%→66%, players marked 43%→21%.
 - **Trouble:** every second push within minutes cancels the gated `tests` run → hook says "deploy FAILED (cancelled)"; `deploy-now` had published; confirmed by fetching live files. Worktree removal "Permission denied" (OneDrive) — left for the weekly sweep.
 - **Open (Tim's):** first trade card still ~2.6 screens down (controls above it); Schedule/Decisions chances still to the tenth; card look + Phase 4 wording are Claude's; per-player week lock and availability discount need his go; question g.
+
+## 2026-10-16 — Playoffs page, name → trade, suggestion rules, projection recheck
+- **Asked:**
+  - Why a projection was stale and Sync didn't fix it (Cousins 16.8 vs ESPN 18.3).
+  - "keep it still so it doesn't move at all when you select a player" (custom box).
+  - A Playoffs switch in Suggested.
+  - "stop suggesting to trade K and DEF"; "don't suggest to trade with any player who has a value under 1".
+  - A "show my players switch in the taken players box that is synced to the available players switch".
+  - A new Playoffs section (teams' playoff %, bye % and points each playoff week; players with Owner first name, Avg, Future, Playoff, PO − Avg and the weeks, "extreamly similar to the charts in the regular player's section"), then a PO − Fut column, "only count 0 projections for playoff zeros", the hover card, and a Proj/Value switch.
+  - "if you click a players name in the player section or the playoffs section it automatically brings you to the cusome trade section with the appropriate user and that specific player selected".
+  - "prepare md files for chat reset".
+- **Built (all live, last 894c243):**
+  - Recheck on a projection change: 7cde86f.
+  - Custom box fixed heights, and `notToSuggest` (K/D/ST/Value < 1): a2cdf13.
+  - Suggested Playoffs switch: 0f467e4.
+  - Taken switch: 5541fc0.
+  - Playoffs page: add850d (teams + nav), 428a297 (players), 08d67c6, a64e47b, 2797a9e, edfb56e.
+  - Name → Custom trade: 6b9c0eb.
+  - Test fallout from the K/D/ST rule: 4e79ad8 (tr-test fixtures onto Ana TE2) and 187ac81 (`TR_SPARE_QB` + `TR_BYE_MAN` for trade-progress/notify-trades; one unprovable check retired with a pointer, and a replacement "rows of more than one net").
+- **Verified how:**
+  - Each new check was seen failing first.
+  - tr-test 1308/0 (on 187ac81), test-trade-progress 45, test-notify-trades 76, tr-value-check 81, test-store 175, playoffs-check 165, playoffs-players-check 178, link-check 137, taken-check 448, wv-marks-check 74.
+  - Headless WebKit 393 + desktop on 1241838 and demo.
+  - Custom-box jump measured before the fix (17–34px) and gone after.
+  - Live files compared with curl after deploy-now.
+- **Open:**
+  - CI red on 894c243 (bell-check 11, done-check 1, notify-check, text-audit trade.html 444/429): first job next chat.
+  - Tim's calls: the Playoffs "Avg" label and nav spot, the hover-only card on Playoffs names, a rostered name on Players no longer opening his row, playoff gain on Suggested rows, and the trade.html ceiling.
