@@ -309,7 +309,19 @@ async function check(scenario, { document, window, errors, rejections, first }) 
       // A jump narrows that table to the man's position; widen both again so
       // the next man is on screen to be clicked.
       for (const f of ['posFilter', 'takenPosFilter']) click(document.querySelector(`#${f} button[data-pos="ALL"]`));
-      click(t.row(id).querySelector('a.pref'));
+      if (t === taken) {
+        // Since 2026-10-16 a TAKEN man's name links to the custom trade, so his
+        // Actual row is reached the way taken-check does: an in-page
+        // `waivers.html?player=<id>` link (the Gain card's "Drop X"), answered
+        // by the page's own jump handler.
+        const a = document.createElement('a');
+        a.setAttribute('class', 'pref');
+        a.setAttribute('href', `waivers.html?player=${id}`);
+        a.textContent = String(id);
+        document.body.appendChild(a);
+        click(a);
+        a.remove();
+      } else click(t.row(id).querySelector('a.pref'));
       return settleWaiverPage(document);
     };
     const width = (tr) => [...tr.children].reduce((n, td) => n + Number(td.getAttribute('colspan') || 1), 0);

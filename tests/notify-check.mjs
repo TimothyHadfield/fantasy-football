@@ -28,6 +28,10 @@ import { emit } from './emit.mjs';
 import { bootDom, waitFor } from './cap-harness.mjs';
 
 const PAGE = 'notifications.html';
+// How many links the site's nav carries, read off index.html's own nav (the
+// count changes when a page is added, as Playoffs was on 2026-10-16).
+const NAV_LINKS = ((readFileSync(path.join(REPO, 'index.html'), 'utf8')
+  .match(/<header class="site">[\s\S]*?<nav>([\s\S]*?)<\/nav>/) || ['', ''])[1].match(/<a\s/g) || []).length;
 const LEAGUE = '99';
 const ME = 4;
 const SCENARIOS = ['demo', 'live', 'farHoles', 'lineupOk', 'lineupStale', 'lineupRefused', 'synced', 'syncedHeld', 'past', 'noTeam', 'over'];
@@ -157,7 +161,7 @@ if (process.argv[2]) {
       ok(p.fetchCalls.length === 0, 'the page asked the network nothing', p.fetchCalls);
       // Outside the nav row: reached by the bell.
       const nav = [...p.document.querySelectorAll('header.site nav a')];
-      ok(nav.length === 9 && nav.every((a) => !(a.getAttribute('class') || '').includes('active') && !a.hasAttribute('aria-current')), 'the nav is the site’s, and none of its links is marked');
+      ok(NAV_LINKS > 0 && nav.length === NAV_LINKS && nav.every((a) => !(a.getAttribute('class') || '').includes('active') && !a.hasAttribute('aria-current')), 'the nav is the site’s, and none of its links is marked');
       ok(!nav.some((a) => /notifications/.test(a.getAttribute('href'))), 'the page is not one of the nav’s links');
       ok(p.document.querySelectorAll('[title]').length === 0, 'nothing carries a `title`');
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
