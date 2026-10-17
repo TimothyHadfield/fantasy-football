@@ -5291,7 +5291,7 @@ function runSearch({ keepDeal = false } = {}) {
   // is written to `state`.
   const stale = () => token !== runSearch.token;
 
-  const go = async () => {
+  const run = async () => {
     if (stale()) return;
     // How many WEEKLY searches this page has run, on the table itself, so a test
     // can hold the page to one per load (trade plan Phase 3) without timing a
@@ -5412,6 +5412,15 @@ function runSearch({ keepDeal = false } = {}) {
     // scoring spread is measured from; `loadHistory` starts it then.
     runGoalRank();
   };
+  // Anything thrown on the way would leave "Trying every swap…" up for good
+  // (sweep 2026-10-16 row 17): the search is let go, unless a newer one owns
+  // the flag by now.
+  const go = () => run().catch((err) => {
+    if (stale()) return;
+    state.searching = false;
+    paint();
+    console.error(err);
+  });
 
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(go, 0));
   else setTimeout(go, 0);
