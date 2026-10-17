@@ -119,6 +119,10 @@ export const BYE_HEAVY_TEAM = 4;
 export const BYE_HEAVY_WEEK = 10;
 
 export async function fetchWeeksRosters(weeks, { onProgress } = {}) {
+  // FC_ROSTERS_HANG: ESPN never answers the forward projections, so the reader
+  // can switch to the sample league while they are in the air (test-summary
+  // `demoMidProj`, sweep 2026-10-16 #3).
+  if (process.env.FC_ROSTERS_HANG) return new Promise(() => {});
   const out = new Map();
   let done = 0;
   for (const w of weeks) {
@@ -188,7 +192,24 @@ export async function fetchWeekRosters(week) {
 }
 
 export async function fetchSeasonData() {
-  return {};
+  // FC_SEASON_DATA: the played games in js/season.js `assembleSeason`'s shape,
+  // with each started lineup's projection, for a page that reads the season
+  // (test-summary `demoMidProj`). Unset, nothing, as every older scenario expects.
+  if (!process.env.FC_SEASON_DATA) return {};
+  const sched = await fetchSchedule();
+  calls.schedule--; // not a schedule read of the page's own
+  const games = sched.games.filter((g) => g.played).map((g) => ({
+    week: g.week,
+    homeId: g.homeId, homeActual: g.homeScore, homeProjected: 110 + g.homeId,
+    awayId: g.awayId, awayActual: g.awayScore, awayProjected: 110 + g.awayId,
+  }));
+  return {
+    season: 2026, isDemo: false, name: sched.leagueName,
+    weeks: [...new Set(games.map((g) => g.week))].length,
+    teams: TEAMS.map((t) => ({ ...t })), games, injuries: [],
+    projectionsAvailable: games.length > 0, gamesFound: games.length,
+    gamesWithProjections: games.length, weeksWithoutProjections: [],
+  };
 }
 
 // ------------------------------------------------------------ player Value

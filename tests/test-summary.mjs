@@ -52,7 +52,7 @@ const PAGE = 'summary.html';
  *   factory — i.e. everything a real browser has and linkedom does not. That is
  *   what lets the DRAWING and the SHARE be tested rather than only the page.
  */
-async function boot({ canShare = false, canvas = false, seed = null } = {}) {
+async function boot({ canShare = false, canvas = false, seed = null, wait = 20000 } = {}) {
   const html = readFileSync(path.join(REPO, PAGE), 'utf8');
   const { window, document } = parseHTML(html);
 
@@ -174,7 +174,7 @@ async function boot({ canShare = false, canvas = false, seed = null } = {}) {
           /Too early|could not run/.test(
             text(document.getElementById('simStatus')) +
             text(document.getElementById('summaryNote'))),
-    20000
+    wait
   );
   await new Promise((r) => setTimeout(r, 60));
   console.error = origError;
@@ -548,6 +548,39 @@ const SCENARIOS = {
    * week-3 opener ends level, so the record must print a T for both sides —
    * on the table, the text copy and the image alike.
    */
+  /**
+   * LIVE, THEN DEMO WHILE THE FORWARD PROJECTIONS ARE STILL OUT (sweep
+   * 2026-10-16 #3). A stubbed live league (fc-stub-season.mjs) whose roster
+   * read never answers; the reader presses Demo. The demo season must still
+   * simulate: it used to wait on the live read's "pending" for good.
+   */
+  async demoMidProj() {
+    process.env.FC_ROSTERS_HANG = '1';
+    process.env.FC_SEASON_DATA = '1';
+    const { register } = await import('node:module');
+    register('./fc-loader.mjs', import.meta.url);
+    const { document, errors } = await boot({
+      seed: {
+        'ff.prefs': { 'summary.source': 'live' },
+        'ff.connection': { leagueId: '99', season: 2026, teamId: 4 },
+      },
+      wait: 1500,
+    });
+    const live = {
+      status: text(document.getElementById('sourceStatus')),
+      sim: text(document.getElementById('simStatus')),
+    };
+    document.querySelector('#sourceToggle button[data-src="demo"]')
+      .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    const settled = await waitFor(() => /simulated seasons/.test(text(document.getElementById('simStatus'))), 20000);
+    return {
+      errors, live, settled,
+      sim: text(document.getElementById('simStatus')),
+      status: text(document.getElementById('sourceStatus')),
+      badge: text(document.getElementById('modeBadge')),
+    };
+  },
+
   async tie() {
     const { register } = await import('node:module');
     register('./sum-tie-loader.mjs', import.meta.url);
@@ -1318,6 +1351,15 @@ if (!drawn.boot) {
 // ---- a tied game prints a T ------------------------------------------------
 
 const tie = run('tie');
+{
+  const dm = run('demoMidProj');
+  ok('the demo-while-live-projects scenario boots', !dm.boot, dm.boot);
+  ok('it really was live, with the forward projections still out',
+    /Stub Live League/.test(dm.live?.status || '') && !/simulated seasons/.test(dm.live?.sim || ''), JSON.stringify(dm.live));
+  ok('ROW 3: DEMO PRESSED WHILE LIVE PROJECTIONS ARE OUT STILL SIMULATES THE SAMPLE SEASON',
+    dm.settled === true && /simulated seasons/.test(dm.sim || ''), JSON.stringify([dm.settled, dm.sim]));
+  ok('and the page says it is the sample league', /sample data/i.test(dm.status || ''), dm.status);
+}
 ok('the tie scenario boots', !tie.boot, tie.boot);
 if (!tie.boot) {
   const { generateDemoLeague: tieLeague, TIE_WEEK } = await import(moduleUrl('tests/sum-tie-demo.mjs'));

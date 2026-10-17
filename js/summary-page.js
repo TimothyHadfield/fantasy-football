@@ -309,6 +309,11 @@ function isRemaining(g) {
 }
 
 async function loadDemo() {
+  // A live league's forward projections may still be in the air. They are not
+  // this league's: drop them, and let the sample season simulate now rather
+  // than wait on a read it will never use (sweep 2026-10-16 #3).
+  state.projToken++;
+  state.projPending = false;
   setStatus('Generated sample data — not your real league.');
   const d = generateDemoLeague();
   // The demo carries a projection on every game, played or not, so it needs no
