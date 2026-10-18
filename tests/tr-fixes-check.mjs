@@ -7,7 +7,9 @@
 //   row 5   "Ask AI": the offers behind the buttons are let go on every repaint,
 //           as the ESPN links' are, so a key from an earlier paint copies nothing
 //           (the map used to grow for the life of the tab).
-//   row 15  Closing the pop-up puts focus back on what opened it, not <body>.
+//   row 15  Closing the pop-up puts focus back on what opened it, not <body>
+//           (the custom box's Week by week button since the Best combo went,
+//           2026-10-18).
 //   row 16  Enter on a saved custom trade does what a click does.
 
 import { spawnSync } from 'node:child_process';
@@ -49,10 +51,10 @@ ok('ROW 5: A KEY FROM AN EARLIER PAINT COPIES NOTHING (the map was cleared)', d.
 ok('and a button drawn by this paint still copies', d.liveCopied === true, d.liveCopied);
 
 // row 15
-ok('the combo headline is there to open the pop-up', typeof d.headKey === 'string', d.headKey);
+ok('the custom box\'s Week by week button is there to open the pop-up', d.headKey === 'cu-build', d.headKey);
 ok('it opened and closed', d.opened === true && d.closed === true, JSON.stringify([d.opened, d.closed]));
 ok('ROW 15: CLOSING PUTS FOCUS BACK ON THE BUTTON THAT OPENED IT',
-  !!d.focusBack && d.focusBack.key === d.headKey && /wk-open/.test(d.focusBack.cls), JSON.stringify(d.focusBack));
+  !!d.focusBack && d.focusBack.id === 'cuOpen' && d.focusBack.key === d.headKey, JSON.stringify(d.focusBack));
 
 // row 16
 ok('a one-for-one deal was saved and the ticks cleared',

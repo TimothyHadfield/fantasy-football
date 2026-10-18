@@ -38,7 +38,7 @@
 
   /* ---------------------------------------------------------- trade finder
 
-     THESE BLOCKS ARE IN PANEL ORDER — finder, combo, all teams — so the
+     THESE BLOCKS ARE IN PANEL ORDER — finder, all teams — so the
      stylesheet reads the way the page does. None of it is cascade-sensitive:
      no selector here is repeated between blocks, so moving one cannot change
      what another wins. */
@@ -168,13 +168,6 @@
   /* "Ask AI" (2026-09-30), the last cell of every offer row: the Week by week
      pill's look, a fixed width so "Copied" never moves the row. */
   .ask-ai { margin-top: 0; width: 6.4em; text-align: center; }
-  /* On the combo's headline it sits beside the number rather than under it:
-     that line is a sentence, not a table cell. */
-  .combo-head .wk-open {
-    display: inline-block;
-    margin: 0 0 0 8px;
-    vertical-align: middle;
-  }
 
   /* The two gain columns. Yours is the one that decides, so it carries the
      weight; his is what decides whether he says yes, so it is still a real
@@ -208,10 +201,10 @@
      the same line as the figure it qualifies, so it reads as the precision of
      that figure rather than as a second number. */
   .band { color: var(--dim); font-weight: 400; font-size: 11.5px; white-space: nowrap; }
-  /* The same figure under a combo headline and in the pop-up's summary. */
-  .combo-goal, .deal-goal { margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
-  .combo-goal .lbl, .deal-goal .lbl { color: var(--dim); margin-right: 4px; }
-  .combo-goal strong, .deal-goal strong { font-size: 15px; }
+  /* The figure in the pop-up's summary. */
+  .deal-goal { margin: 4px 0 6px; font-variant-numeric: tabular-nums; }
+  .deal-goal .lbl { color: var(--dim); margin-right: 4px; }
+  .deal-goal strong { font-size: 15px; }
 
   /* A SPLIT CELL (Tim, 2026-10-12): two halves, one over the other, each a
      short label and then the figure's own box (`splitHalf`). Chance = first /
@@ -485,14 +478,10 @@
   td.espn .cu-load { display: block; width: max-content; margin-top: 4px; }
   .espn-off { color: var(--dim); font-size: 11.5px; }
 
-  /* ------------------------------------------------------------- best combo */
-  .combo-head { font-size: 13.5px; margin-bottom: 8px; }
-  .combo-head .big { font-size: 19px; font-weight: 750; font-variant-numeric: tabular-nums; }
-  /* The combo's offers are drawn in the SAME shape as the finder's rows —
-     Tim's ask — so they get the finder's rules too: package columns wide
-     enough for a name and its number on one line, tabular gains, a clickable
-     row. Selecting on both table ids rather than restyling means the two can
-     never drift apart visually while claiming to be the same thing. */
+  /* ---------------------------------------------------------- offer tables
+     Offer tables drawn in the SAME shape as the finder's rows get the
+     finder's rules too: package columns wide enough for a name and its number
+     on one line, tabular gains, a clickable row. */
   table.offers th, table.offers td { vertical-align: top; }
   table.offers .pkg { white-space: normal; }
   table.offers .gain { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
@@ -514,13 +503,6 @@
     color: var(--accent-hi);
     white-space: nowrap;
   }
-
-  .combo-alt {
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid var(--line);
-  }
-  .combo-alt h3 { font-size: 13px; margin: 0 0 6px; }
 
   /* ------------------------------------------------- all teams · proj avg
 
@@ -989,16 +971,6 @@
     margin: 8px 0 0;
   }
   .heat-key:empty { display: none; }
-
-  /* THE COMBO'S ONE NUMBER. Your lineup before and after, for the whole
-     packing, once — the per-row column that used to carry it is gone, because
-     each of those figures was measured against a roster the next deal destroys
-     (Tim, 2026-09-19: "I want their stats to be combined ... the +/week should
-     be shown as 1 number not 2"). */
-  .combo-lineup { font-size: 12.5px; color: var(--dim); margin-bottom: 8px; }
-  .combo-lineup .lbl { text-transform: uppercase; letter-spacing: 0.06em; font-size: 10.5px; margin-right: 6px; }
-  .combo-lineup .sub { display: inline; margin-left: 6px; }
-  .combo-one { font-size: 12px; color: var(--dim); line-height: 1.55; margin: 0 0 10px; }
 
   /* A column, so the two gains line up with each other even when one squad
      carries a man more than the other. The roster takes the slack; without
@@ -1696,7 +1668,9 @@
   </section>
 
   <!-- PANEL ORDER, TOP TO BOTTOM: the finder, the combo, then the depth map
-       (since 2026-10-18 the All teams grid stands where the depth map was).
+       (since 2026-10-18 the All teams grid stands where the depth map was, and
+       the Best combo panel is gone — Tim: "Remove the best combo section of the
+       cite").
        Tim, 2026-09-17, and it is ordered by usefulness rather than by how the
        page thinks. The finder answers the question somebody came here with —
        "what deal should I offer?" — the combo answers "and how many of them at
@@ -1804,20 +1778,6 @@
     </details>
   </section>
 
-  <section class="panel" id="comboPanel">
-    <div class="segmented goal-copy" data-goal-toggle role="group" aria-label="Your goal">
-      <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
-      <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
-    </div>
-    <h2>Best combo</h2>
-    <p class="lede">The trades worth the most made all at once.</p>
-    <div id="comboBody"></div>
-    <details class="explain" id="comboExplain">
-      <summary>How the combination is priced</summary>
-      <p class="panel-note" id="comboNote"></p>
-    </details>
-  </section>
-
   <!-- ALL TEAMS · PROJ AVG — Tim, 2026-10-18: "in the trade section, the depth
        map is useless and I don't like it. Just show the all teams proj avg 2026
        graph there instead. (make sure that it's only taking into account future
@@ -1825,6 +1785,11 @@
        (js/proj-avg-grid.js), in the depth map's place. Head and body are
        rendered by the module: the columns are the league's own lineup slots. -->
   <section class="panel">
+    <!-- The goal switch every Trade panel carries (one per panel, same markup). -->
+    <div class="segmented goal-copy" data-goal-toggle role="group" aria-label="Your goal">
+      <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
+      <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
+    </div>
     <h2 id="projAvgTitle">All teams · proj avg</h2>
     <p class="lede">Every squad&rsquo;s lineup slots, averaged over the weeks still to come.</p>
     <div class="table-scroll" id="projAvgWrap"><table id="projAvgTable" class="grid">
@@ -1850,7 +1815,7 @@
        with any team" means he can price a deal between two other managers as
        readily as one of his own.
 
-       LAST, so his panel order (finder -> best combo -> depth map, 2026-09-17)
+       LAST, so his panel order (finder -> all teams, after 2026-10-18)
        is left exactly as he set it. Say so, and move it if he would rather it
        sat under the finder it complements.
 

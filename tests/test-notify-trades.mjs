@@ -151,9 +151,7 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 function searchRunning() {
   const document = globalThis.document;
   const el = document && document.getElementById('tradeEmpty');
-  if (el && !/\bhidden\b/.test(el.getAttribute('class') || '') && el.querySelector('.searching')) return true;
-  const combo = document && document.getElementById('comboBody');
-  return !!combo && /Trying every set/.test(combo.textContent);
+  return !!(el && !/\bhidden\b/.test(el.getAttribute('class') || '') && el.querySelector('.searching'));
 }
 const settle = async (ms = 400) => {
   await pause(ms);

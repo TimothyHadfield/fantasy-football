@@ -141,14 +141,6 @@ ok('its word has a preview with the same word, its parts and the %',
 ok('and its why is the why in that preview', !!cc.why && d.custom.yes.endsWith(`— ${cc.why}`), `${d.custom.yes} / ${cc.why}`);
 ok('the sentence under the box no longer prints "NN% he says yes"', !/he says yes|\d+% yes/.test(d.custom.preview), d.custom.preview);
 
-// ------------------------------------------------------------- 6. the packing
-ok('the packing\'s line prints a word, not a %',
-  /say yes: (likely|maybe|unlikely)|· yes: (likely|maybe|unlikely)/.test(d.comboGoal) && !/yes: \d+%|\d+% yes/.test(d.comboGoal),
-  d.comboGoal);
-ok('and its preview names each manager and the chance they all say yes',
-  /^Will (they|he) say yes\?/.test(d.comboCard) && (/All of them (likely|maybe|unlikely) \(\d+%\)/.test(d.comboCard) ||
-    /Chance he says yes (likely|maybe|unlikely) \(\d+%\)/.test(d.comboCard)), d.comboCard);
-
 if (fails.length) {
   console.log(`\n${fails.length} FAILED:`);
   for (const f of fails) console.log(`  FAIL ${f}`);

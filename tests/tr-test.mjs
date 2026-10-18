@@ -179,13 +179,11 @@ async function boot(page = 'trade.html', search = '', seed = null, { wide = true
  */
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** The finder is showing "Trying every swap…", or the combo "Trying every set…": a search is in flight. */
+/** The finder is showing "Trying every swap…": a search is in flight. */
 function searchRunning() {
   const document = globalThis.document;
   const el = document && document.getElementById('tradeEmpty');
-  if (el && !/\bhidden\b/.test(el.getAttribute('class') || '') && el.querySelector('.searching')) return true;
-  const combo = document && document.getElementById('comboBody');
-  return !!combo && /Trying every set/.test(combo.textContent);
+  return !!(el && !/\bhidden\b/.test(el.getAttribute('class') || '') && el.querySelector('.searching'));
 }
 
 /**
@@ -244,7 +242,7 @@ async function settleGoal(document, idleMax = 45000) {
     const done = /ranked by net increase/.test(count) && !/playing each offer out/.test(count);
     const empty = !document.querySelector('#tradeTable tbody tr') && !/Trying every swap/.test(txt('tradeEmpty')) &&
       txt('tradeEmpty').length > 0;
-    if ((done || empty) && !/Trying every set/.test(txt('comboBody'))) break;
+    if (done || empty) break;
     await settle(250);
   }
   await settle(400);
@@ -1041,59 +1039,6 @@ function readBreakdown(document) {
   };
 }
 
-/**
- * The combo panel. The BEST packing and the "most trades" alternative are read
- * separately on purpose: they are two different packings of the same offers, so
- * a man may legitimately appear in both, and a reader that pooled them would
- * report a disjointness failure that is not one.
- */
-function readCombo(document) {
-  const body = document.getElementById('comboBody');
-  const best = body.querySelector('.combo-best') || body;
-  const alt = body.querySelector('.combo-alt');
-  const rows = readOfferRows(document.getElementById('comboTable'));
-  const altRows = readOfferRows(document.getElementById('comboAltTable'));
-  // The men, by ESPN's own id rather than by their printed name: the cell text
-  // runs a name into a position into a number, and the whole point of the
-  // site's link contract is that the id is the identity.
-  const ids = (list) => list.flatMap((r) => r.links);
-  return {
-    head: text(best.querySelector('.combo-head')),
-    // THE LINEUP FOR THE WHOLE PACKING, once, and the sentence that says why
-    // there is one figure and not one per deal (Tim, 2026-09-19).
-    lineup: text(best.querySelector('.combo-lineup')),
-    oneNumber: text(best.querySelector('.combo-one')),
-    heads: [...(document.getElementById('comboTable') || { querySelectorAll: () => [] })
-      .querySelectorAll('thead th')].map(text),
-    rows,
-    altRows,
-    names: ids(rows),
-    altNames: ids(altRows),
-    // Each row's two sides, as ESPN ids, so the whole packing can be re-priced
-    // from the engine rather than read back off the page that printed it.
-    perTrade: rows.map((r) => ({
-      partner: r.partner,
-      send: r.send.map((m) => m.id).filter((v) => v !== null),
-      receive: r.receive.map((m) => m.id).filter((v) => v !== null),
-    })),
-    // THE HEADLINE, PER WEEK — the figure the whole packing is worth, off the
-    // big number the panel leads with. Read as a number so it can be compared
-    // against the finder's own rows, which is the comparison Tim's 2026-09-19
-    // report is about: a combo can never be worth less than the best single
-    // offer, because every singleton is a packing the search considers.
-    headlineGain: (() => {
-      const big = best.querySelector('.combo-head .big');
-      if (!big) return null;
-      const n = Number(text(big).replace('−', '-').replace('+', ''));
-      return Number.isFinite(n) ? n : null;
-    })(),
-    alt: text(alt),
-    weeks: readWeekTable(best),
-    body: text(body),
-    note: text(document.getElementById('comboNote')),
-  };
-}
-
 /** Open the hover card on one named player, and read what it drew. */
 function openCard(document, selector) {
   const man = document.querySelector(selector);
@@ -1825,6 +1770,9 @@ const SCENARIOS = {
       count: text(document.getElementById('tradeCount')),
       // The depth map is gone (Tim, 2026-10-18); the All teams grid stands there.
       hasDepth: !!document.getElementById('depthTable') || /Depth map/.test(text(document.body)),
+      // Tim, 2026-10-18: "Remove the best combo section of the cite".
+      hasCombo: !!document.getElementById('comboPanel') || !!document.getElementById('comboBody') ||
+        /Best combo|How the combination is priced/i.test(text(document.body)),
       gridKey: text(document.getElementById('projAvgLegend')),
       gridNote: text(document.getElementById('projAvgNote')),
       gridTitle: text(document.getElementById('projAvgTitle')),
@@ -1895,11 +1843,8 @@ const SCENARIOS = {
     const out = { errors, fetchCalls, noApi };
     const heads = (table) => [...table.querySelectorAll('thead th')].map(text);
     out.finderHeads = heads(document.getElementById('tradeTable'));
-    out.comboHeads = [...document.querySelectorAll('#comboBody table')].map(heads);
     out.cuHeads = heads(document.getElementById('cuTable'));
     out.finder = readTrades(document).map((r) => ({ hasDeal: r.hasDeal, lastAsk: r.lastAsk, n: r.askButtons }));
-    out.combo = [...document.querySelectorAll('#comboBody table')].flatMap((t) => readOfferRows(t))
-      .map((r) => ({ hasDeal: r.hasDeal, lastAsk: r.lastAsk, n: r.askButtons }));
     out.headCellsMatchRow = (() => {
       const tr = document.querySelector('#tradeTable tbody tr');
       return tr ? tr.children.length === out.finderHeads.length : null;
@@ -1946,7 +1891,7 @@ const SCENARIOS = {
     out.labelLater = text(btn);
 
     // EVERY finder row's copied His line (2026-10-14, net both ways); the copies
-    // are taken back off so the combo check below reads only its own.
+    // are taken back off afterwards.
     out.hisLines = [];
     for (const b of document.querySelectorAll('#tradeTable tbody tr button.ask-ai')) {
       const at = copied.length;
@@ -1955,15 +1900,6 @@ const SCENARIOS = {
       const c = copied[at];
       if (c) out.hisLines.push(((c.text.match(/His lineup gain:.*/) || [''])[0]));
       copied.length = out.copied.length;
-    }
-    // A COMBO row's button copies its own deal too.
-    const comboBtn = document.querySelector('#comboBody table tbody tr button.ask-ai');
-    if (comboBtn) {
-      comboBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
-      await settle(50);
-      const ctr = comboBtn.closest('tr');
-      out.comboPartner = text(ctr.querySelector('.mgr'));
-      out.comboCopied = copied.length > out.copied.length ? copied[copied.length - 1].text : '';
     }
     return out;
   },
@@ -2076,7 +2012,6 @@ const SCENARIOS = {
       cost: readCost(document),
       grid: readGrid(document),
       trades: readTrades(document),
-      combo: readCombo(document),
       heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
       note: text(document.getElementById('tradeNote')),
       // The visible line under the finder, which now also carries the colour
@@ -2098,7 +2033,6 @@ const SCENARIOS = {
       cost: readCost(document),
       grid: readGrid(document),
       trades: readTrades(document),
-      combo: readCombo(document),
       measure: measure.value,
     };
     // And back, so everything below reads the weekly page.
@@ -2264,10 +2198,8 @@ const SCENARIOS = {
     await settle(600);
     const closedByOutside = readDeal(document);
 
-    // -- and from a COMBO row, which is the other half of the ask
-    const comboRow = document.querySelector('#comboTable tbody tr');
-    const comboRoute = await openRowDeal(document, comboRow, 1200);
-    const fromCombo = readDeal(document);
+    // -- opened once more, from the finder, for the click inside it below
+    await openRowDeal(document, document.querySelector('#tradeTable tbody tr'), 1200);
 
     // A click INSIDE the card must not close it — the backdrop is outside, the
     // thing you are reading is not.
@@ -2275,28 +2207,16 @@ const SCENARIOS = {
     await settle(400);
     const stillOpen = readDeal(document);
 
-    // And the WHOLE packing, which is the other thing that used to be printed
-    // inline under the list. "Including the best combo" is the half of ask 5
-    // that is about this button.
     key('Escape');
     await settle(400);
-    const headButton = document.querySelector('#comboBody .combo-head button.wk-open');
-    click(headButton);
-    await settle(1500);
-    const wholeCombo = readDeal(document);
 
     return {
       errors, fetchCalls,
       before, opened, closedByButton, reopened, closedByEscape, closedByOutside,
-      fromCombo, stillOpen, wholeCombo,
-      rowShape, boxBefore, byEnter, byOtherKey, byClick, comboRoute,
-      hadHeadButton: !!headButton,
-      headLabel: text(headButton),
+      stillOpen,
+      rowShape, boxBefore, byEnter, byOtherKey, byClick,
       // Nothing may be printing a week-by-week table outside the pop-up now.
-      strayWeekTables: document.querySelectorAll('#comboBody table.weeks').length +
-        document.querySelectorAll('#tradeTable table.weeks').length,
-      hadComboRow: !!comboRow,
-      comboPartner: comboRow ? text(comboRow.querySelector('.mgr')) : '',
+      strayWeekTables: document.querySelectorAll('#tradeTable table.weeks').length,
       // The modal frame is a direct child of <body>, not of a scrolling panel:
       // a `position: fixed` box inside `overflow: auto` is positioned against
       // that box rather than the window.
@@ -2381,8 +2301,8 @@ const SCENARIOS = {
     // 2026-10-12 (Tim: "when you click on the trade automatically open up in
     // custom trades"): the button on the row and the one inside the pop-up are
     // both gone and the ROW is the control. Clicked on a finder row, then on a
-    // second finder row with a different deal (the box must follow, not add),
-    // then on a combo row. The men are compared by ESPN id: the row prints
+    // second finder row with a different deal (the box must follow, not add).
+    // The men are compared by ESPN id: the row prints
     // last names, the box full ones.
     const ticked = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')]
       .filter((b) => b.hasAttribute('checked')).map((b) => Number(b.getAttribute('value'))).sort((a, b) => a - b);
@@ -2419,8 +2339,7 @@ const SCENARIOS = {
     const dealKey = (x) => (x.send || []).concat(['|'], x.recv || []).join();
     const other = rows().find((r) => dealKey({ send: idsOf(r, '.hv.send'), recv: idsOf(r, '.hv.recv') }) !== dealKey(fromRow));
     const fromSecond = await press(other);
-    const fromCombo = await press(document.querySelector('#comboTable tbody tr'));
-    return { errors, fromRow, fromSecond, fromCombo };
+    return { errors, fromRow, fromSecond };
   },
 
   /**
@@ -2607,7 +2526,6 @@ const SCENARIOS = {
     const after = {
       cost: readCost(document),
       trades: readTrades(document),
-      combo: readCombo(document),
       grid: readGrid(document),
       heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
       note: text(document.getElementById('tradeNote')),
@@ -2674,7 +2592,6 @@ const SCENARIOS = {
       // against a hand-picked row.
       men: [
         ...after.trades.flatMap((t) => [...t.send, ...t.receive]),
-        ...after.combo.rows.flatMap((t) => [...t.send, ...t.receive]),
         ...deal.men,
       ],
       // The scalar basis draws a different set of offers, and it is the one
@@ -2956,7 +2873,6 @@ SCENARIOS.byeMark = async function byeMark() {
   await settleGoal(document);
   const trs = [...document.querySelectorAll('#tradeTable tbody tr')];
   const finder = trs.map((tr) => ({ partner: text(tr.querySelector('td.name')), men: readByeMarks(tr) }));
-  const combo = readByeMarks($('comboBody'));
   const finderKey = text($('tradeByeKey'));
   // EVERY KEY ON THE PAGE (2026-10-06): a sentence is printed once, under the
   // first table that needs it. The pop-up's own key is not one of these.
@@ -3022,7 +2938,7 @@ SCENARIOS.byeMark = async function byeMark() {
   await settle(1500);
   const saved = readByeMarks($('cuTable'));
   return {
-    errors, finder, combo, finderKey, note, deal, dealKey, listA, listB, cuKey, saved, listABo, cuKeyBo,
+    errors, finder, finderKey, note, deal, dealKey, listA, listB, cuKey, saved, listABo, cuKeyBo,
     keys0, keysBo, keys: pageKeys(),
   };
 };
@@ -3233,10 +3149,15 @@ SCENARIOS.livePickup = async function livePickup() {
   // would make this scenario intermittent rather than wrong.
   await settleGoal(document);
   const trades = readTrades(document);
-  // Every man the page names ANYWHERE, by ESPN id: depth map, spare strip,
-  // finder, combo. A dropped man must be on none of them.
-  const everyId = () => [...document.querySelectorAll('a.pref')]
-    .map((a) => idOfHref(a.getAttribute('href')));
+  // Every man the page names ANYWHERE, by ESPN id: every player link (the
+  // finder's packages) and the custom box's two rosters, which list every man
+  // on both squads. (The depth map and the Best combo named men here until
+  // 2026-10-18, when Tim had both taken off the page.) A dropped man must be on
+  // none of them.
+  const everyId = () => [
+    ...[...document.querySelectorAll('a.pref')].map((a) => idOfHref(a.getAttribute('href'))),
+    ...[...document.querySelectorAll('label.cu-man[data-man]')].map((l) => Number(l.getAttribute('data-man'))),
+  ];
   const opened = {
     week: document.getElementById('weekSelect').value,
     asked: stub.calls.week.slice(),
@@ -3324,9 +3245,6 @@ SCENARIOS.goalTitle = async function goalTitle() {
   await settle(1500);
   const cuRow = readOfferRows(document.getElementById('cuTable'))[0] || null;
   const cuHeads = [...document.querySelectorAll('#cuTable thead th')].map(text);
-  const comboHeads = [...document.querySelectorAll('#comboTable thead th')].map(text);
-  const comboRows = readOfferRows(document.getElementById('comboTable'));
-  const comboGoal = text(document.querySelector('#comboBody .combo-goal'));
 
   document.querySelector('#goalToggle button[data-goal="last"]')
     .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
@@ -3348,7 +3266,7 @@ SCENARIOS.goalTitle = async function goalTitle() {
   };
   return {
     errors, fetchCalls, title, deal, dealGoal, ticked, cuPreview, cuRow, cuHeads,
-    comboHeads, comboRows, comboGoal, last, stored, oneWeek,
+    last, stored, oneWeek,
   };
 };
 
@@ -4132,7 +4050,6 @@ SCENARIOS.goalLive = async function goalLive() {
   return {
     errors,
     deadline: { hidden: !!dl.hidden, text: text(dl), warn: /\bwarn-line\b/.test(dl.getAttribute('class') || '') },
-    combo: text(document.getElementById('comboBody')),
     kinds: [...document.querySelectorAll('#kindToggle button')].map(text),
     trades: readTrades(document),
     heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
@@ -4304,7 +4221,7 @@ SCENARIOS.rankSliced = async function rankSliced() {
  * THE SLICED SEARCH IS THE SEARCH (2026-10-06). No page: js/trade.js and
  * js/trade-odds.js asked the same question both ways, on the demo league over
  * thirteen weeks — the finder weighted as the goal weights it, the plain
- * typical-week finder, the combo over what the first found, and the week
+ * typical-week finder, and the week
  * weights — and the two answers compared whole, as text.
  *
  * Also that the sliced one really pauses, and that a `stale` that turns true
@@ -4315,7 +4232,7 @@ SCENARIOS.slicedSame = async function slicedSame() {
   const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
   const T = await import(moduleUrl('js/trade.js'));
   const O = await import(moduleUrl('js/trade-odds.js'));
-  if (typeof T.findTradesSliced !== 'function' || typeof T.bestComboSliced !== 'function' ||
+  if (typeof T.findTradesSliced !== 'function' ||
       typeof O.weekWeightsSliced !== 'function') {
     return { missing: true };
   }
@@ -4357,12 +4274,6 @@ SCENARIOS.slicedSame = async function slicedSame() {
   const typical = { teams, myTeamId: teams[2].id, slots };
   const a = T.findTrades(typical);
   out.typical = { same: flat(a) === flat(await T.findTradesSliced(typical, { pause })), offers: a.offers.length };
-
-  const comboOpts = { players: teams[3].players, slots, weeks: WEEKS, projFor, teams };
-  const c1 = T.bestCombo(whole.offers, comboOpts);
-  const c2 = await T.bestComboSliced(whole.offers, comboOpts, { pause });
-  const comboFlat = (c) => JSON.stringify(c, (k, v) => (k === 'partner' && v && v.id !== undefined ? v.id : v));
-  out.combo = { same: comboFlat(c1) === comboFlat(c2), found: !!c1, deals: c1 && c1.offers ? c1.offers.length : null };
 
   const ids = teams.map((t) => t.id);
   const games = [];
@@ -4467,10 +4378,6 @@ SCENARIOS.twoGoals = async function twoGoals() {
     heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
     count: line(),
     note: text(document.getElementById('tradeNote')),
-    comboHeads: [...document.querySelectorAll('#comboTable thead th')].map(text),
-    comboRows: readOfferRows(document.getElementById('comboTable')),
-    comboGoal: text(document.querySelector('#comboBody .combo-goal')),
-    comboNote: text(document.getElementById('comboNote')),
     week: document.getElementById('weekSelect').value,
     team: document.getElementById('teamSelect').value,
     teams: [...document.querySelectorAll('#teamSelect option')]
@@ -4493,9 +4400,10 @@ SCENARIOS.twoGoals = async function twoGoals() {
     await emptyBox(document, route);
   }
 
-  // SWITCH FROM A COPY, not from the top control: the combo panel's.
+  // SWITCH FROM A COPY, not from the top control: the custom panel's (the
+  // Best combo panel's, until Tim had it removed on 2026-10-18).
   const other = startGoal === 'title' ? 'last' : 'title';
-  const copy = document.querySelector(`#comboPanel [data-goal-toggle] button[data-goal="${other}"]`);
+  const copy = document.querySelector(`#customPanel [data-goal-toggle] button[data-goal="${other}"]`);
   const t1 = Date.now();
   if (copy) {
     copy.dispatchEvent(new globalThis.Event('click', { bubbles: true }));
@@ -4942,9 +4850,6 @@ SCENARIOS.yesWords = async function yesWords() {
       theirCard: popText(tr.querySelector('.hv.their-gain')),
     };
   });
-  const comboGoal = text(document.querySelector('#comboBody .combo-goal'));
-  const comboWord = document.querySelector('#comboBody .combo-goal [data-rc="yes"]');
-  const comboCard = comboWord ? popText(comboWord) : '';
 
   // The top row's pop-up.
   const route = await openRowDeal(document, document.querySelector('#tradeTable tbody tr.offer'), 2500);
@@ -4978,15 +4883,15 @@ SCENARIOS.yesWords = async function yesWords() {
     preview: text($('cuPreview')),
     gainB: text($('cuGainB').querySelector('.cu-sub')),
   };
-  return { errors, goalOn, rows, comboGoal, comboCard, deal, custom };
+  return { errors, goalOn, rows, deal, custom };
 };
 
 /**
  * Sweep 2026-10-16 rows 5, 15 and 16, read by tr-fixes-check.mjs:
  *   5  an "Ask AI" key from a repaint ago no longer copies (the map is cleared
  *      with the rows it was built for);
- *  15  closing the pop-up puts focus back on what opened it (the combo's
- *      headline button), not on <body>;
+ *  15  closing the pop-up puts focus back on what opened it (the custom box's
+ *      Week by week button since the Best combo went, 2026-10-18), not <body>;
  *  16  Enter on a saved row does what a click does (loads it into the box).
  */
 SCENARIOS.trFixes = async function trFixes() {
@@ -5010,13 +4915,19 @@ SCENARIOS.trFixes = async function trFixes() {
   const firstAsk = document.querySelector('#tradeTable tbody tr button.ask-ai');
   out.oldKey = firstAsk ? firstAsk.getAttribute('data-ask-ai') : null;
 
-  // 15: the combo's headline opens the pop-up; closing it repaints and refocuses.
-  let head = null;
-  for (let i = 0; i < 100 && !head; i++) {
-    head = document.querySelector('#comboPanel .wk-open[data-key]');
-    if (!head) await settle(100);
-  }
-  out.headKey = head ? head.getAttribute('data-key') : null;
+  // 15: the custom box's Week by week button opens the pop-up; closing it
+  // repaints and refocuses. One man ticked each side so the box prices a deal.
+  const tickOne = (sel, on) => {
+    const box = document.querySelector(sel);
+    if (!box) return;
+    box.checked = on;
+    fire(box, 'change');
+  };
+  tickOne('#cuListA input[type="checkbox"]', true);
+  tickOne('#cuListB input[type="checkbox"]', true);
+  await settle(1200);
+  const head = $('cuOpen') && !$('cuOpen').disabled ? $('cuOpen') : null;
+  out.headKey = head ? head.getAttribute('data-open') : null;
   if (head) {
     fire(head, 'click');
     await settle(300);
@@ -5027,10 +4938,14 @@ SCENARIOS.trFixes = async function trFixes() {
     out.closed = $('dealModal').hidden;
     const last = focused[focused.length - 1] || null;
     out.focusBack = last ? {
-      tag: last.tagName, cls: last.getAttribute('class') || '', key: last.getAttribute('data-key'),
+      tag: last.tagName, id: last.getAttribute('id') || '', key: last.getAttribute('data-open'),
       inDoc: document.contains ? document.contains(last) : true,
     } : null;
   }
+  // Untick them, so row 16 starts from an empty box.
+  tickOne('#cuListA input[type="checkbox"]', false);
+  tickOne('#cuListB input[type="checkbox"]', false);
+  await settle(600);
 
   // 5 again, after those repaints: the old key is gone from the page; a button
   // carrying it must copy nothing.
@@ -5283,23 +5198,26 @@ if (!fresh.boot) {
   // depth map gave its place to the All teams grid (Tim: "in the trade section,
   // the depth map is useless and I don't like it. Just show the all teams proj
   // avg 2026 graph there instead."), so the sequence is the same length with
-  // that one entry changed. These scenarios open on "Don't finish last" (`boot`).
+  // that one entry changed. The Best combo went on 2026-10-18 too (Tim:
+  // "Remove the best combo section of the cite"), so it is one shorter.
+  // These scenarios open on "Don't finish last" (`boot`).
   eq(
     fresh.panels.map((p) => p.heading).join(' > '),
-    'Data source > Trades ranked by net increase > Best combo > All teams > Custom trades',
-    'the panels read finder, combo, all teams, custom — under the toolbar'
+    'Data source > Trades ranked by net increase > All teams > Custom trades',
+    'the panels read finder, all teams, custom — under the toolbar, and no Best combo'
   );
   ok('and the finder no longer claims a trade helps both squads — it cannot, and does not',
     !/help(s)? both squads/i.test(fresh.panels.map((p) => p.heading).join(' ')),
     fresh.panels.map((p) => p.heading).join(' > '));
   eq(
     fresh.panels.map((p) => p.id).join(','),
-    ',finderTitle,,projAvgTitle,',
+    ',finderTitle,projAvgTitle,',
     'and the two ids the module writes into are on the right panels'
   );
 
   // ---- the depth map is gone; the All teams grid is in its place -----------
   ok('the depth map is gone: no table, no heading', fresh.hasDepth === false);
+  ok('the Best combo is gone: no panel, no heading, no words', fresh.hasCombo === false);
   eq(fresh.gridTitle, 'All teams · proj avg 2026', 'the grid carries the Analysis page’s own title');
   eq(fresh.grid.rows.length, 10, 'a row per manager');
   eq(fresh.teams.length, 10, 'every manager is offered as "your team"');
@@ -5596,16 +5514,12 @@ for (const noApi of [false, true]) {
   ok(`and no request${tag}`, ai.fetchCalls.length === 0, ai.fetchCalls.slice(0, 2).join(' | '));
   if (!noApi) {
     ok('the finder has no Deal column', !ai.finderHeads.includes('Deal'), ai.finderHeads.join(' | '));
-    ok('the combo tables have no Deal column', ai.comboHeads.length > 0 && ai.comboHeads.every((h) => !h.includes('Deal')),
-      JSON.stringify(ai.comboHeads));
     ok('nor the saved custom trades', !ai.cuHeads.includes('Deal'), ai.cuHeads.join(' | '));
     ok('the finder head has one cell per row cell (Ask AI has no column of its own)', ai.headCellsMatchRow === true,
       `${ai.finderHeads.length} heads`);
     ok('every finder row: no Deal cell, one "Ask AI", and it is the LAST cell',
       ai.finder.length > 0 && ai.finder.every((r) => !r.hasDeal && r.n === 1 && r.lastAsk === 'Ask AI'),
       JSON.stringify(ai.finder.slice(0, 3)));
-    ok('every combo row the same', ai.combo.length > 0 && ai.combo.every((r) => !r.hasDeal && r.n === 1 && r.lastAsk === 'Ask AI'),
-      JSON.stringify(ai.combo.slice(0, 3)));
   }
   eq(ai.copied.length, 1, `one press copies once${tag}`);
   const c = ai.copied[0] || { via: '', text: '' };
@@ -5682,9 +5596,6 @@ for (const noApi of [false, true]) {
   ok(`the press does not open the week-by-week pop-up${tag}`, ai.dealHiddenBefore && ai.dealHiddenAfter,
     `${ai.dealHiddenBefore} ${ai.dealHiddenAfter}`);
   eq(ai.textareasLeft, 0, `no textarea is left in the page${tag}`);
-  ok(`a combo row's button copies ITS deal${tag}`,
-    !!ai.comboCopied && ai.comboCopied.includes(`Trading with: ${ai.comboPartner}`) && !/undefined|NaN/.test(ai.comboCopied),
-    `${ai.comboPartner} / ${String(ai.comboCopied).slice(0, 300)}`);
   if (!noApi && process.env.TR_SHOW_ASK) console.log(`--- Ask AI, first finder row, as copied ---\n${t}\n---`);
 }
 
@@ -5948,97 +5859,6 @@ async function rederiveHis(page, rowList, goal) {
   });
 }
 
-/** Price one packing of trades across the rest of the season, from scratch. */
-async function repriceCombo(week, teamId, perTrade) {
-  if (!perTrade || !perTrade.length) return null;
-  const { generateDemoWeekRosters } = await import(moduleUrl('js/demo-rosters.js'));
-  const { priceTradeAcrossWeeks, slotsForLeague } = await import(moduleUrl('js/trade.js'));
-  const { slotCountsFromLineups } = await import(moduleUrl('js/projection.js'));
-
-  const base = generateDemoWeekRosters(week);
-  const slots = slotsForLeague(slotCountsFromLineups(base.teams));
-
-  const span = demoSpan(week);
-
-  const byWeek = new Map();
-  for (const w of span) {
-    const idx = new Map();
-    for (const t of generateDemoWeekRosters(w).teams) {
-      for (const p of t.players) idx.set(p.playerId, p.projected);
-    }
-    byWeek.set(w, idx);
-  }
-  const projFor = (p, w) => {
-    const idx = byWeek.get(w);
-    const v = idx ? idx.get(p.playerId) : undefined;
-    return typeof v === 'number' ? v : null;
-  };
-
-  const me = base.teams.find((t) => String(t.id) === String(teamId));
-  if (!me) return null;
-  const byId = new Map();
-  for (const t of base.teams) for (const p of t.players) byId.set(p.playerId, p);
-
-  // Every send and every receive TOGETHER, in one pricing — which is the only
-  // honest way to price a set of trades, and the thing the page must be doing.
-  const send = [];
-  const receive = [];
-  for (const t of perTrade) {
-    for (const id of t.send) send.push(byId.get(id) || id);
-    for (const id of t.receive) if (byId.get(id)) receive.push(byId.get(id));
-  }
-  const mine = priceTradeAcrossWeeks({ players: me.players, send, receive, slots, weeks: span, projFor });
-  // NET (2026-09-30): minus each partner's own change in the regular-season
-  // week(s) of the span in which you play him, priced from his side alone.
-  const { generateDemoLeague } = await import(moduleUrl('js/demo.js'));
-  const games = generateDemoLeague().games;
-  let opp = 0;
-  for (const t of perTrade) {
-    const partner = base.teams.find((x) => x.name === t.partner);
-    if (!partner) return { ...mine, net: NaN };
-    const meet = new Set(games
-      .filter((g) => (g.homeId === me.id && g.awayId === partner.id) || (g.homeId === partner.id && g.awayId === me.id))
-      .map((g) => g.week));
-    const his = priceTradeAcrossWeeks({
-      players: partner.players,
-      send: t.receive.map((id) => byId.get(id)).filter(Boolean),
-      receive: t.send.map((id) => byId.get(id)).filter(Boolean),
-      slots, weeks: span, projFor,
-    });
-    opp += his.byWeek.filter((w) => meet.has(w.week)).reduce((a, w) => a + w.delta, 0);
-  }
-  return { ...mine, net: Math.round((mine.delta - opp) * 10) / 10 };
-}
-
-/**
- * What the page WOULD have claimed if it had added the offers' own gains up.
- *
- * Re-derived from the page's own two tables rather than from a phrase printed
- * in the combo list, which no longer exists — the combo's rows are merged per
- * manager and carry a re-priced gain, so their own numbers are deliberately not
- * the finder's. Each combo row is matched back to the finder rows it was built
- * from (the finder offers whose players are all inside it), and THOSE gains are
- * what the naive sum is made of. Which is the only honest way to check the
- * warning: it has to be the sum of the things somebody would have added up.
- */
-function naiveFromFinder(comboRows, finderRows) {
-  let total = 0;
-  let matched = 0;
-  for (const c of comboRows) {
-    const ids = new Set([...c.send, ...c.receive].map((m) => m.id));
-    for (const f of finderRows) {
-      const fIds = [...f.send, ...f.receive].map((m) => m.id);
-      if (!fIds.length || !fIds.every((id) => ids.has(id))) continue;
-      // Only the offers with this same partner: a different manager's deal
-      // cannot be a part of this row however its ids fall.
-      if (f.partner !== c.partner) continue;
-      total += f.myGain;
-      matched++;
-    }
-  }
-  return { total: Math.round(total * 10) / 10, matched };
-}
-
 /** `[a, a+1, … b]`, and a label for it that reads like the page's own. */
 const weekRange = (a, b) => {
   const out = [];
@@ -6140,43 +5960,6 @@ if (!wk.boot) {
   ok('and names the weeks it reads but never prices',
     /shows but does not price/.test(wk.after.cost.note), wk.after.cost.note.slice(0, 600));
 
-  // -- the combo is there too, unasked -------------------------------------
-  ok('the best combo is computed without a press', wk.after.combo.rows.length > 0,
-    wk.after.combo.body.slice(0, 200));
-
-  // TIM'S OWN COMPLAINT, AS A PAGE-LEVEL ASSERTION (2026-09-19): "the best
-  // combo gives me a single trade that is a 2-1 that has a lower +/week than
-  // the top trade". It cannot — every single offer is a packing the search
-  // considers — so a headline below the best row is proof the two panels are
-  // pricing on different bases. They were: `bestCombo` took no `floors` option
-  // at all, so the rows were floored and the packing was not.
-  //
-  // `test-trade-weekly.mjs` proves this in the engine, against a stand-in wire
-  // strong enough to make it fail without the fix. This is the same claim read
-  // off the rendered page, which is where he saw it.
-  {
-    const topRow = Math.max(...wk.after.trades.map((t) => t.myGain));
-    ok('the best combo is never worth less than the best single offer above it',
-      wk.after.combo.headlineGain === null ||
-      wk.after.combo.headlineGain * demoSpan(wk.week).length + 0.6 >= topRow,
-      `headline ${wk.after.combo.headlineGain}/wk vs top row ${topRow} total`);
-  }
-  ok('and the combo panel says it is priced on the same basis as the rows',
-    /same basis as the offers above/.test(wk.after.combo.note) ||
-    !/positional floor/.test(wk.after.combo.note),
-    wk.after.combo.note.slice(-400));
-  // A DELIBERATE SCALAR MEASURE STILL TURNS IT OFF, and the panel still names
-  // the control by its exact face. It used to get those words by reading
-  // `#loadWeeks`'s textContent back off the page — a panel that was right only
-  // because the toolbar happened to be painted first. Both halves derive the
-  // label from `weeksButton()` now, so the paint order is free; what this holds
-  // down is the thing that WOULD be visible, the two labels agreeing character
-  // for character.
-  ok('picking a scalar measure empties the combo, and it says why',
-    /every remaining week/i.test(wk.before.combo.body), wk.before.combo.body.slice(0, 160));
-  ok('and quotes the weekly button word for word',
-    wk.before.cost.button.length > 0 && wk.before.combo.body.includes(wk.before.cost.button),
-    `button "${wk.before.cost.button}" vs combo "${wk.before.combo.body.slice(0, 200)}"`);
   eq(wk.before.measure, 'typical', 'and a chosen scalar measure is honoured');
 
   // -- THE SCALE IS STATED, which is the trap worth nine times the truth ----
@@ -6556,161 +6339,9 @@ if (!wk.boot) {
       wk.deal.body.slice(-200));
   }
 
-  // -- ask 4: the combo ----------------------------------------------------
-  const combo = wk.after.combo;
-  ok('the combo section has an answer once the weeks are priced',
-    /\d/.test(combo.head), combo.head);
-  ok('it states the gain and the number of trades',
-    /[+−]\d/.test(combo.head) && /trade/.test(combo.head), combo.head);
-  ok('it says a player can only be traded once',
-    /only be traded once/.test(combo.note), combo.note.slice(0, 200));
-  ok('and warns against adding the offers up',
-    /Never add the gains up/.test(combo.note), combo.note.slice(0, 300));
-  ok('the naive sum is shown beside the real one',
-    /Adding the offers’ own gains/.test(combo.body), combo.body.slice(0, 300));
-
-  // DISJOINTNESS, re-derived from the names on screen rather than trusted.
-  ok('no player appears in two trades of the combo',
-    combo.names.length > 0 && new Set(combo.names).size === combo.names.length,
-    combo.names.join(' | '));
-  ok('and none appears twice in the "most trades" packing either',
-    new Set(combo.altNames).size === combo.altNames.length, combo.altNames.join(' | '));
-
-  // MOVED. This used to check the combo's own week-by-week table, which was
-  // printed inline under the list. Ask 5 put it in the pop-up — "including the
-  // best combo" — so the claim now is that it is NOT here, and the rows-add-up
-  // check went with it to the `modal` scenario where the table actually lives.
-  ok('the combo prints no week-by-week table inline any more', combo.weeks === null,
-    'a week table is still sitting under the combo list');
-
-  // THE NUMBER ITSELF, RE-DERIVED. Everything above reads the page back to
-  // itself; this rebuilds the same demo league from scratch, takes the packing
-  // the page printed, applies every send and every receive TOGETHER, and prices
-  // it with the engine. A combo whose headline was the sum of its trades — the
-  // one mistake this section exists to avoid — fails here and nowhere else.
-  const priced = await repriceCombo(wk.week, wk.myTeamId, combo.perTrade);
-  const claimed = num((combo.head.match(/\(([+−]\d+(?:\.\d+)?) total over/) || [])[1]);
-  const headPer = num(combo.head.split(' ')[0]);
-  ok('the combo headline leads with the PER-WEEK figure',
-    !!priced && /^[+−]?\d[\d.]* a week/.test(combo.head) &&
-      Math.abs(headPer - priced.net / demoSpan(wk.week).length) <= 0.06,
-    `${combo.head.slice(0, 80)} vs ${priced && (priced.net / demoSpan(wk.week).length).toFixed(2)}`);
-  // NET since 2026-09-30: your change minus each partner's in the weeks you play him.
-  ok('the combo headline survives an independent re-pricing of the same move (net)',
-    priced && Math.abs(priced.net - claimed) <= 0.15,
-    `page says ${claimed}, a fresh priceTradeAcrossWeeks says ${priced && priced.net} net (${priced && priced.delta} yours)`);
-  ok('and the net really differs from your own change here, so the check bites',
-    priced && Math.abs(priced.net - priced.delta) > 0.15,
-    `${priced && priced.net} vs ${priced && priced.delta}`);
-  // The naive figure the page prints must BE the sum of the offers' own gains
-  // — otherwise the warning beside it is decoration — and the real answer must
-  // differ from it, which is the whole reason the warning exists.
-  //
-  // MOVED, and the old reading encoded the old markup: the combo used to print
-  // each offer's own gain in its list ("on its own +12.4") and the sum was read
-  // back out of those words. The rows are merged per manager now and carry a
-  // RE-PRICED gain, so the naive sum has to come from the finder's table — the
-  // place those original gains still live. Same claim, derived from the page
-  // rather than from a sentence the page writes about itself.
-  const naive = naiveFromFinder(combo.rows, wk.after.trades);
-  ok('every combo row can be traced back to the finder offers it was built from',
-    naive.matched >= combo.rows.length,
-    `${naive.matched} finder offers matched ${combo.rows.length} combo rows`);
-  // The trailing full stop is not part of the number, and a regex that eats it
-  // hands Number() a NaN that looks like a mismatch.
-  // Per week first now; the total the finder's gains add up to is in brackets.
-  const naiveShown =
-    (combo.body.match(/own gains would have given [+−]\d+(?:\.\d+)? a week \(([+−]\d+(?:\.\d+)?) over/) || [])[1];
-  ok('the naive sum shown is exactly the offers’ own gains added up',
-    naiveShown !== undefined && Math.abs(num(naiveShown) - naive.total) <= 0.15,
-    `shown ${naiveShown}, the finder's own gains add to ${naive.total.toFixed(1)}`);
-  ok('and the real answer is not that sum',
-    naive.matched < 2 || Math.abs(priced.delta - naive.total) > 0.15 ||
-      /coincidence rather than a rule/.test(combo.body),
-    `${priced && priced.delta} vs naive ${naive.total.toFixed(1)}`);
-
-  // ---- ask 6: the combo is a LIST OF OFFERS, in the finder's own shape -----
-  ok('the combo draws its trades as offer rows, not a summary',
-    combo.rows.length > 0, combo.body.slice(0, 200));
-  ok('every combo row names a manager, a package each way and HIS gain',
-    combo.rows.every((r) => r.partner && r.send.length && r.receive.length &&
-      Number.isFinite(r.theirGain)),
-    JSON.stringify(combo.rows.map((r) => [r.partner, r.send.length, r.receive.length, r.theirGain])));
-
-  // -- (A) ONE NUMBER FOR THE PACKING, NOT ONE PER DEAL --------------------
-  //
-  // Tim, 2026-09-19: "I want their stats to be combined because it should treat
-  // it as the same trade made at once. This means the +/week should be shown as
-  // 1 number not 2."
-  //
-  // FALSIFIABLE: put `myGain: true` back on `comboTableHtml`'s call to
-  // `offerRow` and the first two of these fail immediately.
-  ok('no combo row carries a per-deal “you gain”',
-    combo.rows.length > 0 && combo.rows.every((r) => r.hasMyGain === false),
-    JSON.stringify(combo.rows.map((r) => r.gainText)));
-  ok('and no combo row carries its own lineup before-and-after',
-    combo.rows.every((r) => r.hasLineup === false),
-    JSON.stringify(combo.rows.map((r) => r.beforeAfter)));
-  // 2026-10-12: the lineup column left the FINDER too (Tim: "get rid of the
-  // your lineup a week column"), so what the finder still carries that the
-  // combo does not is the "You" half of Gain — and that is how the two tables
-  // differ now, since both are headed "Gain".
-  ok('the FINDER still carries your gain, so this is the combo’s rule and not a lost half — and no lineup cell either',
-    wk.after.trades.length > 0 && wk.after.trades.every((r) => r.hasMyGain && !r.hasLineup),
-    JSON.stringify(wk.after.trades.slice(0, 2).map((r) => [r.hasMyGain, r.hasLineup])));
-  ok('a combo row’s Gain cell has ONE half, "Him" — never yours',
-    combo.rows.length > 0 && combo.rows.every((r) => r.gains && r.gains.halves.map((h) => h.label).join(',') === 'Him' &&
-      r.gains.halves[0].cls.includes('their-gain')),
-    JSON.stringify(combo.rows.map((r) => r.gains && r.gains.halves.map((h) => [h.label, h.cls.join('.')]))));
-  ok('while a finder row’s has two, "You" over "Him"',
-    wk.after.trades.every((r) => r.gains && r.gains.halves.map((h) => h.label).join(',') === 'You,Him'),
-    JSON.stringify(wk.after.trades.slice(0, 2).map((r) => r.gains && r.gains.halves.map((h) => h.label))));
-  ok('the combo’s headings carry no Chance and no "Your lineup" column: Manager, Send, Gain, Value, His proj vs you, ESPN',
-    combo.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') === 'Manager | Send | Gain | Value | Appeal | Total | His proj vs you | ESPN',
-    combo.heads.join(' | '));
-  ok('the whole packing’s lineup before-and-after is on the headline, once',
-    /Your lineup, a week/i.test(combo.lineup) && /→/.test(combo.lineup) &&
-      /\/wk/.test(combo.lineup),
-    combo.lineup);
-  // THE CLAIM STAYS IN VIEW — it changes what the number means, and Tim did
-  // add the two figures up — but the REASON was printed three times on one
-  // panel: in the lead above with this packing's own arithmetic in it, here,
-  // and in "How this works". Two 55-word copies of it cost 223px at 390px.
-  ok('and the panel says IN WORDS that it is one number and not two',
-    /one number, not/i.test(combo.oneNumber) &&
-      /priced as a single move/i.test(combo.oneNumber),
-    combo.oneNumber.slice(0, 220));
-  ok('with the reason behind the toggle rather than a third time on the panel',
-    /no longer exists/i.test(combo.note) && !/no longer exists/i.test(combo.oneNumber),
-    combo.note.slice(0, 400));
-  // REPLACED with the finder's row: the combo's rows are the SAME markup, so
-  // when the churn block came off one it had to come off the other. That they
-  // agree is the point — one builder, one answer.
-  ok('and carries no churn block either, exactly as the finder does not',
-    combo.rows.every((r) => r.churn === ''),
-    combo.rows.map((r) => r.churn.slice(0, 40)).join(' | '));
-  // REPLACED, 2026-10-12: was "and offers the same week-by-week pop-up", off a
-  // `button.wk-open` in each row. Tim had the row buttons removed; the row is
-  // the control (keyed, in the tab order), exactly as a finder row is. The
-  // combination's own "All N trades week by week" button is held in `modal`.
-  ok('and its rows are keyed and in the tab order like the finder’s, with no Week by week or Open in custom button of their own',
-    combo.rows.length > 0 && combo.rows.every((r) => !r.opener && !r.loader && r.tab === '0' && /^c:\d+$/.test(r.openKey || '')),
-    JSON.stringify(combo.rows.map((r) => [r.openKey, r.tab, r.opener, r.loader])));
-  ok('and every man in it links to his row on the Players page',
-    combo.names.length >= combo.rows.length * 2 &&
-    combo.names.every((h) => /^waivers\.html\?player=\d+$/.test(h)),
-    combo.names.slice(0, 3).join(' | '));
-  // Demo has no ESPN league, so the cell says so rather than offering a dead
-  // link — the same sentence the finder's rows carry. The deep link itself is
-  // checked on the stubbed live league below, where there is one to build.
-  ok('and the ESPN column is present and honest about demo',
-    combo.rows.every((r) => /No ESPN league in demo/.test(r.espn)),
-    combo.rows.map((r) => r.espn).join(' | '));
-
   // ---- ask 2: ONE number per player, and it is the per-week one ------------
   const everyMan = [
     ...wk.after.trades.flatMap((t) => [...t.send, ...t.receive]),
-    ...combo.rows.flatMap((t) => [...t.send, ...t.receive]),
     ...((wk.deal && wk.deal.men) || []),
   ];
   ok('there are men on screen to check', everyMan.length > 0);
@@ -6760,7 +6391,6 @@ if (!wk.boot) {
     ok('OPEN IN CUSTOM: a second, different row was there to click',
       cl.fromSecond.had && JSON.stringify([cl.fromSecond.send, cl.fromSecond.recv]) !== JSON.stringify([cl.fromRow.send, cl.fromRow.recv]));
     good(cl.fromSecond, 'a second row replaces the first');
-    good(cl.fromCombo, 'combo row');
   }
 }
 
@@ -6826,9 +6456,6 @@ if (!md.boot) {
       md.byOtherKey.a.length === 0 && md.byOtherKey.b.length === 0 && !md.byOtherKey.popOpen, JSON.stringify(md.byOtherKey));
     ok('ROW: a click does what Enter does — the same deal in the box, and no pop-up',
       holds(md.byClick) && md.byClick.popOpen === false && md.byClick.openEnabled === true, JSON.stringify(md.byClick));
-    ok('ROW: a combo row goes the same way: into the box first, the pop-up only from the box',
-      md.comboRoute.clicked && md.comboRoute.popOnClick === false && md.comboRoute.viaBox === true &&
-        md.comboRoute.boxPartner === md.comboPartner, JSON.stringify([md.comboRoute, md.comboPartner]));
   }
 
   // -- the pop-up opens from the custom box's own button ----------------------
@@ -6845,36 +6472,6 @@ if (!md.boot) {
   ok('a click outside shuts it', md.closedByOutside.hidden);
   ok('but a click INSIDE it does not', !md.stillOpen.hidden,
     'clicking the note inside the pop-up closed it');
-
-  // -- and it is reachable from the best combo, which is the other half ------
-  ok('the combo has a row to open', md.hadComboRow, 'no combo row rendered');
-  ok('a combo row, through the box, opens the same pop-up', !md.fromCombo.hidden);
-  ok('and it is about THAT deal — the one with that manager',
-    md.fromCombo.title.includes(md.comboPartner),
-    `${md.fromCombo.title} vs ${md.comboPartner}`);
-  ok('the combo’s pop-up is priced week by week too',
-    md.fromCombo.weeks && md.fromCombo.weeks.weeks.length > 1,
-    md.fromCombo.weeks ? `${md.fromCombo.weeks.weeks.length} rows` : 'no table');
-
-  // -- and the WHOLE packing, which used to be a box under the list ---------
-  ok('the combo headline offers its own week-by-week button',
-    md.hadHeadButton && /week by week/i.test(md.headLabel), md.headLabel);
-  ok('it opens the pop-up on the whole combination',
-    !md.wholeCombo.hidden && md.wholeCombo.present,
-    JSON.stringify(md.wholeCombo).slice(0, 200));
-  ok('and says it is the combination rather than one trade',
-    /combination/i.test(md.wholeCombo.weeks.heads.join(' ')),
-    md.wholeCombo.weeks.heads.join(' | '));
-  if (md.wholeCombo.weeks) {
-    const rows = md.wholeCombo.weeks.weeks;
-    const totalRow = md.wholeCombo.weeks.totalRow;
-    const sum = rows.reduce((a, r) => a + r.delta, 0);
-    ok('the combination’s own rows add up to its own total',
-      Math.abs(sum - totalRow.delta) <= 0.05 * rows.length + 0.051,
-      `rows sum to ${sum.toFixed(2)}, total says ${totalRow.delta}`);
-  }
-  ok('and says there is no single ESPN screen for a combination',
-    /no one ESPN screen/.test(md.wholeCombo.body), md.wholeCombo.body.slice(-240));
 
   // NOT A BOX BELOW EVERYTHING any more. The whole of ask 5 is that this stuff
   // lives in the pop-up, so a week table anywhere else on the page is the
@@ -7197,7 +6794,7 @@ if (!live.boot) {
 
   const L = await stubLeague();
   const {
-    priceTradeAcrossWeeks, mergeComboByPartner, depthTable, findTrades,
+    priceTradeAcrossWeeks, depthTable, findTrades,
   } = await import(moduleUrl('js/trade.js'));
 
   // FROM THE STUB'S OWN SEASON LENGTH, never a literal 13. The stub plays
@@ -7503,141 +7100,6 @@ if (!live.boot) {
     quarterbacks.every((m) => m.pos === 'QB'),
     JSON.stringify(quarterbacks.slice(0, 3)));
 
-  // ---- ask 6: the merged combo row ---------------------------------------
-  //
-  // On the whole finder the combo now takes the 2-for-2 (Cy's 104+110 for
-  // 301+303) as ONE deal, so nothing needs merging there. Narrowed to 1-for-2
-  // deals the stub packs two Cy deals, which is what these checks are about —
-  // the merge itself, not which kind of deal wins.
-  //
-  // The second deal used to be Ana's spare D/ST into Cy's defence hole. Tim's
-  // rule (2026-10-16: "stop suggesting to trade K and DEF") takes that deal off
-  // the finder, so `TR_SPARE_QB` builds the same shape at quarterback: Ana's
-  // bench `Ana QB3` (15) into Cy's hole (his QB1 projects 2). Everything priced
-  // here by hand uses that same league (`LM`).
-  const SPARE = { TR_SPARE_QB: '1' };
-  const lm = run('live', { stub: true, env: { TR_KIND: 'depth', ...SPARE } });
-  const withSpare = async (fn) => {
-    const was = process.env.TR_SPARE_QB;
-    process.env.TR_SPARE_QB = SPARE.TR_SPARE_QB;
-    try { return await fn(); } finally {
-      if (was === undefined) delete process.env.TR_SPARE_QB; else process.env.TR_SPARE_QB = was;
-    }
-  };
-  const LM = await withSpare(() => stubLeague());
-  ok('the narrowed live scenario boots', !lm.boot, lm.boot);
-  ok('and it really is narrowed to 1-for-2 deals',
-    (lm.after.combo.rows || []).every((r) => r.receive.length > r.send.length),
-    JSON.stringify((lm.after.combo.rows || []).map((r) => [r.send.length, r.receive.length])));
-  ok('the whole-finder combo is not empty either',
-    live.after.combo.rows.length > 0, JSON.stringify(live.after.combo.rows));
-
-  const merged = lm.after.combo.rows.find((r) => r.merged);
-  ok('two deals with one manager are shown as ONE offer',
-    !!merged, JSON.stringify(lm.after.combo.rows.map((r) => [r.partner, r.merged])));
-  if (merged) {
-    const posIn = (m) => (LM.byId.get(m.id) || {}).position;
-    ok('and neither of its deals hands over a kicker or a D/ST (Tim, 2026-10-16)',
-      [...merged.send, ...merged.receive].every((m) => posIn(m) && posIn(m) !== 'K' && posIn(m) !== 'DST'),
-      JSON.stringify([...merged.send, ...merged.receive].map((m) => [m.id, posIn(m)])));
-    ok('and the row says so, because a four-player trade is a different conversation',
-      /deals? as one/.test(merged.mergedText), merged.mergedText);
-
-    // ONE LINK, CARRYING ALL OF IT. A merged deal that opened ESPN with half
-    // its players ticked would be worse than two rows.
-    const q = new URLSearchParams((merged.espn || '').split('?')[1] || '');
-    const linkIds = (q.get('players') || '').split(',').filter(Boolean).map(Number);
-    const incoming = merged.receive.map((m) => m.id);
-    ok('one ESPN link, carrying every man coming from that manager',
-      incoming.length > 1 &&
-      linkIds.length === incoming.length &&
-      incoming.every((id) => linkIds.includes(id)),
-      `link ${linkIds.join(',')} for incoming ${incoming.join(',')}`);
-    ok('and every one of them is on that manager’s roster',
-      linkIds.every((id) => lm.rosters[3].includes(id)), linkIds.join(','));
-
-    // -- (A) THE COMBO PRINTS ONE "YOU GAIN", AND IT IS THE HEADLINE ------
-    //
-    // Tim, 2026-09-19: "right now the best combo just shows the two trades
-    // separately. I want their stats to be combined ... the +/week should be
-    // shown as 1 number not 2, (and it's probably not the sum of the two
-    // separate +/week's)."
-    //
-    // The per-row "You gain" column is GONE from this table, and so is the
-    // per-row lineup — both of those were measured against the roster as it is
-    // today, and after the first trade that roster does not exist. Asserted as
-    // the CELL being absent rather than as a blank, because a blank cell under
-    // a heading that says "You gain" is the same invitation to add them up.
-    ok('a combo row carries no per-deal “you gain” at all',
-      lm.after.combo.rows.every((r) => r.hasMyGain === false),
-      JSON.stringify(lm.after.combo.rows.map((r) => r.gainText)));
-    ok('and no per-deal lineup before and after either — there is one, on the headline',
-      lm.after.combo.rows.every((r) => r.hasLineup === false),
-      JSON.stringify(lm.after.combo.rows.map((r) => r.beforeAfter)));
-
-    // HIS OWN GAIN STAYS, AND IT IS HIS COMBINED SIDE. A partner in two of
-    // these deals must show what BOTH of them together do to him — the
-    // engine's `entry.partners` figure — not one of the two. Re-derived here
-    // from his own roster rather than read back off the page.
-    const partner = LM.teams.find((t) => t.id === 3);
-    const hisSide = await withSpare(() => priceTradeAcrossWeeks({
-      players: partner.players,
-      send: incoming.map((id) => LM.byId.get(id)).filter(Boolean),
-      receive: merged.send.map((m) => LM.byId.get(m.id)).filter(Boolean),
-      slots: LM.slots, weeks: unplayed, projFor: LM.projFor, zeroIsBye: true,
-    }));
-    ok('the manager’s own gain on the row is HIS COMBINED side, priced once',
-      Math.abs(hisSide.delta - merged.theirGain) <= 0.2,
-      `page ${merged.theirGain}, a fresh priceTradeAcrossWeeks ${hisSide.delta}`);
-
-    // The whole-packing figure the headline leads with still re-prices, which
-    // is the number that replaced the column.
-    const re = await withSpare(() => priceTradeAcrossWeeks({
-      players: LM.teams.find((t) => t.id === 1).players,
-      send: merged.send.map((m) => LM.byId.get(m.id) || m.id),
-      receive: incoming.map((id) => LM.byId.get(id)).filter(Boolean),
-      slots: LM.slots, weeks: unplayed, projFor: LM.projFor, zeroIsBye: true,
-    }));
-    ok('and the merged move itself still prices as one roster change',
-      Number.isFinite(re.delta), String(re.delta));
-  }
-
-  // AND IT IS NOT READ OFF THE OFFERS. The check above would still pass if the
-  // page happened to add two gains that summed to the right answer, which in a
-  // fixture this small it can. So this doctors the inputs: the same two offers
-  // with their own `myGain` replaced by nonsense. A merger that added them up
-  // would return the nonsense; one that re-prices cannot see it at all.
-  const found = findTrades({
-    teams: L.teams, myTeamId: 1, slots: L.slots,
-    weeks: unplayed, projFor: L.projFor, zeroIsBye: true,
-  });
-  const pair = disjointPair(found.offers);
-  ok('the fixture offers two disjoint deals with one manager to merge',
-    !!pair, `${found.offers.length} offers, none disjoint with a shared partner`);
-  if (pair) {
-    const opts = {
-      players: me.players, slots: L.slots, weeks: unplayed,
-      projFor: L.projFor, zeroIsBye: true,
-    };
-    const honest = mergeComboByPartner({ combo: pair, partners: [] }, opts);
-    const doctored = mergeComboByPartner(
-      { combo: pair.map((o) => ({ ...o, myGain: 9999 })), partners: [] },
-      opts
-    );
-    eq(honest.length, 1, 'two deals with one manager merge into one offer');
-    eq(honest[0].mergedFrom, 2, 'and the row remembers there were two of them');
-    ok('the merged send list is the union of both',
-      honest[0].send.length === new Set([...pair[0].send, ...pair[1].send]).size,
-      `${honest[0].send.length} sent`);
-    ok('and the merged receive list is the union of both',
-      honest[0].receive.length === new Set([...pair[0].receive, ...pair[1].receive]).size,
-      `${honest[0].receive.length} received`);
-    ok('a merged gain ignores the offers’ own gains entirely',
-      doctored[0].myGain === honest[0].myGain,
-      `${honest[0].myGain} became ${doctored[0].myGain} when the inputs were doctored`);
-    ok('and it is not their sum, which here would be 19998',
-      honest[0].myGain !== 19998);
-  }
 }
 
 // ---- the bye rule: where it still decides something, and where it no longer does
@@ -7771,8 +7233,8 @@ if (!live.boot) {
   ok('pop-up: the key is there', /green/i.test(sends.dealKey), sends.dealKey);
   ok('custom box: your list, ticked or not, is on green', every(sends.listA, green), dump(sends.listA));
   ok('custom box: his list is not marked', every(sends.listB, plain), dump(sends.listB));
-  // ONE KEY ON THE PAGE (2026-10-06): the finder, the combo and the custom box
-  // all show the mark here, and the sentence used to be printed under each.
+  // ONE KEY ON THE PAGE (2026-10-06): the finder and the custom box
+  // both show the mark here, and the sentence used to be printed under each.
   const said = (keys, re) => (keys || []).join(' ¦ ').split(re).length - 1;
   for (const [when, keys] of [['on opening', sends.keys0], ['with Bo in the custom box', sends.keysBo],
     ['with a custom trade saved', sends.keys]]) {
@@ -7782,8 +7244,6 @@ if (!live.boot) {
   ok('saved custom row: your man is on green, his is not',
     every(men([{ men: sends.saved }], 'send'), green) && every(men([{ men: sends.saved }], 'recv'), plain),
     dump(sends.saved));
-  ok('combo: only men you send are marked, and only on green',
-    (sends.combo || []).every((m) => plain(m) || (m.cell === 'send' && green(m))), dump(sends.combo));
 
   // YELLOW: a man she GETS who is off in the meeting week.
   const got = men(cyRows(gets), 'recv');
@@ -7800,8 +7260,6 @@ if (!live.boot) {
     every(gets.listB, yellow) && every(gets.listA, plain), dump([gets.listA, gets.listB]));
   ok('saved custom row: his man is on yellow',
     every(men([{ men: gets.saved }], 'recv'), yellow), dump(gets.saved));
-  ok('combo: only men you get are marked, and only on yellow',
-    (gets.combo || []).every((m) => plain(m) || (m.cell === 'recv' && yellow(m))), dump(gets.combo));
 
   // NOTHING: a bye outside the meeting week, or in a meeting week already played.
   // Everything drawn about a deal WITH CY (the pop-up, the custom box and the
@@ -7809,8 +7267,7 @@ if (!live.boot) {
   // Ana plays Bo every week but 8 — so Bo's deals are marked, and that is
   // checked too: the multi-week tooltip names every week.
   for (const [k, r] of [['bye in week 9, not a meeting week with Cy', offWeek], ['meeting week already played', past]]) {
-    const withCy = (list) => (list || []).filter((m) => /^Cy\b/.test(m.partner));
-    const everyone = [...cyRows(r).flatMap((x) => x.men), ...withCy(r.combo),
+    const everyone = [...cyRows(r).flatMap((x) => x.men),
       ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r === past ? [] : (r.listB || [])), ...(r.saved || [])];
     ok(`${k}: the page still draws men`, everyone.length > 20, everyone.length);
     ok(`${k}: nobody is marked`, everyone.every(plain), dump(everyone.filter((m) => !plain(m))));
@@ -7942,7 +7399,7 @@ if (!live.boot) {
   } });
   ok('injury run boots', !r.boot, r.boot);
   ok('injury run has no errors', !r.errors || r.errors.length === 0, JSON.stringify(r.errors));
-  const everyone = [...(r.finder || []).flatMap((x) => x.men), ...(r.combo || []),
+  const everyone = [...(r.finder || []).flatMap((x) => x.men),
     ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r.listB || []), ...(r.saved || [])];
   const dump = (x) => JSON.stringify(x).slice(0, 240);
   const Q = 110;
@@ -7997,7 +7454,6 @@ if (!live.boot) {
   const dump = (x) => JSON.stringify(x).slice(0, 300);
   const places = {
     finder: (r.finder || []).flatMap((x) => x.men),
-    combo: r.combo || [],
     'pop-up': (r.deal || []).flatMap((s) => s.men),
     'your custom list': r.listA || [],
     'his custom list': r.listB || [],
@@ -8073,7 +7529,7 @@ if (!live.boot) {
   // The plain stub league: every id is one the preseason copy has never heard
   // of, so "not known" must draw nothing — no arrow, and no key for one.
   const r = run('byeMark', { stub: true, env: { TR_PRO_SPLIT: '1', TR_MEET: '8', TR_BYES: '{"1":8}' } });
-  const everyone = [...(r.finder || []).flatMap((x) => x.men), ...(r.combo || []),
+  const everyone = [...(r.finder || []).flatMap((x) => x.men),
     ...(r.deal || []).flatMap((s) => s.men), ...(r.listA || []), ...(r.listB || []), ...(r.saved || [])];
   ok('a league of men the preseason copy has never heard of: no arrow anywhere',
     everyone.length > 20 && everyone.every((m) => !m.trend), JSON.stringify(everyone.filter((m) => m.trend)).slice(0, 240));
@@ -9311,7 +8767,7 @@ if (!gt.boot) {
   ok('while the sort key keeps its full precision — it is not the rounded figure on screen',
     scored.length > 2 && scored.every((t) => Math.abs(t.goal.v * 1000 - Math.round(t.goal.v * 1000)) > 1e-9),
     scored.slice(0, 4).map((t) => t.goal.v).join(','));
-  for (const [where, words] of [['the pop-up', gt.dealGoal], ['the combo headline', gt.comboGoal],
+  for (const [where, words] of [['the pop-up', gt.dealGoal],
     ['the custom box', gt.cuPreview], ['a saved custom row', gt.cuRow && gt.cuRow.goal && `${gt.cuRow.goal.head} ${gt.cuRow.goal.sub}`]]) {
     eq(trioOff(words), '', `${where}: the change is its printed ends subtracted too`);
   }
@@ -9509,7 +8965,7 @@ if (!gt.boot) {
     T.trades.every((t) => !/\d\.\d\d\s*%/.test(`${t.goal.head} ${t.goal.sub} ${t.goal.title}`)) &&
       !/\d\.\d\d\s*%/.test(T.count),
     (T.trades.find((t) => /\d\.\d\d\s*%/.test(t.goal.title)) || { goal: {} }).goal.title || '');
-  ok('the pop-up and the combo state the band too, wherever they state a change',
+  ok('the pop-up and the custom box state the band too, wherever they state a change',
     /±0\.4/.test(gt.dealGoal) && /±0\.4/.test(gt.cuPreview),
     `${gt.dealGoal} | ${gt.cuPreview}`);
 
@@ -10258,7 +9714,6 @@ for (const goal of ['title', 'last']) {
         same.weekly.same && same.weekly.offers > 0, JSON.stringify(same.weekly));
       ok('and it really did pause on the way', same.weekly.pauses >= 20, `${same.weekly.pauses} pauses`);
       ok('the typical-week search too', same.typical.same && same.typical.offers > 0, JSON.stringify(same.typical));
-      ok('the best combo too', same.combo.same && same.combo.found, JSON.stringify(same.combo));
       ok('and the week weights', same.weights.last.same && same.weights.last.any && same.weights.title.same,
         JSON.stringify(same.weights));
       ok('an abandoned search answers null, at the pause it was abandoned on',
@@ -10278,10 +9733,7 @@ if (!gl.boot) {
     JSON.stringify(gl.deadline));
   ok('and the review window ESPN sent', /24 hours for league review/.test(gl.deadline.text), gl.deadline.text);
   ok('not yet in red, with more than a week to go', !gl.deadline.warn);
-  // -- THE COMBO AND 2-FOR-2 --------------------------------------------------
-  ok('the combo headline says what the whole slate does to the title chance',
-    /Your title chance [+−]?\d+%/.test(gl.combo) || /Nothing to combine|Making none/.test(gl.combo),
-    gl.combo.slice(0, 240));
+  // -- 2-FOR-2 ---------------------------------------------------------------
   ok('the shape filter offers 2 for 2', gl.kinds.includes('2 for 2'), gl.kinds.join(' | '));
   ok('no console errors on the live title path', gl.errors.length === 0, gl.errors.slice(0, 2).join(' | '));
   eq(gl.heads[1], 'Chance', 'the live page carries the Chance column');
@@ -10421,17 +9873,9 @@ if (!gl.boot) {
         `${marked.map((w) => w.vs).join(' | ')} vs ${(row.opp || NA).v}`);
     }
 
-    // -- (1b) THE COMBO: his proj per manager, and the preview on the headline --
-    ok('the combo table carries "His proj vs you" per manager',
-      A.comboRows.length === 0 || (A.comboHeads.includes('His proj vs you') && A.comboRows.every((r) => r.opp)),
-      A.comboHeads.join(' | '));
-    ok('and its headline previews the other goal beside the ranked one',
-      A.comboRows.length === 0 || (/Your title chance/.test(A.comboGoal) && /last chance [+−]?\d+%/.test(A.comboGoal)),
-      A.comboGoal);
-
     // -- (2) THE GOAL SWITCH ABOVE EVERY PANEL, acting as one -------------------
     ok('every panel of the Trade page carries the goal switch, once',
-      A.panels.length >= 5 && A.panels.every((p) => p.copies === 1),
+      A.panels.length >= 4 && A.panels.every((p) => p.copies === 1),
       JSON.stringify(A.panels));
     ok('each copy is a labelled group of two real buttons',
       A.toggles.length === A.panels.length && A.toggles.every((g) => g.role === 'group' && g.label &&
@@ -10441,7 +9885,7 @@ if (!gl.boot) {
       A.toggles.every((g) => g.on === 'Win it all' &&
         g.buttons.every((b) => b.pressed === String(b.on) && b.on === (b.goal === 'title'))),
       JSON.stringify(A.toggles.map((g) => [g.panel, g.on, g.buttons.map((b) => b.pressed)])));
-    ok('the combo panel’s copy was there to press', tw.switched);
+    ok('the custom panel’s copy was there to press', tw.switched);
     ok('pressing it switches EVERY copy', B.toggles.every((g) => g.on === 'Don’t finish last' &&
       g.buttons.every((b) => b.pressed === String(b.on) && b.on === (b.goal === 'last'))),
     JSON.stringify(B.toggles.map((g) => [g.panel, g.on, g.buttons.map((b) => b.pressed)])));

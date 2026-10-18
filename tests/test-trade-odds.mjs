@@ -38,7 +38,7 @@ import {
 } from '../js/trade-odds.js';
 import { generateDemoWeekRosters } from '../js/demo-rosters.js';
 import { slotCountsFromLineups } from '../js/projection.js';
-import { findTrades, priceTradeAcrossWeeks, slotsForLeague, bestCombo } from '../js/trade.js';
+import { findTrades, priceTradeAcrossWeeks, slotsForLeague } from '../js/trade.js';
 
 let pass = 0;
 const fails = [];
@@ -393,22 +393,6 @@ ok('it never goes up as the deal gets worse for him',
   ok('a 1-for-1 is never labelled 2-for-2', plain.offers.filter((o) => o.kind === 'even')
     .every((o) => o.send.length === 1 && o.receive.length === 1));
 
-  // THE COMBO TAKES THE SAME TOLERANCE, or it empties. The finder above lets in
-  // deals where he loses up to 2 a week; a combo that still refused any partner
-  // loss rejected every packing built from them and printed "make none" under
-  // a list of forty (2026-09-21, found by tr-test's pop-up scenario).
-  const me = now.teams.find((t) => t.id === 9);
-  const combo = bestCombo(goal.offers, {
-    players: me.players, slots, weeks, projFor, teams: now.teams, weights,
-    partnerMin: -2 * weeks.length,
-  });
-  ok('Best combo, given the finder’s tolerance, finds a real packing', combo.count > 0, JSON.stringify({ count: combo.count }));
-  ok('and no partner in it loses more than that tolerance',
-    (combo.best.partners || []).every((p) => p.delta >= -2 * weeks.length - 0.05),
-    JSON.stringify((combo.best.partners || []).map((p) => p.delta)));
-  ok('and it is chosen by the weighted gain, never worse than the best single offer’s',
-    combo.best.score + 0.6 >= Math.max(...goal.offers.filter((o) => o.theirGain >= -2 * weeks.length).map((o) => o.goalPoints)),
-    `${combo.best.score} vs ${Math.max(...goal.offers.map((o) => o.goalPoints))}`);
   void d0;
 }
 

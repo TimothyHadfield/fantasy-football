@@ -198,7 +198,7 @@ async function runLayout(page, part, storage) {
   ok(k[2] && k[2].querySelector('#tradeTable'), 'then Trades ranked by net increase');
   eq(k.length, 3, 'and nothing else');
   ok(doc.getElementById('teamSelect').closest('.select-md').classList.contains('ffx-pick'), 'only the team control is marked to show in its panel');
-  ok(!doc.getElementById('comboPanel').classList.contains('ffx-keep'), 'Best combo is not in the tab');
+  ok(!doc.getElementById('comboPanel'), 'Best combo is not in the tab (nor on the page, since 2026-10-18)');
   ok(doc.getElementById('dealModal') && !doc.getElementById('dealModal').closest('.wrap'), 'the week-by-week pop-up is still there, outside the page');
 }
 

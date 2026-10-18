@@ -85,7 +85,7 @@ const SUITES = [
   ['test-cloud.mjs', 'the phone bridge: what is synced up, what comes back down, and how old it is'],
   ['test-cloud-wiring.mjs', 'the phone bridge WIRED IN: the substitution in season.js and the bar above it'],
   ['test-decision-cloud.mjs', 'the decisions review on the phone: the world rides in the synced copy and reads back the same'],
-  ['test-trade-weekly.mjs', 'the weekly measure: depth across the season, and the combo packer'],
+  ['test-trade-weekly.mjs', 'the weekly measure: depth across the season'],
   ['test-trade-cut.mjs', 'the forced cut: the man whose loss costs the priced weeks least goes, so receiving never lowers a week'],
   ['test-trade-moves.mjs', 'what a trade makes a manager do: who he must drop, what he must add, and giving a kicker away is never a gain'],
   ['test-out-for-season.mjs', 'ESPN\'s own out-for-season flag: the kona_playercard decoder and the rule the Trade page bars a man by'],

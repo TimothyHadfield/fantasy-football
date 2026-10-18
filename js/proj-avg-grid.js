@@ -92,7 +92,9 @@ export function heatBand(scale) {
  * ends, the weight moves with the step, and the arithmetic is here. It draws
  * inside each panel's "How this works" toggle (2026-09-19c).
  */
-export function heatBandsHtml(cols, lead = 'Full colour at (red / green):') {
+// `titled: false` leaves the lead without its `title` (the Trade page keeps
+// raw titles off its panels; its note says the same thing in words).
+export function heatBandsHtml(cols, lead = 'Full colour at (red / green):', { titled = true } = {}) {
   const drawn = cols.filter(([, scale]) => scale);
   if (!drawn.length) return '';
   const body = cols.map(([key, scale]) => {
@@ -101,6 +103,7 @@ export function heatBandsHtml(cols, lead = 'Full colour at (red / green):') {
       ? `<span class="lg"><strong>${esc(key)}</strong> ${fmt(band.lo)} / ${fmt(band.hi)}</span>`
       : `<span class="lg"><strong>${esc(key)}</strong> —</span>`;
   }).join('');
+  if (!titled) return `<span class="lg lg-lead">${esc(lead)}</span>${body}`;
   return `<span class="lg lg-lead" title="At or below the first number a cell in that column is fully ` +
     `red and marked ▼; at or above the second it is fully green and marked ▲. Both sit the same ` +
     `distance from that column's own average across the league, and the shades between them ` +

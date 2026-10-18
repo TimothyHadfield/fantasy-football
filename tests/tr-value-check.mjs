@@ -136,9 +136,7 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 function searchRunning() {
   const document = globalThis.document;
   const el = document && document.getElementById('tradeEmpty');
-  if (el && !/\bhidden\b/.test(el.getAttribute('class') || '') && el.querySelector('.searching')) return true;
-  const combo = document && document.getElementById('comboBody');
-  return !!combo && /Trying every set/.test(combo.textContent);
+  return !!(el && !/\bhidden\b/.test(el.getAttribute('class') || '') && el.querySelector('.searching'));
 }
 const settle = async (ms = 400) => {
   await pause(ms);
@@ -160,7 +158,7 @@ async function settleGoal(document, idleMax = 45000) {
     const done = /ranked by your|not ranked by your/.test(count) && !/playing each offer out/.test(count);
     const empty = !document.querySelector('#tradeTable tbody tr') && !/Trying every swap/.test(txt('tradeEmpty')) &&
       txt('tradeEmpty').length > 0;
-    if ((done || empty) && !/Trying every set/.test(txt('comboBody'))) break;
+    if (done || empty) break;
     await settle(250);
   }
   await settle(400);

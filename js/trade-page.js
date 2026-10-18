@@ -123,7 +123,7 @@ import { stageTrade, isAvailable as bridgeAvailable, extensionVersion, currentSe
 import { tradesNote, saveTradesNote } from './notify-trades.js';
 import {
   depthTable, findTrades, findTradesSliced, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
-  priceTradeAcrossWeeks, setCutValue, bestComboSliced, mergeComboByPartner, seasonLineupValue,
+  priceTradeAcrossWeeks, setCutValue, seasonLineupValue,
   setIrSlots, setSeasonClock, lineupValue,
 } from './trade.js';
 // THE SAME SOLVER, NOT A SECOND ONE. `optimalLineup` is what the schedule
@@ -363,9 +363,6 @@ const state = {
   customSaved: [],
   customRows: [],      // the saved deals as offers, by row index; see renderCustomSaved
   cuSugRows: [],       // the "Suggested" list's offers, by row index; see renderCustomSuggest
-  combo: null,         // the last bestCombo result
-  comboRows: [],       // the combo's offers, MERGED per manager, in row order
-  comboRunning: false,
   // THE GOAL (Tim, 2026-09-21): "the user should essentially open with a goal
   // and all the data aligns with that goal … not losing or winning everything
   // … The trade should be ranked by the increase/decrease in this chance."
@@ -1511,18 +1508,6 @@ async function buyMissingWeeks(list = null, { fresh = false } = {}) {
 /**
  * What the weekly-measure button says, and whether it can be pressed.
  *
- * A FUNCTION OF STATE, not of the DOM, and that is the point of it. The combo
- * panel quotes this button by name — "Press <the button> at the top" — and it
- * used to do that by reading `$('loadWeeks').textContent` back off the page,
- * which only ever gave the right answer because `renderCost()` happened to run
- * earlier in `paint()` than `renderCombo()` did. That is a panel working
- * because of the order it is painted in, and the panels have just been
- * reordered; one shared derivation is the fix rather than a comment asking the
- * next person not to move anything.
- */
-/**
- * What the weekly-measure button says, and whether it can be pressed.
- *
  * ITS JOB CHANGED ON 2026-09-19. It used to be the only thing on the page that
  * would spend a request, and its face was the cost being asked for. The page
  * prices itself now, so the interesting press is the other one Tim named —
@@ -1538,12 +1523,8 @@ async function buyMissingWeeks(list = null, { fresh = false } = {}) {
  * the one case where a press is about to cost something the reader has not
  * already paid.
  *
- * A FUNCTION OF STATE, not of the DOM, and that is the point of it. The combo
- * panel quotes this button's face word for word when it has to name it, and it
- * used to do that by reading `$('loadWeeks').textContent` back off the page —
- * which only ever gave the right answer because `renderCost()` happened to run
- * earlier in `paint()` than `renderCombo()` did. Both derive it from here now,
- * so the paint order is free.
+ * A FUNCTION OF STATE, not of the DOM, so whatever names this button reads
+ * its face from here and the paint order is free.
  */
 function weeksButton() {
   const span = weeklySpan();
@@ -3213,7 +3194,7 @@ function renderProjAvg() {
 
   $('projAvgLegend').innerHTML = keyHtml(keyItems(bodyOf(table), g.bandCols),
     'Tap or hover a number for who fills that slot');
-  $('projAvgBars').innerHTML = heatBandsHtml(g.bandCols);
+  $('projAvgBars').innerHTML = heatBandsHtml(g.bandCols, undefined, { titled: false });
 
   const ahead = projAvgWeeks(weeks).filter((w) => !state.poWeeks.includes(w));
   $('projAvgNote').innerHTML =
@@ -4238,7 +4219,7 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
       return `${t}, net: my own lineup ${signedText(offer.myGain)} minus his ` +
         `${signedText(Math.round((offer.myGain - net) * 10) / 10)} in the week(s) I play him`;
     })(),
-    myLineup: myGainShown ? lineup : `this deal alone; the app suggests it as part of a combo`,
+    myLineup: lineup,
     // NET the same way (2026-10-14): his own lineup less MY change in the
     // week(s) he plays me, both parts stated when they differ.
     hisGain: (() => {
@@ -5032,16 +5013,9 @@ function runSearch({ keepDeal = false } = {}) {
     state.deal = null;
     state.dealKey = null;
   }
-  state.combo = null;
-  state.comboMerged = null;
-  state.comboRows = [];
-  // Cancel a combo still queued behind the LAST search. It would spend a few
-  // seconds re-pricing offers nobody is looking at any more and then paint them
-  // over the new table. Bumping the token here rather than only inside
-  // `runCombo` is what makes a re-rank — which the page now does to itself on
-  // every load — cheap instead of double.
-  runCombo.token++;
-  // And the goal ranking of the last search, for the same reason.
+  // Cancel the goal ranking of the last search: it would spend a few seconds
+  // re-pricing offers nobody is looking at any more and then paint them over
+  // the new table.
   state.goalRank.token++;
   state.goalRank.running = false;
   state.goalRank.altRunning = false;
@@ -5182,7 +5156,6 @@ function runSearch({ keepDeal = false } = {}) {
       if (same) state.deal = same;
     }
     paint();
-    runCombo();
     // Then the season simulation re-ranks what was found by the goal. It waits
     // (and says so) until the played weeks are in, because those are what its
     // scoring spread is measured from; `loadHistory` starts it then.
@@ -7653,10 +7626,14 @@ function closeDeal() {
   state.dealPeek = null;
   state.dealSide = 'mine';
   paint();
-  // Back to what opened it: an offer row or the combo's headline button, both of
-  // which carry `data-i` and the key (`[data-open]` went with the row's own
-  // button on 2026-10-12, which left focus on <body>; sweep 2026-10-16 #15).
-  if (key) focusEl(document.querySelector(`[data-i][data-key="${cssKey(key)}"]`));
+  // Back to what opened it: an offer row (`data-i` and the key), or the custom
+  // box's Week by week button (`data-open="cu-build"`) — sweep 2026-10-16 #15,
+  // which left focus on <body>. The combo's headline button was the other
+  // opener until the Best combo went (Tim, 2026-10-18).
+  if (key) {
+    focusEl(document.querySelector(`[data-i][data-key="${cssKey(key)}"]`) ||
+      document.querySelector(`[data-open="${cssKey(key)}"]`));
+  }
 }
 
 /** Focus, when there is anything to focus and a layout to do it in. */
@@ -7668,295 +7645,9 @@ function focusEl(el) {
 /** Our keys are `f:3` / `c:0`; the colon is legal in an attribute selector. */
 const cssKey = (k) => String(k).replace(/["\\]/g, '');
 
-// ======================================================================
-// The best combo
-// ======================================================================
-//
-// Tim's ask: "a best combo section that allows the most trades possible for that
-// user, knowing that they can't trade a player twice".
-//
-// Two things in that sentence pull apart, and the engine returns both rather
-// than picking one: `best` is the packing worth the most points, `most` is the
-// packing with the most trades in it. Three trades worth +2 between them is a
-// worse season than two worth +15, so the headline is the first — but he asked
-// literally for the most trades possible, so when they differ the other one is
-// offered underneath, in words rather than only in numbers.
-//
-// THE TRAP, and it is why nothing here adds anything up: a combo's gain is NOT
-// the sum of its trades' gains. Every offer's gain was measured against your
-// current roster, and after one trade that roster no longer exists. The engine
-// prices the whole packing in one go; `naiveDelta` is what you would have
-// believed if you had added them, and it is printed precisely so the gap is
-// visible rather than hidden.
-
-/**
- * The scales `comboTableHtml` built on this paint, so `renderCombo` can print
- * their thresholds in points behind "How this works" — the other half of the
- * key split described on `heatKeyShort`.
- *
- * A module-level list rather than a return value because this panel draws one
- * or two tables through `comboBlockHtml`, which composes strings; threading a
- * second value back out of a string builder would be a change to three
- * signatures to carry one sentence. `renderCombo` clears it before it paints,
- * which is the one thing that has to stay true.
- */
-const comboHeatScales = [];
-
-/**
- * The combo's offers, as a table in the finder's own shape.
- *
- * Tim's ask: "In the best combo box, it should display the trades as a list
- * just like the regular trade box, and you should be able to click on the link
- * to fantasy in the same way as well."
- *
- * So it is literally the same row builder and the same head, which is also what
- * gets the ESPN deep link and the week-by-week pop-up for nothing. `rows` are
- * the MERGED offers — one per manager — and `from` is where their keys start,
- * because the best packing and the "most trades" alternative are two tables
- * sharing one `state.comboRows` array and one modal.
- */
-/**
- * NO "YOU GAIN" COLUMN, AND NO PER-ROW LINEUP. That is the whole of Tim's
- * 2026-09-19 ask about this panel, in his words: "right now the best combo just
- * shows the two trades separately. I want their stats to be combined because it
- * should treat it as the same trade made at once. This means the +/week should
- * be shown as 1 number not 2, (and it's probably not the sum of the two
- * separate +/week's)."
- *
- * He is right twice over, and the second half is the reason the column had to
- * GO rather than be relabelled. Each row's "you gain" was measured against his
- * roster AS IT IS TODAY — that is what `findTrades` computes — so two of them
- * overlap: both deals re-fill the same one lineup, and the better of two
- * upgrades to the same slot is the only one that ever starts. Two numbers a
- * reader cannot add are two numbers that should not be printed side by side
- * under a heading that invites it. The ONE honest figure for the whole packing
- * already existed — `entry.delta`, priced once with every send and every
- * receive applied together — and it is now the only "you gain" on the panel,
- * on the headline above this table.
- *
- * EACH MANAGER KEEPS HIS OWN GAIN, because that is a different person's roster
- * and the figures are genuinely separate — no two of them share a lineup. It is
- * his COMBINED side (`mergeComboByPartner` takes it from `entry.partners`), so
- * a manager in two of these deals shows what both of them together do to him
- * rather than one of the two.
- */
-function comboTableHtml(rows, from, id) {
-  const weeks = basis() === 'weeks';
-  const span = weeklySpan();
-  // Per column, and this table has only one coloured column left.
-  // Zero-anchored, like the finder's (`gainScales`): a plus is never red.
-  const theirScale = zeroScale(rows.map((o) => hisSideOf(o).gain));
-  // THE THRESHOLDS GO TO `#comboNote`, and this panel is why the split exists
-  // at all. It draws the key ONCE PER PACKING — twice whenever "the most trades
-  // possible" differs from the best — so `describeHeat`'s full sentence was
-  // printed two and a half times over: **+585px on this panel alone at 390px**
-  // (`tools/measure-layout.mjs --pages trade.html --selector '#comboPanel'`).
-  // `renderCombo` reads the list back after the body is built.
-  if (theirScale) comboHeatScales.push({ id, scale: theirScale });
-  const rowsHtml = rows
-    .map((o, k) => offerRow(o, from + k, `c:${from + k}`, {
-      myGain: false, theirScale,
-    }))
-    .join('');
-  return (
-    `<div class="table-scroll"><table id="${esc(id)}" class="offers">` +
-    `<thead><tr>` +
-    `<th class="name">Manager</th>` +
-    `<th class="left">Send</th>` +
-    `<th class="left">${esc(GAIN_HEAD('Gain', weeks, span))}</th>` +
-    `<th>Value</th>` +
-    `<th>Appeal</th>` +
-    `<th>Total</th>` +
-    // His own side, like He gains: each manager's figure is his squad's alone.
-    `<th>His proj vs you</th>` +
-    `<th class="left">ESPN</th>` +
-    `</tr></thead><tbody>` +
-    rowsHtml +
-    `</tbody></table></div>` +
-    (theirScale
-      ? `<p class="heat-key">${heatKeyShort({
-        thing: 'manager', what: 'the others in this packing', gain: true,
-      })}</p>`
-      : '') +
-    pageKeyHtml(rowsHtml)
-  );
-}
-
-/**
- * One packing: the headline, its offers, and the way into its own breakdown.
- *
- * THE COMBINED WEEK TABLE IS BEHIND A CLICK TOO, and that is the rest of Tim's
- * fifth ask — "including the best combo". It used to be printed inline under
- * the list, which is exactly the "separate box below everything" he asked to be
- * rid of. `allIndex` is where the whole-packing pseudo-offer sits in
- * `state.comboRows`, so the button opens the same pop-up the rows do.
- */
-function comboBlockHtml(entry, rows, from, id, allIndex, { heading = '', lead = '' } = {}) {
-  const span = weeklySpan();
-  // YOUR LINEUP, ONCE, FOR THE WHOLE PACKING — not once per row. It is the same
-  // pricing the headline number comes out of (`entry.pricing`), so the two
-  // cannot disagree, and it is the figure a per-row column could never have
-  // been: there is one lineup, it is re-filled once, and it ends up where it
-  // ends up whichever order the deals are sent in.
-  const before = entry.pricing ? entry.pricing.before.total : null;
-  const after = entry.pricing ? entry.pricing.after.total : null;
-  const lineup =
-    Number.isFinite(before) && Number.isFinite(after)
-      ? `<div class="combo-lineup"><span class="lbl">Your lineup, a week</span> ` +
-        `${weeklyLineupHtml(before, after)}</div>`
-      : '';
-
-  return (
-    (heading ? `<h3>${esc(heading)}</h3>` : '') +
-    (lead ? `<p>${lead}</p>` : '') +
-    // NETTED (2026-09-30): each manager's change in the weeks you play him is
-    // off it (`netDelta`); "Your lineup, a week" below is your own lineup.
-    `<div class="combo-head"><span class="big">${signedText(
-      weekGainShown(netOfEntry(entry), after - before, before, after, span.length))}</span> a week ` +
-    `<span class="sub-inline">(${signedText(netOfEntry(entry))} total over ${weekRange(span)})</span> from ` +
-    `<strong>${plural(entry.count, 'trade')}</strong>` +
-    (rows.length && rows.length < entry.count
-      ? ` — sent as ${plural(rows.length, 'offer')}, because two of them are with one manager`
-      : '') +
-    (entry.count
-      ? ` <button type="button" class="wk-open" data-i="${allIndex}" data-key="c:${allIndex}">` +
-        `All ${plural(entry.count, 'trade')} week by week</button>`
-      : '') +
-    `</div>` +
-    (entry.count ? comboGoalLine(entry) : '') +
-    (entry.count ? lineup : '') +
-    // ONE NUMBER, AND WHY IT IS ONE. Said on the panel itself in one plain
-    // sentence, because the reader's own instinct — and the old table — was to
-    // add the rows up.
-    // SHORTENED 2026-09-19. The claim stays visible — it changes what the
-    // number means, and Tim really did add the two figures up — but the REASON
-    // was said twice on screen: the `lead` directly above prints the same point
-    // with this packing's own arithmetic in it ("adding them would have given
-    // X; together they are worth Y — less, because…"), and "Never add the gains
-    // up" is the first thing in "How this works" below. Two 55-word paragraphs
-    // of it cost 223px on this panel at 390px (`tools/measure-layout.mjs
-    // --selector '.combo-one'`), on the page he reads on his phone.
-    (entry.count > 1
-      ? `<p class="combo-one">One number, not ${plural(entry.count, 'number')}: these ` +
-        `${plural(entry.count, 'trade')} are priced as a single move. Each manager’s own gain ` +
-        `below is his own squad’s and really is separate.</p>`
-      : '') +
-    (entry.count
-      ? comboTableHtml(rows, from, id)
-      : `<p class="empty">Making none of them is the best answer here — every offer is worth ` +
-        `less once the others are made.</p>`)
-  );
-}
-
-/**
- * THE WHOLE PACKING, PLAYED OUT (2026-09-21). Your change and every partner's
- * change, week by week, in the season simulation at once — and the chance
- * that EVERY manager in it says yes, which is the product of theirs: a slate
- * only happens if all of them agree. Memoised on the packing's identity.
- */
-function comboGoal(entry) {
-  if (!entry || !entry.count || !entry.pricing) return null;
-  const ctx = goalContext();
-  if (!ctx.base) return null;
-  const span = weeklySpan();
-  const me = state.myTeamId;
-  const ids = (list) => list.map((p) => p.playerId).sort().join(',');
-  const key = 'combo|' + entry.combo.map((o) => `${o.partner && o.partner.id}:${ids(o.send)}>${ids(o.receive)}`)
-    .sort().join(';') + '|' + span.join(',');
-  if (ctx.scores.has(key)) return ctx.scores.get(key);
-
-  const deltas = new Map();
-  const put = (teamId, byWeek) => {
-    const m = new Map();
-    for (const w of byWeek || []) if (Number.isFinite(w.delta) && w.delta !== 0) m.set(w.week, w.delta);
-    if (m.size) deltas.set(teamId, m);
-  };
-  put(me, entry.pricing.byWeek);
-  let accept = 1;
-  const verdicts = [];
-  for (const p of entry.partners || []) {
-    if (!p.partner) continue;
-    put(p.partner.id, p.byWeek);
-    const deals = entry.combo.filter((o) => o.partner && o.partner.id === p.partner.id);
-    // His lineup change FLAT (`hisFlatOf`): `p.delta` is his own, unweighted.
-    const v = verdictOf({
-      partner: p.partner, theirPoints: p.delta, theirByWeek: p.byWeek,
-      send: deals.flatMap((o) => o.send), receive: deals.flatMap((o) => o.receive),
-    }, span);
-    if (v && Number.isFinite(v.p)) { accept *= v.p; verdicts.push({ partner: p.partner.name, v }); }
-  }
-  const after = simulateWith(ctx.inputs, deltas);
-  const out = scoreOffer({ base: ctx.base, after, myTeamId: me, partnerId: null, goal: state.goal, accept });
-  out.offSame = sameRunReading(ctx.base, after, me, deltas);
-  out.verdicts = verdicts;
-  ctx.scores.set(key, out);
-  return out;
-}
-
-/**
- * The whole packing, on the OTHER goal's weeks (2026-09-29) — every send and
- * receive of yours priced together, and each manager's side priced with all of
- * his deals together, exactly as the packing is priced for the ranked goal.
- */
-function comboAlt(entry) {
-  if (!entry || !entry.count) return null;
-  const teams = state.data ? state.data.teams : [];
-  const mine = teams.find((t) => t.id === state.myTeamId);
-  if (!mine) return null;
-  const sides = [{
-    teamId: mine.id, players: mine.players,
-    send: entry.combo.flatMap((o) => o.send), receive: entry.combo.flatMap((o) => o.receive),
-  }];
-  for (const p of entry.partners || []) {
-    if (!p.partner) continue;
-    const team = teams.find((t) => t.id === p.partner.id);
-    if (!team) return null;
-    const deals = entry.combo.filter((o) => o.partner && o.partner.id === p.partner.id);
-    sides.push({
-      teamId: team.id, players: team.players,
-      send: deals.flatMap((o) => o.receive), receive: deals.flatMap((o) => o.send),
-    });
-  }
-  const ids = (list) => list.map((p) => p.playerId).sort().join(',');
-  const key = 'combo|' + entry.combo.map((o) => `${o.partner && o.partner.id}:${ids(o.send)}>${ids(o.receive)}`)
-    .sort().join(';');
-  const g = comboGoal(entry);
-  return altOfSides(sides, state.myTeamId, g ? g.offSame : null, key);
-}
-
-/** One line under the combo headline: what the whole slate does to the goal. */
-function comboGoalLine(entry) {
-  const s = comboGoal(entry);
-  if (!s || !Number.isFinite(s.mine.gain)) return '';
-  const g = goalOf(state.goal);
-  const cls = chanceCls(s.mine.gain, s.mine.before, s.mine.after);
-  const managers = new Set(entry.combo.map((o) => o.partner && o.partner.id)).size;
-  // The word, its parts and the % in its preview (`yesShown`, 'combo-yes').
-  // Several managers: the chance they ALL say yes, worded on the same cut-offs.
-  let yes = '';
-  const key = 'combo-yes:' + entry.combo.map((o) =>
-    `${o.partner && o.partner.id}:${o.send.map((p) => p.playerId).join('.')}>${o.receive.map((p) => p.playerId).join('.')}`).join(';');
-  if (Number.isFinite(s.accept)) {
-    const one = managers === 1 && s.verdicts && s.verdicts.length === 1 ? s.verdicts[0].v : null;
-    const v = one || { p: s.accept };
-    yesShown.set(key, { partner: '', verdicts: s.verdicts || [], p: s.accept });
-    yes = managers > 1
-      ? ` · all ${managers} managers say yes: ${yesWordHtml(v, key)}`
-      : ` · yes: ${yesWordHtml(v, key)}`;
-  }
-  return (
-    `<div class="combo-goal"><span class="lbl">Your ${esc(g.chance)}</span> ` +
-    `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong>` +
-    `<span class="band"> ±${bandText()}</span> ` +
-    `<span class="sub-inline">(${pct(s.mine.before)} → ${pct(s.mine.after)}${yes})</span>` +
-    altInlineHtml(comboAlt(entry)) +
-    `</div>`
-  );
-}
-
 /**
  * The other goal, inline after a stated chance — " · last chance −0.8% ±0.4" —
- * on the combo headline and the pop-up's goal line. Nothing when there is no
+ * on the pop-up's goal line. Nothing when there is no
  * honest figure to give.
  */
 function altInlineHtml(s) {
@@ -7967,388 +7658,6 @@ function altInlineHtml(s) {
     `<b class="${cls}">${pctChange(s.before, s.after)}</b><span class="band"> ±${bandText()}</span></span>`
   );
 }
-
-/**
- * The whole packing as one openable "offer".
- *
- * Not a real trade and it does not pretend to be: there is no partner, because
- * there is no one manager on the other side of it, and `espnTradeUrl` returns
- * nothing for it rather than inventing a screen. Each manager's own row carries
- * his own link, which is where a deal actually gets proposed. What this is for
- * is the one number the rows deliberately do NOT add up to — the whole slate,
- * priced once, week by week.
- */
-/** A packing's gain, netted (`bestCombo`'s `netDelta`), or its own lineup's when unnetted. */
-function netOfEntry(entry) {
-  return Number.isFinite(entry.netDelta) ? entry.netDelta : entry.delta;
-}
-
-function wholeComboOffer(entry, label) {
-  // Each week you play one of its managers: HIS change that week, and his name,
-  // so the pop-up nets those weeks the way a single deal's does.
-  const vs = new Map();
-  const vsNames = new Map();
-  for (const p of entry.partners || []) {
-    for (const wk of p.meetWeeks || []) {
-      const row = (p.byWeek || []).find((r) => r.week === wk);
-      if (!row || !Number.isFinite(row.delta)) continue;
-      vs.set(wk, row.delta);
-      vsNames.set(wk, p.partner ? p.partner.name : '');
-    }
-  }
-  return {
-    combined: true,
-    label,
-    partner: null,
-    send: entry.combo.flatMap((o) => o.send),
-    receive: entry.combo.flatMap((o) => o.receive),
-    kind: 'even',
-    shape: `${entry.count}-trade combination`,
-    basis: 'weeks',
-    myGain: entry.delta,
-    netGain: netOfEntry(entry),
-    vs,
-    vsNames,
-    myBefore: entry.pricing ? entry.pricing.before.total : null,
-    myAfter: entry.pricing ? entry.pricing.after.total : null,
-    yourChurn: entry.pricing ? entry.pricing.churn : null,
-  };
-}
-
-/** The combo panel, then the page's mark keys — its tables carry one (`syncMarkKeys`). */
-function renderCombo() {
-  renderComboBody();
-  syncMarkKeys();
-}
-
-function renderComboBody() {
-  const body = $('comboBody');
-  const note = $('comboNote');
-  const span = weeklySpan();
-
-  // Cleared on every path that draws no table, so a click on nothing can never
-  // reach a row object left over from the last answer.
-  state.comboRows = [];
-  // Same rule for the colour scales: a note describing a table that is not on
-  // screen is the hidden-table defect this page has shipped before.
-  comboHeatScales.length = 0;
-
-  if (basis() !== 'weeks') {
-    // TWO DIFFERENT REASONS TO BE HERE, and they need different sentences. The
-    // page prices itself now (2026-09-19), so a reader sees this either because
-    // the weeks are still arriving — in which case there is nothing to press
-    // and saying so would be wrong — or because he has deliberately chosen one
-    // of the scalar measures, in which case the way back is the picker and not
-    // the button beside it.
-    //
-    // The button's face comes from `weeksButton()`, NOT read back off the
-    // element: this panel must not need the toolbar to have been painted first.
-    body.innerHTML = weekly.loading
-      ? `<p class="empty"><span class="working">Reading ${esc(weekRange(span))}` +
-        (weekly.progress
-          ? ` — week ${Math.min(weekly.progress.done + 1, weekly.progress.total)} of ` +
-            `${weekly.progress.total}`
-          : '') +
-        `…</span> The best combo is priced on every remaining week, so it waits for them.</p>`
-      : `<p class="empty">The best combo is only priced on <strong>every remaining week</strong>. ` +
-        `Set <strong>Value on</strong> to <strong>Every remaining week</strong> at the top` +
-        (weeklyReady() ? ' — the weeks are already read, so it costs nothing' : '') +
-        `. The button beside it — <strong>${esc(weeksButton().label)}</strong> — ` +
-        `${weeklyReady() ? 'reads them again from scratch' : 'buys the ones that are missing'}.</p>`;
-    note.innerHTML =
-      `Two trades cannot be added up honestly on a single number per man: both of them re-fill ` +
-      `the same one lineup, so their gains overlap and adding them promises twice what arrives. ` +
-      `<br><br>` +
-      `Pricing a combination means applying every send and every receive together and filling ` +
-      `every remaining week again — which is why this section waits for those weeks rather than ` +
-      `estimating without them.`;
-    $('comboExplain').hidden = false;
-    return;
-  }
-
-  // No note on the two paths below, so no empty "How" toggle either.
-  if (state.comboRunning) {
-    // A WORKING LINE, not an explanation: what a combination is, is the lede
-    // above it and the method below it. It was a sentence long.
-    body.innerHTML = '<p class="empty"><span class="searching">Trying every set of trades…' +
-      '</span></p>';
-    note.innerHTML = '';
-    $('comboExplain').hidden = true;
-    return;
-  }
-
-  const combo = state.combo;
-  // The finder is still searching: "no offers" is not known yet, and since the
-  // search runs in slices this line is readable for the whole of it.
-  if ((!combo || !combo.best) && state.searching) {
-    body.innerHTML = '<p class="empty"><span class="searching">Waiting for the finder…</span></p>';
-    note.innerHTML = '';
-    $('comboExplain').hidden = true;
-    return;
-  }
-  if (!combo || !combo.best) {
-    body.innerHTML =
-      `<p class="empty">Nothing to combine: the finder has no offers for this squad.</p>`;
-    note.innerHTML = '';
-    $('comboExplain').hidden = true;
-    return;
-  }
-  $('comboExplain').hidden = false;
-
-  const best = combo.best;
-  const most = combo.most;
-
-  // The merged rows, and the index space the two tables share. Computed in
-  // `runCombo` rather than here so a repaint — a partner filter, a card
-  // clearing — does not re-price every manager's combined side.
-  //
-  // The two whole-packing pseudo-offers go on the END, so adding one never
-  // renumbers a row above it.
-  const merged = state.comboMerged || { best: [], most: [] };
-  const showAlt = !combo.mostIsBest && !!most;
-  const allBestIndex = merged.best.length + merged.most.length;
-  const allMostIndex = allBestIndex + 1;
-  state.comboRows = merged.best.concat(
-    merged.most,
-    [wholeComboOffer(best, 'The best combination')],
-    showAlt ? [wholeComboOffer(most, 'The most trades possible')] : []
-  );
-
-  const naive =
-    `Adding the offers’ own gains would have given ${weeklyPhrase(best.naiveDelta)}. ` +
-    `Together they are actually worth ${weeklyPhrase(netOfEntry(best))}` +
-    (netOfEntry(best) < best.naiveDelta
-      ? ` — <em>less</em>, because two upgrades compete for the same lineup places and only the ` +
-        `better of them can start.`
-      : netOfEntry(best) > best.naiveDelta
-        ? ` — <em>more</em>, because the men one deal sends away are the ones another deal makes ` +
-          `surplus, so the roster carries fewer passengers.`
-        : `, which is a coincidence rather than a rule.`);
-
-  body.innerHTML =
-    `<div class="combo-best">${comboBlockHtml(
-      best, merged.best, 0, 'comboTable', allBestIndex, { lead: naive }
-    )}</div>` +
-    (!showAlt
-      ? ''
-      : `<div class="combo-alt">` +
-        comboBlockHtml(most, merged.most, merged.best.length, 'comboAltTable', allMostIndex, {
-          heading: `The most trades possible: ${plural(most.count, 'trade')}`,
-          // The numbers, and nothing else: the most trades is a different
-          // question from the most points, and the two figures say that on
-          // their own. The paragraph that spelled it out was 55 words above a
-          // table that repeats every one of them.
-          lead:
-            `<strong>${plural(most.count, 'trade')}</strong> instead of ` +
-            `<strong>${plural(best.count, 'trade')}</strong>, worth ` +
-            `${weeklyPhrase(netOfEntry(most))} rather than ${weeklyPhrase(netOfEntry(best))} — ` +
-            (netOfEntry(most) < netOfEntry(best) ? 'more deals, fewer points' : 'more deals, no fewer points') +
-            `, so the packing above is the one to make.`,
-        }) +
-        `</div>`);
-
-  const partners = best.partners || [];
-  note.innerHTML =
-    `A player can only be traded once, so these ${plural(best.count, 'trade')} share no player ` +
-    `between them — not one you send, not one you receive.` +
-    `<br><br>` +
-    `<strong>Never add the gains up.</strong> Each offer’s gain was measured against your roster as ` +
-    `it is today; after one trade that roster no longer exists, so the combination is priced by ` +
-    `applying every send and every receive <em>together</em> and re-filling every week once. ` +
-    `The forced cut is applied to the combined result too — two one-for-twos leave you two men ` +
-    `over the limit and cost you two players, which pricing them separately would miss. ` +
-    // The rows here are the finder's rows, so they carry the finder's per-man
-    // figures — and that number is a mean over a SMALLER set of weeks than the
-    // gain beside it is spread over. Said here as well as in the finder's note
-    // because a reader can open this toggle and not that one.
-    `<strong>The figure beside each player is not on the same arithmetic as these gains</strong>: ` +
-    `it is what he is worth in a week he scores, his byes and any week without a projection left ` +
-    `out of its divisor, whereas a gain is spread over every week in the span. The two are not ` +
-    `meant to multiply into each other. ` +
-    (partners.length
-      ? `Every manager involved was re-priced on his combined side as well, and a packing any of ` +
-        `them would refuse is thrown out: ` +
-        partners
-          .map((p) => `${esc(p.partner.name)} ${signedText(perWeekOf(p.delta))}/wk`)
-          .join(', ') + '. '
-      : '') +
-    `<br><br>` +
-    // The two 2026-09-29 figures, as they read here: the preview is on the
-    // headline (a per-row chance would be one deal's, which is not the packing),
-    // and His proj vs you is per manager, each for his own deals.
-    `<strong>The headline’s second chance</strong> is the other goal previewed for the whole ` +
-    `packing, priced over that goal’s own weeks; it ranks nothing. <strong>His proj vs you</strong> ` +
-    `is each manager’s lineup change, with his deals made, in the regular-season week(s) left in ` +
-    `which he plays you — his plus is your red; a playoff meeting is not known in advance.` +
-    `<br><br>` +
-    (best.repeatPartners
-      ? `<strong>Two of these are with the same manager, and they are shown as ONE offer.</strong> ` +
-        `That is not tidying up: he would be sent one trade, he accepts or refuses it once, and the ` +
-        `engine has already priced both halves as a single roster change — so splitting them into ` +
-        `two rows with two gains would be showing you exactly the arithmetic this section exists to ` +
-        `refuse. The merged row is <em>re-priced from scratch</em> as one move; its gain is not the ` +
-        `two gains added up. Read it before you send it: a four-player trade is a different ` +
-        `conversation from two two-player ones.<br><br>`
-      : '') +
-    // REWRITTEN 2026-09-19 with the column it described. This used to explain
-    // why the table's per-row "You gain" figures did not add up to the headline
-    // — which was an explanation for a defect rather than a fix, and Tim read
-    // the two numbers and added them anyway. The column is gone; what is left
-    // to say is what the one number IS and why each manager still has his own.
-    `<strong>There is one “you gain” on this panel and it is the headline.</strong> A per-deal ` +
-    `figure for your side was removed on 2026-09-19: every one of them was measured against your ` +
-    `roster <em>as it is today</em>, and after the first trade that roster is gone — so the two ` +
-    `could not be added, could not be compared, and invited exactly the arithmetic this section ` +
-    `exists to refuse. <strong>Each manager’s own gain stays on his row</strong>, because that is ` +
-    `a different squad’s lineup and the figures are genuinely separate; a manager in two of these ` +
-    `deals shows what <em>both</em> of them together do to him, not one of the two. ` +
-    (combo.exhaustive
-      ? `Every combination of the ${plural(combo.offers.length, 'offer')} was tried — ` +
-        `${combo.considered} of them survive the no-player-twice rule. `
-      : `The search was capped at ${combo.considered} combinations, so this is the best of what ` +
-        `was tried rather than provably the best of all. `) +
-    `Every figure is per week over ${weekRange(span)}, with the rest-of-season total beside it; ` +
-    `nothing here is sent to ESPN.` +
-    // THE FLOOR, SAID HERE TOO — and until 2026-09-19 it was not applied here
-    // at all. `bestCombo` took no `floors` option, so this panel priced every
-    // packing WITHOUT the waiver floor while every row in the finder above was
-    // priced WITH it: two different questions on one page, and a headline
-    // nobody could reconcile against the table. Tim found it ("the best combo
-    // gives me a single trade that is a 2-1 that has a lower +/week than the
-    // top trade"). Saying it out loud is rule 7, and it is also what stops the
-    // same gap reopening quietly — a note claiming a floor the engine is not
-    // applying is a visible lie rather than an invisible one.
-    (describeFloors(state.floors, { week: state.floorWeek })
-      ? `<br><br><strong>Priced on exactly the same basis as the offers above</strong>, the ` +
-        `positional floor included. ` + describeFloors(state.floors, { week: state.floorWeek }) +
-        ` Both squads in every deal get it, and so does each partner’s combined side — so a ` +
-        `packing can never be ranked on a different question from the rows it is built out of.`
-      : '') +
-    // THE COLOUR THRESHOLDS IN POINTS, one line per table on screen. The short
-    // key under each table says what the colour compares; this is what makes a
-    // shaded cell checkable against the column by hand, which is the channel
-    // Tim actually uses and the reason none of it was deleted.
-    (comboHeatScales.length
-      ? `<br><br><strong>The colour on “He gains”.</strong> ` +
-        comboHeatScales
-          .map(({ id, scale }, i) =>
-            (comboHeatScales.length > 1
-              ? `<em>${id === 'comboAltTable' ? 'The most trades possible' : 'The best combination'}:</em> `
-              : '') +
-            describeZeroHeat(scale) + (i < comboHeatScales.length - 1 ? ' ' : ''))
-          .join('') +
-        ` Each packing is scaled on its own rows, never across the two: they are different ` +
-        `slates of trades and one scale over both would rank a manager against a deal he is ` +
-        `not in.`
-      : '');
-}
-
-/**
- * Work out the combos, off the paint.
- *
- * Only ever the whole-league offer list, never the partner-narrowed one: the
- * question is what YOU can do this week, and a filter on the table above is
- * about reading, not about what is possible.
- */
-function runCombo() {
-  state.combo = null;
-  state.comboMerged = null;
-  state.comboRows = [];
-  const me = state.data ? state.data.teams.find((t) => t.id === state.myTeamId) : null;
-  if (basis() !== 'weeks' || !state.search || !state.search.offers.length || !me) {
-    state.comboRunning = false;
-    renderCombo();
-    return;
-  }
-
-  state.comboRunning = true;
-  renderCombo();
-
-  // THE OFFER LIST IS HELD IN THE CLOSURE, not read back off state when the
-  // deferred work runs. `runSearch` nulls `state.search` the moment a new
-  // search starts, and this hands off through rAF then a timeout — so a search
-  // that begins in that gap left `go()` reading `.offers` off null. It could
-  // not happen while the only thing that re-ran the search was a button press;
-  // it happens every load now that the page prices itself, because the weekly
-  // re-rank arrives behind the first scalar one. The token still guards against
-  // a STALE combo being painted; this guards against a stale one being
-  // COMPUTED, which is a different failure and needs its own answer.
-  const offers = state.search.offers;
-  const token = ++runCombo.token;
-  const stale = () => token !== runCombo.token;
-  const go = async () => {
-    if (stale()) return;
-    // A slice at a time, like the search above it: a dozen offers are hundreds
-    // of packings, each priced by re-filling every week, and in one go that was
-    // half a second of a page that would not scroll (measured 2026-10-06).
-    const combo = await bestComboSliced(offers, {
-      players: me.players,
-      slots: state.slots,
-      weeks: weeklySpan(),
-      projFor,
-      // With the squads in hand every partner's COMBINED side is priced too, so
-      // a packing that leaves one of them worse off — two deals that were each
-      // a win-win for him but cancel each other out — is dropped rather than
-      // proposed.
-      teams: state.data.teams,
-      requirePartnersGain: true,
-      // Two disjoint deals with ONE manager are allowed. They are legal, and
-      // they are genuinely one bigger deal he might take — which is now how the
-      // page SHOWS them, merged into a single offer with a single re-priced
-      // gain, rather than as two rows a reader would be tempted to add up.
-      onePerPartner: false,
-      zeroIsBye: zeroIsBye(),
-      // THE SAME FLOOR THE FINDER WAS GIVEN, and leaving it out was a real
-      // defect Tim found on 2026-09-19: "the best combination is actually
-      // really bad and doesn't select the best combination at all ... a single
-      // trade that is a 2-1 that has a lower +/week than the top trade." The
-      // rows above were floored and this panel was not, so the two were ranking
-      // on different questions and the combo's own number could not be
-      // reconciled against the table it sat under.
-      floors: state.floors,
-      // AND THE SAME GOAL WEIGHTS (2026-09-21), for the same reason one level
-      // up: a packing chosen on points under rows chosen on the goal would be
-      // answering a different question in the same column of pixels.
-      weights: state.goalWeights ? state.goalWeights.weights : null,
-      // And the same tolerance for a partner's loss that let those offers into
-      // the finder — the headline's yes-chance is what marks them down.
-      partnerMin: state.search && state.search.weighted && !state.bothWin ? THEIR_MIN_PER_WEEK * weeklySpan().length : 0,
-      // Netted the same way as the finder: each manager's change in the weeks
-      // you play HIM comes off your side (`netDelta`, and what is chosen by).
-      meetWeeks: meetWeeksOf(state.myTeamId),
-    }, { pause: breathe, stale });
-    if (!combo || stale()) return;
-    state.combo = combo;
-
-    // Merged here, once per search, and not in the renderer: each merged offer
-    // costs a fresh `priceTradeAcrossWeeks` — two fills of every remaining week
-    // — and a repaint happens on every card, every filter and every sort.
-    const opts = {
-      players: me.players,
-      slots: state.slots,
-      weeks: weeklySpan(),
-      projFor,
-      zeroIsBye: zeroIsBye(),
-      // Same floor again — a merged row is a re-price of the packing's own
-      // deals, so on any other basis it would print a gain the packing above it
-      // does not agree with.
-      floors: state.floors,
-    };
-    state.comboMerged = {
-      best: mergeComboByPartner(state.combo.best, opts),
-      most:
-        state.combo.mostIsBest || !state.combo.most
-          ? []
-          : mergeComboByPartner(state.combo.most, opts),
-    };
-
-    state.comboRunning = false;
-    paint();
-  };
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(go, 0));
-  else setTimeout(go, 0);
-}
-runCombo.token = 0;
 
 // -------------------------------------------------------------------- pickers
 
@@ -8835,19 +8144,18 @@ function paint() {
   ASK_OFFERS.clear();
   hideTip(); // it may be pointing at an element that is about to be replaced
   hidePop(); // and so may the stat card
-  // IN PANEL ORDER — toolbar, finder, combo, all teams — and the modal last,
+  // IN PANEL ORDER — toolbar, finder, all teams, custom — and the modal last,
   // which is the only one not in the flow of the page.
   //
   // The order is for READING, not for correctness: each of these is a pure
   // function of `state` and the caches, and none of them leaves anything behind
-  // for the next. There was exactly one exception and it is gone — the combo
-  // panel used to read the weekly-measure button's label straight off the
-  // element, so it silently depended on `renderCost()` having run first. Both
-  // now call `weeksButton()`. Keep it that way: a panel that only works second
-  // is a panel that breaks the next time somebody moves one.
+  // for the next. Keep it that way: a panel that only works second is a panel
+  // that breaks the next time somebody moves one. (The Best combo panel stood
+  // after the finder until Tim, 2026-10-18: "Remove the best combo section of
+  // the cite". Its repaint of the page's mark keys stays, in its place.)
   renderCost();
   renderFinder();
-  renderCombo();
+  syncMarkKeys();
   renderProjAvg();
   renderCustom();
   renderAssumed();
@@ -11375,13 +10683,13 @@ $('loadWeeks').addEventListener('click', () => {
 // row. A finger has no hover: a tap on one of these cells opens the card as a
 // sheet, and the sheet's button ("Week by week") is the way into the deal.
 
-/** The offer a row key names: `f:3` the finder's, `c:0` the combo's, `cu:2` saved, `sg:1` suggested. */
+/** The offer a row key names: `f:3` the finder's, `cu:2` saved, `sg:1` suggested. */
 function offerByKey(key) {
   if (!key) return null;
   if (key === 'cu-build') return state.customOffer || null;
   const [k, n] = String(key).split(':');
   if (k === 'asm') return assume.offer || null;
-  const rows = { f: state.rows, c: state.comboRows, cu: state.customRows, sg: state.cuSugRows }[k];
+  const rows = { f: state.rows, cu: state.customRows, sg: state.cuSugRows }[k];
   return rows ? rows[Number(n)] || null : null;
 }
 
@@ -11521,7 +10829,7 @@ function wireRowCards(el) {
 
 /** The team card on every manager's name (`teamCardAttr`). */
 function wireAllTeamCards() {
-  for (const id of ['projAvgTable', 'tradeTable', 'comboPanel', 'customPanel', 'assumedPanel']) {
+  for (const id of ['projAvgTable', 'tradeTable', 'customPanel', 'assumedPanel']) {
     const el = $(id);
     if (el) wireTeamCards(el);
   }
@@ -11529,7 +10837,7 @@ function wireAllTeamCards() {
 
 /** Every preview on the page, wired once at boot: the containers outlive their repaints. */
 function wirePreviews() {
-  for (const id of ['tradeTable', 'comboPanel', 'customPanel', 'assumedPanel']) wireRowCards($(id));
+  for (const id of ['tradeTable', 'customPanel', 'assumedPanel']) wireRowCards($(id));
   // The pop-up's yes-word (`yesLineHtml`, key 'deal-yes') — its only `data-rc`.
   if ($('dealBody')) wirePops($('dealBody'), { selector: '[data-rc="yes"]', card: rowCardSpec });
   wireAllTeamCards();
@@ -11966,9 +11274,6 @@ function wireOfferClicks(el, rowsFor) {
 }
 
 wireOfferClicks($('tradeTable'), () => state.rows);
-// Delegated on the PANEL, not the table: the combo's tables are rebuilt from
-// scratch on every repaint and there are two of them.
-wireOfferClicks($('comboPanel'), () => state.comboRows);
 // The custom box's "Suggested" rows open the same pop-up (2026-10-01).
 wireOfferClicks($('cuSug'), () => state.cuSugRows);
 
@@ -12133,7 +11438,6 @@ wireTips($('depthTable'));
 wireTips($('spareStrip'));
 wireTips($('tradeTable'));
 wireTips($('dealPanel'));
-wireTips($('comboPanel'));
 wirePreviews();
 
 // ------------------------------------------------------------------- start up

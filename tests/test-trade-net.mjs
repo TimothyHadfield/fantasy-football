@@ -31,7 +31,7 @@ import { pathToFileURL } from 'node:url';
 import { REPO } from './repo.mjs';
 
 const imp = (rel) => import(pathToFileURL(path.join(REPO, rel)).href);
-const { findTrades, bestCombo, mergeComboByPartner, priceTradeAcrossWeeks, slotsForLeague } = await imp('js/trade.js');
+const { findTrades, priceTradeAcrossWeeks, slotsForLeague } = await imp('js/trade.js');
 const { positionFloors } = await imp('js/floor.js');
 const { generateDemoWeekRosters, generateDemoSchedule } = await imp('js/demo-rosters.js');
 const { slotCountsFromLineups } = await imp('js/projection.js');
@@ -113,23 +113,6 @@ const round1 = (x) => Math.round(x * 10) / 10;
     'by hand, weighted: goal points = 0 − 2 × (−10) = +20 (weight of week 2), yours alone 0',
     wd && `${wd.goalPoints} / ${wd.myGoalPoints}`);
 
-  // bestCombo on the same deal: netDelta = delta − his meeting change.
-  const combo = bestCombo([deal].filter(Boolean), {
-    players: A.players, slots: SLOTS, weeks: WEEKS, projFor, teams, partnerMin: -12,
-    meetWeeks: (pid) => (pid === 2 ? [2] : []),
-  });
-  ok(combo.count === 1 && combo.delta === 0 && combo.netDelta === 10,
-    'by hand, combo: the packing is chosen on the net (+10), not on your lineup (0)',
-    `${combo.count} trades, delta ${combo.delta}, net ${combo.netDelta}`);
-  const noMeet = bestCombo([deal].filter(Boolean), {
-    players: A.players, slots: SLOTS, weeks: WEEKS, projFor, teams, partnerMin: -12,
-  });
-  ok(noMeet.count === 0 && noMeet.netDelta === 0,
-    'by hand, combo: without meeting weeks "make none" wins, as before (a 0 deal is not worth one trade)',
-    `${noMeet.count} trades, net ${noMeet.netDelta}`);
-  const merged = mergeComboByPartner(combo.best, { players: A.players, slots: SLOTS, weeks: WEEKS, projFor });
-  ok(merged.length === 1 && merged[0].netGain === 10 && merged[0].myGain === 0 && merged[0].oppChange === -10,
-    'by hand, combo: the merged row carries the net too', JSON.stringify(merged.map((m) => [m.myGain, m.netGain, m.oppChange])));
 }
 
 // ===========================================================================
@@ -232,32 +215,6 @@ console.log(`timing over ${searches} searches: pruned ${times.pruned} ms, exhaus
   const r = findTrades({ teams, myTeamId: teams[0].id, slots, weeks: WEEKS, projFor, limit: Infinity });
   ok(r.offers.length > 0 && r.offers.every((o) => o.netGain === o.myGain && o.oppChange === null),
     'no meetWeeks: every offer nets to its own gain');
-}
-
-// ===========================================================================
-// 3. bestCombo on the demo: net = delta − each partner's meeting-week change
-// ===========================================================================
-{
-  let packings = 0;
-  for (const me of teams.slice(0, 4)) {
-    const meetWeeks = meetFor(me.id);
-    const found = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, floors: FLOORS, meetWeeks });
-    const combo = bestCombo(found.offers, {
-      players: me.players, slots, weeks: WEEKS, projFor, teams, floors: FLOORS, meetWeeks,
-    });
-    if (!combo.best || !combo.count) continue;
-    packings++;
-    let want = combo.best.delta;
-    for (const p of combo.best.partners) {
-      const meet = meetWeeks(p.partner.id).filter((w) => WEEKS.includes(w));
-      want -= p.byWeek.filter((w) => meet.includes(w.week)).reduce((a, w) => a + w.delta, 0);
-    }
-    ok(Math.abs(combo.netDelta - want) <= 0.051, `combo · ${me.name}: netDelta = delta − each partner's change in the weeks you play him`,
-      `${combo.netDelta} vs ${want.toFixed(2)}`);
-    const plain = bestCombo(found.offers, { players: me.players, slots, weeks: WEEKS, projFor, teams, floors: FLOORS });
-    ok(plain.netDelta === plain.delta, `combo · ${me.name}: without meeting weeks net == delta`);
-  }
-  ok(packings >= 2, 'at least two demo squads had a packing to check', packings);
 }
 
 // ===========================================================================

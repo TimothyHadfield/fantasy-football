@@ -2020,7 +2020,7 @@ tfoot tr.league-row td { border-top: 2px solid var(--dim); }
    whose click goes somewhere, so they take the pointer the linked stat cards
    take. Scoped to the Trade page's own containers.
    ========================================================================== */
-:is(#depthTable, #tradeTable, #comboPanel, #customPanel, #assumedPanel) [data-tc],
+:is(#projAvgTable, #tradeTable, #customPanel, #assumedPanel) [data-tc],
 #customPanel #cuMeet { cursor: pointer; }
 /* ================================================= end of Trade page previews */
 /* ===================== TOP BAR (2026-10-08, docs/previews-plan.md "Top bar")
