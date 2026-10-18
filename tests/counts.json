@@ -1,6 +1,6 @@
 {
   "_": "Per-suite counts off a green run. run-all.mjs FAILS when one of these falls (AUDIT §3.5); a rise is fine and is recorded by `node run-all.mjs --bless`. Do not hand-edit: re-bless on a green run and say what changed.",
-  "measured": "2026-10-16",
+  "measured": "2026-10-18",
   "suites": {
     "test-forecast.mjs": {
       "assertions": 68
@@ -54,7 +54,7 @@
       "assertions": 175
     },
     "nav-check.mjs": {
-      "assertions": 225
+      "assertions": 244
     },
     "playoffs-check.mjs": {
       "assertions": 165
@@ -63,7 +63,7 @@
       "assertions": 95
     },
     "test-extension.mjs": {
-      "assertions": 334
+      "assertions": 369
     },
     "test-bridge-settle.mjs": {
       "assertions": 7
@@ -87,27 +87,27 @@
       "assertions": 1503
     },
     "test-cloud.mjs": {
-      "assertions": 229
+      "assertions": 247
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 329,
-      "scenarios": 26
+      "assertions": 356,
+      "scenarios": 27
     },
     "test-trade-odds.mjs": {
-      "assertions": 142
+      "assertions": 139
     },
     "test-accept.mjs": {
       "assertions": 35
     },
     "test-trade-cards.mjs": {
-      "assertions": 66
+      "assertions": 81
     },
     "hot-check.mjs": {
       "assertions": 51
     },
     "test-pages-render.mjs": {
-      "pages": 12,
-      "scenarios": 12
+      "pages": 13,
+      "scenarios": 13
     },
     "test-home.mjs": {
       "pages": 2,
@@ -158,32 +158,32 @@
       "scenarios": 4
     },
     "an-test.mjs": {
-      "assertions": 2679,
-      "scenarios": 31
+      "assertions": 2706,
+      "scenarios": 34
     },
     "test-summary.mjs": {
-      "assertions": 595
+      "assertions": 599
     },
     "touch-check.mjs": {
       "assertions": 353,
       "scenarios": 4
     },
     "text-audit.mjs": {
-      "assertions": 11
+      "assertions": 12
     },
     "test-trade-weekly.mjs": {
-      "assertions": 4739
+      "assertions": 4546
     },
     "fc-test.mjs": {
-      "assertions": 1306,
-      "scenarios": 15
+      "assertions": 1329,
+      "scenarios": 18
     },
     "wv-test.mjs": {
       "assertions": 1284,
       "scenarios": 20
     },
     "tr-test.mjs": {
-      "assertions": 1308
+      "assertions": 1216
     },
     "tr-value-check.mjs": {
       "assertions": 81
@@ -205,10 +205,10 @@
       "assertions": 33
     },
     "tr-send-after-check.mjs": {
-      "assertions": 36
+      "assertions": 37
     },
     "tr-yes-check.mjs": {
-      "assertions": 89
+      "assertions": 87
     },
     "test-trade-cut.mjs": {
       "assertions": 3254
@@ -220,7 +220,7 @@
       "assertions": 18
     },
     "test-outlook-mark.mjs": {
-      "assertions": 63
+      "assertions": 92
     },
     "test-value-measure.mjs": {
       "assertions": 48
@@ -235,10 +235,10 @@
       "assertions": 16
     },
     "test-list-order.mjs": {
-      "assertions": 127
+      "assertions": 129
     },
     "test-trade-net.mjs": {
-      "assertions": 49
+      "assertions": 37
     },
     "test-ask-ai.mjs": {
       "assertions": 39
@@ -264,7 +264,7 @@
       "scenarios": 11
     },
     "test-trade-progress.mjs": {
-      "assertions": 45
+      "assertions": 44
     },
     "done-check.mjs": {
       "assertions": 58,
@@ -295,7 +295,7 @@
       "assertions": 136
     },
     "test-projhist-cloud.mjs": {
-      "assertions": 17,
+      "assertions": 18,
       "scenarios": 10
     },
     "proj-changes-check.mjs": {
@@ -327,8 +327,8 @@
       "assertions": 52
     },
     "leagues-check.mjs": {
-      "assertions": 72,
-      "scenarios": 5
+      "assertions": 74,
+      "scenarios": 6
     },
     "test-accounts.mjs": {
       "assertions": 62
@@ -341,7 +341,7 @@
       "assertions": 86
     },
     "notify-check.mjs": {
-      "assertions": 121,
+      "assertions": 123,
       "scenarios": 11
     },
     "bell-check.mjs": {
@@ -359,7 +359,21 @@
       "scenarios": 8
     },
     "playoffs-players-check.mjs": {
-      "assertions": 178
+      "assertions": 180
+    },
+    "test-espn-tabs.mjs": {
+      "assertions": 68
+    },
+    "test-espn-embed.mjs": {
+      "assertions": 90
+    },
+    "playoffs-live-check.mjs": {
+      "assertions": 6,
+      "scenarios": 6
+    },
+    "tr-fixes-check.mjs": {
+      "assertions": 10,
+      "scenarios": 10
     }
   }
 }

@@ -176,7 +176,8 @@ const value = (list, name) => ((list.find((x) => x.name === name) || {}).v || ''
     ok('the glance line is his average over the weeks left', (r.cards.done.glance || '').includes(`Proj ${restOf(r.cards.done, W)}`),
       `${r.cards.done.glance} vs ${restOf(r.cards.done, W)}`);
     eq(value(r.weekMeasure.mine, 'Ana QB1'), fmt(r.want.done.proj), '“The selected week” is the projection');
-    ok('and no played-week warning', !r.weekMeasure.warn.text);
+    // ("and no played-week warning" went with the depth map that carried it,
+    // 2026-10-18: Tim had it replaced by the All teams proj avg grid.)
   }
 }
 
