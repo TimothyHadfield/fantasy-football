@@ -16,6 +16,8 @@
 //   3. Exactly Tim's panels are kept, in his order; the three ranked-bar boxes
 //      become one panel with a picker whose choice is remembered.
 //   4. The frame tells ESPN's page its height, to ESPN's origin only.
+//   5. A link never loads the plain site page into the tab (it opens a new
+//      browser tab), and next=analysis merges Analysis's panels into Stats.
 
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -134,10 +136,28 @@ const kept = (doc) => {
 };
 
 let n = 0;
-async function runLayout(page, part, storage) {
-  const b = bootPage(page, seeded(page, part), [ESPN], storage);
+/** A stand-in for the browser's Navigation API: `fire` sends a navigate event. */
+function fakeNavigation() {
+  const fns = [];
+  return {
+    addEventListener: (t, fn) => { if (t === 'navigate') fns.push(fn); },
+    fire(ev) {
+      const e = { cancelable: true, hashChange: false, navigationType: 'push', canceled: false, ...ev };
+      e.preventDefault = () => { e.canceled = true; };
+      for (const fn of fns) fn(e);
+      return e;
+    },
+  };
+}
+async function runLayout(page, part, storage, { extra = '', location } = {}) {
+  const href = seeded(page, part).replace('#', `${extra}#`);
+  const b = bootPage(page, href, [ESPN], storage);
   const g = globalThis;
   g.window = b.document.defaultView;
+  g.window.navigation = b.navigation = fakeNavigation();
+  b.opened = [];
+  g.window.open = (u, t, f) => { b.opened.push([u, t, f]); return null; };
+  g.location = location;
   g.window.parent = b.parent;
   g.window.scrollY = 0;
   g.document = b.document;
@@ -176,6 +196,54 @@ async function runLayout(page, part, storage) {
   ok(h, 'the frame tells ESPN’s page its height');
   eq(h && h.target, ESPN, 'to ESPN’s origin only');
   ok(h && h.data.height > 8, 'measured from the page’s content, not the hidden header');
+
+  // 5. Tim, 2026-10-18: "the bottom half turns into another darker version and
+  // then displays week 7 matchups". A click on a number followed its link and
+  // loaded the plain (dark) site page INTO the tab's frame.
+  const go = b.navigation.fire({ destination: { url: 'https://timothyhadfield.github.io/fantasy-football/analysis.html?team=1&week=7', sameDocument: false } });
+  ok(go.canceled, 'a link the frame would follow is stopped, so the tab never shows the plain site page');
+  eq(b.opened[0] && b.opened[0][0], 'https://timothyhadfield.github.io/fantasy-football/analysis.html?team=1&week=7', 'and opens in a new browser tab instead');
+  eq(b.opened[0] && b.opened[0][1], '_blank', 'a new tab, not the frame');
+  ok(!b.navigation.fire({ navigationType: 'reload', destination: { url: 'x', sameDocument: false } }).canceled, 'the site’s own reload still runs');
+  ok(!b.navigation.fire({ hashChange: true, destination: { url: '#x', sameDocument: true } }).canceled, 'and in-page anchors');
+}
+{
+  // The Analysis tab is ONE frame (extension/content-espn-tabs.js): stats.html
+  // with analysis.html's panels brought in below, so one scroll runs through
+  // both (two page-tall frames went blank off screen while scrolling).
+  const store = memoryStorage();
+  bootPage('stats.html', seeded('stats.html', 'stats').replace('#', '&next=analysis#'), [ESPN], store);
+  const p = JSON.parse(store.getItem('ff.prefs'));
+  eq(p['analysis.source'], 'live', 'next=analysis: the Analysis panels read the league too');
+  const other = memoryStorage();
+  bootPage('stats.html', seeded('stats.html', 'stats').replace('#', '&next=evil#'), [ESPN], other);
+  ok(!('evil.source' in JSON.parse(other.getItem('ff.prefs'))), 'an unknown next part is ignored');
+
+  const g = globalThis;
+  const { DOMParser } = await import('linkedom');
+  g.DOMParser = DOMParser;
+  g.fetch = async (p2) => ({ ok: true, text: async () => fs.readFileSync(repoFile(p2), 'utf8') });
+  const quiet = console.error; console.error = () => {};   // analysis-page.js can't load in Node; fine here
+  const b = await runLayout('stats.html', 'stats', memoryStorage(), {
+    extra: '&next=analysis',
+    location: { search: '?embed=espn&part=stats&next=analysis', href: 'https://timothyhadfield.github.io/fantasy-football/stats.html' },
+  });
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 5));
+  console.error = quiet;
+  const doc = b.document;
+  const k = kept(doc);
+  ok(k[4] && k[4].querySelector('#panelOppProj'), 'merged: Stats’ panels first');
+  ok(k[5] && k[5].classList.contains('ffx-status') && k[5].querySelector('#ffxNextStatus'), 'then the Analysis loading line');
+  ok(k[6] && k[6].querySelector('#overviewTable'), 'then All teams');
+  ok(k[7] && k[7].querySelector('#totalsTable'), 'then Weekly totals');
+  ok(k[8] && k[8].querySelector('#seasonTable'), 'then Season by week');
+  eq(k.length, 9, 'and nothing else');
+  const ids = [...doc.querySelectorAll('[id]')].map((e) => e.id);
+  eq(ids.length - new Set(ids).size, 0, 'no id appears twice in the merged page');
+  const skin = doc.head.querySelector('link[href="css/espn-embed.css"]');
+  const styles = [...doc.head.querySelectorAll('style')];
+  ok(styles.length && styles.every((s) => s.compareDocumentPosition(skin) & 4), 'before the ESPN skin, so the skin still wins');
+  delete g.fetch; delete g.DOMParser; delete g.location;
 }
 {
   const store = memoryStorage();

@@ -19,7 +19,10 @@
 //   3. The tab's frames are the site's own pages, framed as ?embed=espn, seeded
 //      with the site's choices for THAT league and nobody else's.
 //   4. ESPN re-rendering its nav or page puts the tabs and the view back.
-//   5. Only the site may size a frame; nothing else is believed.
+//   5. Only the site may say its frame is drawn; nothing else is believed.
+//   6. (2026-10-18) One window-high frame per tab, scrolling inside itself, in
+//      a box outside ESPN's React tree — tall frames scrolled by ESPN's page
+//      were drawn late (blank while scrolling).
 
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -176,15 +179,25 @@ const LEAGUE_URL = 'https://fantasy.espn.com/football/league?leagueId=1241838';
   ok(b.ours()[0].classList.contains('active'), 'the Analysis tab is underlined');
   ok(b.document.documentElement.classList.contains('ffx-on'), 'the page is in tab mode');
   const host = b.document.querySelector('[data-ffx-host]');
-  ok(host && host.classList.contains('page-container'), 'ESPN’s page container holds the view');
-  eq(host.firstElementChild && host.firstElementChild.id, 'ffx-view', 'as its first child');
+  ok(host && host.classList.contains('page-container'), 'ESPN’s page container is the one hidden under the view');
+  const view = b.document.getElementById('ffx-view');
+  // Tim, 2026-10-18: "they only load the parts of the page that you can
+  // currently see so if you scroll up and down it's blank for a bit". A frame
+  // as tall as its page, scrolled by ESPN's page, is drawn only where it is on
+  // screen (measured: tools/espn-tab-check.mjs). The frame is window-high and
+  // scrolls inside itself, in a box outside ESPN's React tree (a frame moved
+  // to a new parent reloads; ESPN's React threw its tree away 3 times).
+  eq(view && view.parentNode, b.document.body, 'the view is a child of <body>, outside ESPN’s React tree');
+  ok(/\n#ffx-view \{[^}]*position: fixed/.test(b.document.getElementById('ffx-style').textContent), 'fixed from under ESPN’s nav to the window’s bottom');
+  ok(/html\.ffx-on, html\.ffx-on body \{ overflow: hidden/.test(b.document.getElementById('ffx-style').textContent), 'and ESPN’s page does not scroll under it');
+  ok(/^\d+px$/.test(view.style.top || ''), 'its top is set below ESPN’s nav', view.style.top);
 
   const fr = b.frames();
-  eq(fr.length, 2, 'Analysis frames two site pages');
+  eq(fr.length, 1, 'Analysis is ONE frame, so one scroll runs through it');
+  ok(!fr[0].hasAttribute('scrolling'), 'and the frame scrolls inside itself (no scrolling="no")');
   const u0 = new URL(fr[0].getAttribute('src'));
-  const u1 = new URL(fr[1].getAttribute('src'));
-  eq(u0.origin + u0.pathname, `${SITE_ORIGIN}/fantasy-football/stats.html`, 'first the Stats page');
-  eq(u1.origin + u1.pathname, `${SITE_ORIGIN}/fantasy-football/analysis.html`, 'then the Analysis page');
+  eq(u0.origin + u0.pathname, `${SITE_ORIGIN}/fantasy-football/stats.html`, 'the Stats page');
+  eq(u0.searchParams.get('next'), 'analysis', 'with the Analysis page’s panels brought in below');
   eq(u0.searchParams.get('embed'), 'espn', 'framed as ?embed=espn');
   eq(u0.searchParams.get('part'), 'stats', 'with its part');
   const seed = JSON.parse(decodeURIComponent(u0.hash.replace(/^#seed=/, '')));
@@ -202,7 +215,7 @@ const LEAGUE_URL = 'https://fantasy.espn.com/football/league?leagueId=1241838';
   const visible = b.frames().filter((f) => !f.closest('[hidden]'));
   eq(visible.length, 1, 'Trade shows one frame');
   eq(new URL(visible[0].getAttribute('src')).pathname, '/fantasy-football/trade.html', 'the Trade page');
-  eq(b.frames().length, 3, 'and Analysis stays loaded behind it');
+  eq(b.frames().length, 2, 'and Analysis stays loaded behind it');
 
   // back, back
   b.back();
@@ -245,7 +258,7 @@ const LEAGUE_URL = 'https://fantasy.espn.com/football/league?leagueId=1241838';
 {
   const b = boot(`${LEAGUE_URL}#ffx-analysis`, { mirror: null });
   await b.api.ready();
-  eq(b.frames().length, 2, 'never opened the site yet: the frames still load');
+  eq(b.frames().length, 1, 'never opened the site yet: the frame still loads');
   const seed = JSON.parse(decodeURIComponent(new URL(b.frames()[0].getAttribute('src')).hash.replace(/^#seed=/, '')));
   eq(JSON.parse(seed['ff.connection']).leagueId, '1241838', 'on the league in ESPN’s URL');
 }
@@ -264,8 +277,9 @@ const LEAGUE_URL = 'https://fantasy.espn.com/football/league?leagueId=1241838';
   pc.replaceWith(fresh);
   b.tick();
   eq(b.ours().length, 2, 'tabs put back after ESPN re-renders its nav');
-  eq(b.document.querySelector('.page-container').firstElementChild.id, 'ffx-view', 'and the view put back in the new container');
-  eq(b.frames().length, 2, 'with the same frames, not reloaded copies');
+  ok(b.document.querySelector('.page-container').hasAttribute('data-ffx-host'), 'the new container is hidden under the view');
+  eq(b.document.getElementById('ffx-view').parentNode, b.document.body, 'and the view never moved');
+  eq(b.frames().length, 1, 'with the same frame, not a reloaded copy');
   b.tick();
   eq(b.ours().length, 2, 'and never doubled');
 }
@@ -277,14 +291,16 @@ const LEAGUE_URL = 'https://fantasy.espn.com/football/league?leagueId=1241838';
   const [f0] = b.frames();
   const fakeSource = {};
   f0.contentWindow = fakeSource;   // linkedom has no frame windows; the script compares identity
+  const spin = () => b.document.querySelector('#ffx-view .ffx-loading');
   b.fire('message', { origin: 'https://evil.example', source: fakeSource, data: { type: 'ffx-height', height: 3000 } });
-  ok(f0.style.height !== '3000px', 'a message from anywhere but the site is ignored');
+  ok(!f0.hasAttribute('data-sized') && spin(), 'a message from anywhere but the site is ignored');
   b.fire('message', { origin: SITE_ORIGIN, source: {}, data: { type: 'ffx-height', height: 3000 } });
-  ok(f0.style.height !== '3000px', 'and so is the site’s message for a frame that is not ours');
-  b.fire('message', { origin: SITE_ORIGIN, source: fakeSource, data: { type: 'ffx-height', height: 2468.4 } });
-  eq(f0.style.height, '2469px', 'the site sizes its own frame');
+  ok(!f0.hasAttribute('data-sized') && spin(), 'and so is the site’s message for a frame that is not ours');
   b.fire('message', { origin: SITE_ORIGIN, source: fakeSource, data: { type: 'ffx-height', height: 1e9 } });
-  eq(f0.style.height, '2469px', 'but not to an absurd height');
+  ok(!f0.hasAttribute('data-sized'), 'or one with an absurd height');
+  b.fire('message', { origin: SITE_ORIGIN, source: fakeSource, data: { type: 'ffx-height', height: 2468.4 } });
+  ok(f0.hasAttribute('data-sized') && !spin(), 'the site’s own "drawn" shows its frame and ends the spinner');
+  eq(f0.style.height, '', 'and does not size it: the frame is the box’s height and scrolls inside');
 }
 
 // ---- the script's own hygiene -----------------------------------------------

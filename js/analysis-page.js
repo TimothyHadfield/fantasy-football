@@ -1246,7 +1246,9 @@ async function getDemoGenerator() {
 }
 
 function setStatus(msg, isError = false) {
-  const el = $('sourceStatus');
+  // In the ESPN Analysis tab this page shares one document with the Stats page
+  // (js/espn-embed.js), and each keeps its own status line.
+  const el = $('ffxNextStatus') || $('sourceStatus');
   el.innerHTML = msg;
   el.style.color = isError ? 'var(--err)' : 'var(--dim)';
 }

@@ -10,7 +10,7 @@
 // picks the panels and puts on ESPN's look). Nothing is re-implemented here: the
 // numbers are the site's own modules', so they cannot drift from the site.
 //
-//   Analysis  stats.html then analysis.html, one frame each, stacked
+//   Analysis  stats.html, with analysis.html inside it below (one frame, one scroll)
 //   Trade     trade.html
 //
 // THE SITE'S CHOICES. A frame inside espn.com cannot read the site's storage,
@@ -20,8 +20,8 @@
 // open, so another league never gets this one's choices or team.
 //
 // WHAT THIS SCRIPT MAY DO ON ESPN'S PAGE: add two list items to the Fantasy
-// nav, add one view to the page container, hide ESPN's page while a tab of
-// ours is open, and change the URL's hash. It clicks nothing of ESPN's, makes
+// nav, add one view to <body> over the page container, hide ESPN's page (and
+// stop it scrolling) while a tab of ours is open, and change the URL's hash. It clicks nothing of ESPN's, makes
 // no request, asks the worker nothing, and builds no HTML out of strings.
 //
 // ESPN IS A REACT APP. It can re-render the nav or the page at any moment, and
@@ -40,12 +40,24 @@
   const SITE_ORIGIN = 'https://timothyhadfield.github.io';
   const SITE = `${SITE_ORIGIN}/fantasy-football/`;
   const HASH = '#ffx-';
+  // ONE frame per tab, and it SCROLLS INSIDE ITSELF (2026-10-18). Tim: "they
+  // only load the parts of the page that you can currently see so if you
+  // scroll up and down it's blank for a bit". Measured: a frame as tall as its
+  // page, scrolled by ESPN's page, is drawn by Chrome only where it is on
+  // screen. Its rendering stops entirely while off screen (0 animation frames
+  // in 2 s, against 23 on screen) and its tiles are painted only after ESPN's
+  // busy page tells it what is showing, so a quick scroll showed up to 700 px
+  // of white for 0.2–1.6 s. A frame the size of the window that scrolls its own
+  // page is always on screen and paints ahead like any page. Analysis's second
+  // page (analysis.html) rides inside the first frame (`next`), so one scroll
+  // runs through both.
   const TABS = [
-    { key: 'analysis', label: 'Analysis', frames: [{ page: 'stats.html', part: 'stats' }, { page: 'analysis.html', part: 'analysis' }] },
+    { key: 'analysis', label: 'Analysis', frames: [{ page: 'stats.html', part: 'stats', next: 'analysis' }] },
     { key: 'trade', label: 'Trade', frames: [{ page: 'trade.html', part: 'trade' }] },
   ];
   const MAX_FRAME_PX = 100000;
   const POLL_MS = 400;
+  const GAP_PX = 12;   // between ESPN's nav and our box, as between ESPN's own boxes
 
   // ------------------------------------------------------------ the URL
 
@@ -140,6 +152,7 @@
     u.searchParams.set('embed', 'espn');
     u.searchParams.set('part', f.part);
     u.searchParams.set('league', league.leagueId);
+    if (f.next) u.searchParams.set('next', f.next);
     return `${u.toString()}#seed=${encodeURIComponent(JSON.stringify(seed))}`;
   }
 
@@ -149,13 +162,25 @@
   // and only for `.active`; ours copy that so the tab reads as one of theirs
   // at every width, and take ESPN's underline off its own item while ours is
   // open (React set that class; it is not ours to remove).
+  //
+  // The box is a child of <body>, fixed from just under ESPN's nav to the
+  // bottom of the window, over ESPN's page container (layout() lines it up).
+  // It is not inside ESPN's React tree, because React throws that tree away
+  // while the page settles, and a frame moved to a new parent reloads: measured
+  // 3 loads of each frame in the first 12 s when it lived inside it. ESPN's own
+  // page does not scroll while a tab of ours is open; the frame does.
   const STYLE = `
+html.ffx-on, html.ffx-on body { overflow: hidden !important; }
 html.ffx-on [data-ffx-host] > :not(#ffx-view) { display: none !important; }
 html:not(.ffx-on) #ffx-view { display: none !important; }
 html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !important; }
 .NavSecondary__Item[data-ffx].active { box-shadow: inset 0 -3px 0 #2DCC30 !important; }
-#ffx-view { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.24); padding: 12px 16px 16px; margin: 0 0 16px; min-height: 240px; }
-#ffx-view iframe { display: block; width: 100%; height: 0; border: 0; overflow: hidden; }
+#ffx-view { position: fixed; z-index: 2; top: 100px; bottom: 0; left: 0; right: 0; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.24); display: flex; flex-direction: column; }
+#ffx-view::before { content: ""; position: fixed; z-index: -1; left: 0; right: 0; bottom: 0; top: var(--ffx-under, 100px); background: var(--ffx-page-bg, #edeef0); }
+#ffx-view .ffx-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#ffx-view .ffx-pane[hidden] { display: none; }
+#ffx-view iframe { display: block; width: 100%; flex: 1 1 auto; min-height: 0; border: 0; }
+#ffx-view iframe:not([data-sized]) { flex: 0 0 0px; height: 0; }
 #ffx-view .ffx-loading { height: 200px; display: flex; align-items: center; justify-content: center; }
 `;
 
@@ -234,21 +259,49 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
   const panes = new Map();   // tab key -> { el, league, frames: [iframe] }
   let view = null;
 
+  /** ESPN's page container: hidden under our box, and the box takes its width. */
   function host() {
-    return doc.querySelector('.page-container') || doc.querySelector('.shell-container') || doc.querySelector('main') || doc.body;
+    return doc.querySelector('.page-container') || doc.querySelector('.shell-container') || doc.querySelector('main');
   }
 
   function ensureView() {
-    const h = host();
-    if (!h) return null;
+    const body = doc.body;
+    if (!body) return null;
     if (!view) {
       view = doc.createElement('div');
       view.id = 'ffx-view';
     }
+    const h = host();
     doc.querySelectorAll('[data-ffx-host]').forEach((el) => { if (el !== h) el.removeAttribute('data-ffx-host'); });
-    h.setAttribute('data-ffx-host', '');
-    if (view.parentNode !== h || h.firstElementChild !== view) h.insertBefore(view, h.firstChild);
+    if (h && !h.hasAttribute('data-ffx-host')) h.setAttribute('data-ffx-host', '');
+    if (view.parentNode !== body) body.appendChild(view);
+    layout();
     return view;
+  }
+
+  /** Line the box up: from just under ESPN's nav to the window's bottom, as wide as ESPN's page. */
+  function layout() {
+    if (!view || !view.isConnected || !activeKey()) return;
+    const nav = doc.querySelector('nav.NavSecondary');
+    const navR = nav && nav.getBoundingClientRect ? nav.getBoundingClientRect() : null;
+    const top = Math.max(headerBottom(), navR ? navR.bottom || 0 : 0) + GAP_PX;
+    const h = host();
+    let r = h && h.getBoundingClientRect ? h.getBoundingClientRect() : null;
+    if (!r || !(r.width > 200)) r = navR && navR.width > 200 ? navR : null;
+    const set = (k, v) => { if (view.style[k] !== v) view.style[k] = v; };
+    set('top', `${Math.round(top)}px`);
+    // ESPN's grey page behind the box, from the nav down, so nothing of the
+    // page under it (an ad banner) shows at its sides.
+    const under = `${Math.round(top - GAP_PX)}px`;
+    if (view.style.getPropertyValue('--ffx-under') !== under) view.style.setProperty('--ffx-under', under);
+    if (!view.style.getPropertyValue('--ffx-page-bg')) {
+      let bg = '';
+      try { bg = win.getComputedStyle(doc.body).backgroundColor || ''; } catch { /* default */ }
+      if (bg && !/rgba\(0, 0, 0, 0\)|transparent/.test(bg)) view.style.setProperty('--ffx-page-bg', bg);
+    }
+    set('left', r ? `${Math.round(r.left)}px` : '0px');
+    set('width', r ? `${Math.round(r.width)}px` : '100%');
+    set('right', 'auto');
   }
 
   function loader() {
@@ -287,7 +340,6 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
       const fr = doc.createElement('iframe');
       fr.setAttribute('title', `${tab.label}: ${f.part}`);
       fr.setAttribute('data-part', f.part);
-      fr.setAttribute('scrolling', 'no');
       fr.setAttribute('src', frameSrc(f, league, seed));
       el.appendChild(fr);
       return fr;
@@ -317,7 +369,6 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
       if (k === key) p.el.removeAttribute('hidden');
       else p.el.setAttribute('hidden', '');
     }
-    postVis();
   }
 
   // ------------------------------------------------------------ sync
@@ -333,6 +384,9 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
     ensureTabs(league, active);
     const root = doc.documentElement;
     if (active) {
+      // ESPN's page stops scrolling under the box, so start it at the top,
+      // where its nav is in view.
+      if (!root.classList.contains('ffx-on') && win.scrollY) win.scrollTo(0, 0);
       root.classList.add('ffx-on');
       ensureView();
       pending = showPane(active, league);
@@ -352,6 +406,10 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
     return null;
   }
 
+  // The site's page says "drawn, this tall" once it is laid out: the frame is
+  // shown then (the spinner until). The height itself is not used any more —
+  // the frame is the box's height and scrolls inside — but a message that does
+  // not carry a sane one is not believed either.
   win.addEventListener('message', (e) => {
     if (e.origin !== SITE_ORIGIN) return;
     const d = e.data;
@@ -360,11 +418,9 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
     if (!hit) return;
     const h = Number(d.height);
     if (!(h > 0 && h < MAX_FRAME_PX)) return;
-    hit.fr.style.height = `${Math.ceil(h)}px`;
     hit.fr.setAttribute('data-sized', '');
     const spin = hit.pane.el.querySelector('.ffx-loading');
     if (spin) spin.remove();
-    postVis();
   });
 
   /** ESPN's sticky header covers the top of the window; below it is "on screen". */
@@ -378,39 +434,7 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
     return Math.max(0, el.getBoundingClientRect().bottom || 0);
   }
 
-  /** True while the frame is still a blank page we can read (not yet the site). */
-  function readableFrame(fr) {
-    try { return typeof fr.contentWindow.location.href === 'string'; } catch { return false; }
-  }
-
-  function postVis() {
-    const key = activeKey();
-    const pane = key && panes.get(key);
-    if (!pane) return;
-    const top = headerBottom();
-    const winH = win.innerHeight || 0;
-    for (const fr of pane.frames) {
-      // Only once the frame has spoken: before that it may still be a blank page of ESPN's origin.
-      if (!fr.getBoundingClientRect || !fr.contentWindow || !fr.hasAttribute('data-sized')) continue;
-      // A frame moved back into a re-rendered page reloads, and is blank (ESPN's origin) for a moment.
-      if (readableFrame(fr)) continue;
-      const r = fr.getBoundingClientRect();
-      const visTop = Math.max(0, top - r.top);
-      const height = Math.max(0, Math.min(winH, r.bottom) - Math.max(r.top, top));
-      try {
-        fr.contentWindow.postMessage({ type: 'ffx-vis', top: visTop, height: height || winH - top }, SITE_ORIGIN);
-      } catch { /* a frame between pages */ }
-    }
-  }
-
-  let visQueued = false;
-  const queueVis = () => {
-    if (visQueued) return;
-    visQueued = true;
-    win.requestAnimationFrame(() => { visQueued = false; postVis(); });
-  };
-  win.addEventListener('scroll', queueVis, { passive: true });
-  win.addEventListener('resize', queueVis);
+  win.addEventListener('resize', () => layout());
 
   // ------------------------------------------------------------ watching ESPN
 
@@ -427,8 +451,10 @@ html.ffx-on .NavSecondary__Item.active:not([data-ffx]) { box-shadow: none !impor
       const league = leagueFromUrl();
       const list = navList();
       const tabsGone = league && list && list.querySelectorAll('li[data-ffx]').length !== TABS.length;
-      const viewGone = activeKey() && (!view || !view.isConnected || host().firstElementChild !== view);
+      const h = host();
+      const viewGone = activeKey() && (!view || view.parentNode !== doc.body || (h && !h.hasAttribute('data-ffx-host')));
       if (tabsGone || viewGone || win.location.href !== lastHref) sync();
+      else layout();
     }, 50);
   };
   if (typeof win.MutationObserver === 'function') {

@@ -750,7 +750,7 @@ eq(
     b.ask();
     eq(b.sent.length, 0, `content-site forwards nothing ${why}`);
   }
-  eq(MANIFEST.version, '0.5.0', 'the bridge with the ESPN tabs ships as 0.5.0');
+  eq(MANIFEST.version, '0.5.1', 'the ESPN tabs that scroll inside one window-high frame ship as 0.5.1');
 }
 
 // ---- the mirror: the site's choices, to the ESPN tabs and back (0.5.0) ----
