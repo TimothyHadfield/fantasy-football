@@ -153,6 +153,10 @@
     "link-check.mjs": {
       "assertions": 137
     },
+    "opp-outline-check.mjs": {
+      "assertions": 32,
+      "scenarios": 4
+    },
     "an-test.mjs": {
       "assertions": 2679,
       "scenarios": 31
