@@ -1785,7 +1785,8 @@ function renderAvgGrid(grid) {
     `<tr>
        <th class="name" data-sort title="${TEAM_HEAD}">Team</th>
        ${rows.map((r) => `<th data-sort title="What this squad's ${esc(r.key)} is worth in an ` +
-         `average week: that slot's projection in every regular-season week read, averaged. ` +
+         `average week: that slot's projection in every regular-season week ` +
+         `${projAvgWord(weeks)}, averaged. ` +
          `Whoever fills it — it is a slot, not a man.${valueWords()}">${esc(r.key)}</th>`).join('')}
        <th class="grid-total grouped" data-sort title="What this squad's whole starting lineup ` +
          `projects in an average week. It is the week-by-week lineup total averaged` +
@@ -1931,7 +1932,8 @@ function avgCell(cell, row, team, scale) {
   if (!cell || cell.avg === null) {
     // Nothing read yet is not the same as nothing there, and the two must not
     // share a mark: one resolves itself in a few seconds, the other never does.
-    return state.seasonWeeks.size === 0
+    // Only the weeks it counts matter: played weeks landing first is still "loading".
+    return !projAvgWeeks(spanWeeks()).some((w) => state.seasonWeeks.has(w))
       ? `<td class="${base} wait" title="No week has been read from ESPN yet, so there is nothing ` +
         `to average. The Season by week panel below reports the progress.">·</td>`
       : `<td class="${base} muted" title="No week read so far gives ${esc(team.name)} an ` +
@@ -1944,9 +1946,11 @@ function avgCell(cell, row, team, scale) {
   const more = cell.who.length > 3 ? `, and ${cell.who.length - 3} more` : '';
   const says = (cell.value
     ? `${team.name}'s ${row.key} has a Value of ${fmt(cell.avg)} in an average week — each ` +
-      `week's man at his own Value, averaged over ${plural(cell.n, 'regular-season week')} read`
+      `week's man at his own Value, averaged over ${plural(cell.n, 'regular-season week')} ` +
+      projAvgWord()
     : `${team.name}'s ${row.key} is worth ${fmt(cell.avg)} in an average week — that slot's ` +
-      `projection over ${plural(cell.n, 'regular-season week')} read, whoever fills it`) +
+      `projection over ${plural(cell.n, 'regular-season week')} ` +
+      `${projAvgWord()}, whoever fills it`) +
     (who ? `: ${who}${more}.` : '.') +
     (cell.assumed
       ? ` ${cell.assumed} of those ${cell.assumed === 1 ? 'is' : 'are'} assessed at the waiver ` +
@@ -1973,7 +1977,7 @@ function totalAvgLabel(team, got) {
     return `No week has been read yet, so ${team.name}'s lineup has nothing to average.`;
   }
   return `${team.name}'s best legal lineup projects ${fmt(got.total)} in an average week, over ` +
-    `${plural(got.weeks, 'regular-season week')} read.` +
+    `${plural(got.weeks, 'regular-season week')} ${projAvgWord()}.` +
     (historyWeeks().size ? '' : ` It is the same figure the Season by week ` +
     `panel's Starting lineup band shows for this squad.`);
 }
@@ -2275,8 +2279,10 @@ function renderMeasureToggle(grid) {
   if (hint) {
     // Once a week is history the sheet's Avg holds real scores and this does not.
     hint.textContent = grid.key === 'avg'
-      ? `One column per lineup slot, averaged over the season week by week — ` +
-        (historyWeeks().size ? `every week at its projection.` : `the Avg column of Season by week, for every squad.`) +
+      ? `One column per lineup slot, averaged week by week — ` +
+        (!historyWeeks().size ? `the Avg column of Season by week, for every squad.`
+          : projAvgSeasonOver(spanWeeks()) ? `no week is left, so the whole season.`
+            : `weeks still to come only.`) +
         ` The week still sets the rest of the page.`
       : `Scored on ESPN’s projection for week ${state.week}, which is also the week the panels below show.`;
   }
@@ -2301,16 +2307,22 @@ function renderOverviewNote(grid) {
   // below would have it describing a table that is not on the screen.
   if (grid.slotGrid) {
     const weeks = spanWeeks();
-    const read = [...state.seasonWeeks.keys()].filter((w) => !isPlayoff(w)).length;
-    const regular = weeks.filter((w) => !isPlayoff(w)).length;
+    const counted = new Set(projAvgWeeks(weeks).filter((w) => !isPlayoff(w)));
+    const read = [...state.seasonWeeks.keys()].filter((w) => counted.has(w)).length;
+    const regular = counted.size;
+    const over = projAvgSeasonOver(weeks);
 
     parts.push(
-      `Every number is a <strong>lineup slot averaged over the season</strong>, not a player: the ` +
-      `QB column is what that squad’s quarterback spot is worth in an average week, filled each ` +
-      `week by whoever actually starts there. ` +
-      (historyWeeks(weeks).size
-        ? `<strong>Every week counts at its projection, played ones too</strong>, so this is not ` +
-          `the Avg column of Season by week below, which averages the scores shown there.`
+      `Every number is a <strong>lineup slot averaged over the weeks still to come</strong>, not a ` +
+      `player: the QB column is what that squad’s quarterback spot is worth in an average week, ` +
+      `filled each week by whoever actually starts there. ` +
+      (over
+        ? `<strong>No week is left</strong>, so every week of the season counts again, at its ` +
+          `projection.`
+        : historyWeeks(weeks).size
+        ? `<strong>Only weeks still to come count</strong>; a played week, or one under way, is ` +
+          `left out. So this is not the Avg column of Season by week below, which averages the ` +
+          `scores shown there too.`
         : `<strong>This is the Avg column of Season by week ` +
           `below, computed for all ten squads</strong> — the same weeks, the same slots, the same ` +
           `waiver floor — so a row here and that panel cannot disagree.`)
@@ -2320,7 +2332,7 @@ function renderOverviewNote(grid) {
       `It replaced a per-player average (each man’s full-season ${season} projection over ` +
       `${SEASON_GAMES} games) because that could not see the things that decide a season: a bye ` +
       `week, a squad with two useful backs who never both start, or a slot with nobody in it. ` +
-      `<strong>${read} of ${regular} regular-season week${regular === 1 ? '' : 's'}</strong> ` +
+      `<strong>${read} of ${regular} regular-season week${regular === 1 ? '' : 's'}${over ? '' : ' to come'}</strong> ` +
       `${read === 1 ? 'is' : 'are'} in these averages so far${read < regular
         ? ' — the rest fill in as they arrive.' : '.'} Playoff weeks are never counted.`
     );
@@ -2353,7 +2365,7 @@ function renderOverviewNote(grid) {
       `usually several men, so there is no one player to point at. The names are in Season by week ` +
       `and in the roster detail below. Click a row to load that squad into both, and click any ` +
       `header to sort. <strong>The week picked above still drives the rest of the page</strong>; ` +
-      `it does not change these averages, which are the whole season either way.`
+      `it does not change these averages.`
     );
 
     if (valueNote()) parts.unshift(valueNote());
@@ -3051,7 +3063,7 @@ function renderRosterNote(view, team) {
     `<strong>Season total</strong> is the whole ${SEASON_GAMES}-game projection and ` +
     `<strong>Avg/wk</strong> is that same number per game — one man's own average, which is a ` +
     `different question from the <strong>Proj avg</strong> above: that is what this squad's ` +
-    `lineup is worth in an average week, slot by slot, whoever fills each slot that week. ` +
+    `lineup is worth in an average week still to come, slot by slot, whoever fills each slot that week. ` +
     `<strong>Click any player’s name</strong> to open his next 13 weeks on the ` +
     `<a href="waivers.html">Players</a> page.`
   );
@@ -3442,6 +3454,34 @@ function slotThresholds(rows, slots, weeks) {
 // this SLOT actually be worth, week by week, given whoever fills it — and byes,
 // depth and the waiver floor all fall out of it instead of being ignored.
 
+// ONLY THE WEEKS STILL TO COME (Tim, 2026-10-17): "Fix the proj avg 2026 box
+// so that it only considers proj of future weeks, not past weeks."
+//
+// A week is past exactly when the season sheet files it under "Actual
+// history" (`historyWeeks`): every matchup in it played on the schedule, or
+// somebody in it already finished (`done`, js/season.js) — from that moment
+// a finished man's `projected` IS his score, so the week is no projection any
+// more. Until then the week in progress still counts. Preseason that is every
+// week. Once no regular-season week is left the box falls back to the whole
+// season, the figure it showed before, rather than going blank; the note says so.
+
+/** The weeks the Proj avg counts, out of `weeks`. */
+function projAvgWeeks(weeks) {
+  const hist = historyWeeks(weeks);
+  const ahead = weeks.filter((w) => !hist.has(w));
+  return ahead.some((w) => !isPlayoff(w)) ? ahead : weeks;
+}
+
+/** True when no regular-season week is left and the Proj avg is the whole season again. */
+function projAvgSeasonOver(weeks) {
+  return historyWeeks(weeks).size > 0 && projAvgWeeks(weeks) === weeks;
+}
+
+/** How a Proj avg tooltip names its weeks: 'still to come' once a week is history. */
+function projAvgWord(weeks = spanWeeks()) {
+  return historyWeeks(weeks).size && !projAvgSeasonOver(weeks) ? 'still to come' : 'read';
+}
+
 /** Memoised on the same key as the fills, plus the floors, which move the numbers. */
 let slotAvgs = { key: null, byTeam: new Map() };
 
@@ -3467,10 +3507,14 @@ function floorsKey() {
  * sheet's "Starting lineup" band shows for that squad; the note says so.
  */
 function teamSlotAverages(rows, slots, weeks) {
-  const key = `${fillsKey(rows, weeks)}|${floorsKey()}`;
+  const ahead = new Set(projAvgWeeks(weeks));
+  const key = `${fillsKey(rows, weeks)}|${floorsKey()}|c${[...ahead].join(',')}`;
   if (slotAvgs.key === key) return slotAvgs.byTeam;
 
-  const byWeek = weeklyFills(rows, slots, weeks);
+  // The fills are the whole season's (shared with the sheet); a past week is
+  // simply left out of every average below, as if it had not been read.
+  const all = weeklyFills(rows, slots, weeks);
+  const byWeek = new Map([...all].filter(([w]) => ahead.has(w)));
   const teamIds = new Set();
   for (const perTeam of byWeek.values()) for (const id of perTeam.keys()) teamIds.add(id);
 
@@ -3540,10 +3584,11 @@ let slotValueAvgs = { key: null, byTeam: new Map() };
 function drawnSlotAverages(rows, slots, weeks) {
   const plain = teamSlotAverages(rows, slots, weeks);
   if (!valueOn()) return plain;
-  const key = `${fillsKey(rows, weeks)}|value`;
+  const ahead = new Set(projAvgWeeks(weeks));
+  const key = `${fillsKey(rows, weeks)}|value|c${[...ahead].join(',')}`;
   if (slotValueAvgs.key === key) return slotValueAvgs.byTeam;
 
-  const byWeek = weeklyFills(rows, slots, weeks);
+  const byWeek = new Map([...weeklyFills(rows, slots, weeks)].filter(([w]) => ahead.has(w)));
   const byTeam = new Map();
   for (const [id, got] of plain) {
     const cells = new Map();

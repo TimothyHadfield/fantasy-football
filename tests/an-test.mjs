@@ -372,6 +372,32 @@ const VALUE_STUB = {
 };
 const SHOW_IDS = ['overviewShow', 'seasonShow', 'startersShow', 'rosterShow'];
 
+/** The all-teams grid on Proj avg, the roster glance, the team card and the words. */
+async function avgFutureSnap(document) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let t = 0; t < 8000; t += 20) {
+    if ((document.getElementById('seasonProgress').textContent || '').trim() === '' &&
+        document.querySelectorAll('#overviewTable tbody td.wait').length === 0 &&
+        document.querySelectorAll('#overviewTable tbody tr').length > 0) break;
+    await sleep(20);
+  }
+  const t = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+  const row = document.querySelector('#overviewTable tbody tr[data-team="4"]');
+  return {
+    head: [...document.querySelectorAll('#overviewTable thead th')].map((th) => ({
+      text: t(th), title: th.getAttribute('title') || '' })),
+    row: row ? [...row.children].map((td) => ({
+      text: t(td), v: td.getAttribute('data-v'),
+      title: td.getAttribute('title') || td.getAttribute('aria-label') || '',
+      pop: td.getAttribute('data-pop') || '' })) : [],
+    glance: [...document.querySelectorAll('#teamGlance .stat')].map((s) => [
+      t(s.querySelector('.k')), t(s.querySelector('.v'))]),
+    note: t(document.getElementById('overviewNote')),
+    hint: t(document.getElementById('measureHint')),
+    title: t(document.getElementById('overviewTitle')),
+  };
+}
+
 /** Everything the switch may and may not change, as it is on screen. */
 function valueSnap(document) {
   const t = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
@@ -705,6 +731,36 @@ const SCENARIOS = {
     prefs: { 'analysis.source': 'live' },
     conn: { leagueId: '99', season: 2026, teamId: 4 },
     after: async ({ document }) => { globalThis.__an = { actual: historySnap(document) }; },
+  },
+  // ---- Proj avg counts only the weeks to come (Tim, 2026-10-17) -------------
+  // "Fix the proj avg 2026 box so that it only considers proj of future weeks,
+  // not past weeks." AN_PAST_SPIKE puts the played weeks 30 points a man above
+  // the rest, so counting them is unmistakable. `-pre` is a season nobody has
+  // played (every week counts); `-over` one with every week played (no week
+  // left: the box falls back to the whole season rather than going blank).
+  'avg-future': {
+    label: '(af) Proj avg: only weeks still to come count',
+    stub: true,
+    env: { AN_PAST_SPIKE: '30' },
+    prefs: { 'analysis.source': 'live', 'analysis.measure': 'avg' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => { globalThis.__an = await avgFutureSnap(document); },
+  },
+  'avg-future-pre': {
+    label: '(ag) Proj avg before the season: every week counts',
+    stub: true,
+    env: { AN_PAST_SPIKE: '30', AN_SCHEDULE_PLAYED: '0' },
+    prefs: { 'analysis.source': 'live', 'analysis.measure': 'avg' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => { globalThis.__an = await avgFutureSnap(document); },
+  },
+  'avg-future-over': {
+    label: '(ah) Proj avg after the last week: the whole season again',
+    stub: true,
+    env: { AN_PAST_SPIKE: '30', AN_SCHEDULE_PLAYED: '13' },
+    prefs: { 'analysis.source': 'live', 'analysis.measure': 'avg' },
+    conn: { leagueId: '99', season: 2026, teamId: 4 },
+    after: async ({ document }) => { globalThis.__an = await avgFutureSnap(document); },
   },
   // ---- Proj | Value (Tim, 2026-10-09) ----------------------------------------
   value: {
@@ -2519,6 +2575,74 @@ async function checkFineSum(c) {
 }
 
 /**
+ * PROJ AVG = THE WEEKS STILL TO COME (Tim, 2026-10-17): "Fix the proj avg 2026
+ * box so that it only considers proj of future weeks, not past weeks."
+ *
+ * Expected numbers come from the stub's own projections. Team 4's best lineup
+ * is its nine starters every week (players 00–08), so a slot's average is that
+ * man's projection averaged over the counted weeks, and the Total is the nine
+ * of them added up week by week, then averaged.
+ */
+async function checkAvgFuture(c, scenario) {
+  const A = await (globalThis.__an || {});
+  const stub = await import('./an-stub-season.mjs');
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const played = stub.SCHEDULE_PLAYED_THROUGH;
+  const ALL = Array.from({ length: stub.WEEKS }, (_, i) => i + 1);
+  const ahead = ALL.filter((w) => w > played);
+  // No week left: the whole season, the box's figure before the season ended.
+  const counted = ahead.length ? ahead : ALL;
+  const qb = r1(mean(counted.map((w) => stub.projFor(0, w))));
+  const qbAll = r1(mean(ALL.map((w) => stub.projFor(0, w))));
+  // The best legal lineup re-derived from the raw numbers (a bye and a missing
+  // number in weeks 6–7 put a bench man in): QB, RB×2, WR×2, TE, FLEX, D/ST, K.
+  const best = (w) => {
+    const pool = stub.POS.map((pos, i) => ({ i, pos, v: stub.projFor(i, w) }))
+      .filter((p) => typeof p.v === 'number' && stub.onRoster(p.i, w))
+      .sort((a, b) => b.v - a.v);
+    const used = new Set();
+    let sum = 0;
+    const take = (ok) => {
+      const p = pool.find((x) => !used.has(x.i) && ok(x.pos));
+      if (p) { used.add(p.i); sum += p.v; }
+    };
+    for (const pos of ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'DST', 'K']) take((x) => x === pos);
+    take((x) => ['RB', 'WR', 'TE'].includes(x));
+    return sum;
+  };
+  const total = r1(mean(counted.map(best)));
+  const row = A.row || [];
+  const iTotal = (A.head || []).findIndex((h) => h.text === 'Total');
+  c.ok('AVG FUTURE: the grid is on Proj avg, with Team 4’s row drawn',
+    /^All teams · proj avg 2026$/.test(A.title || '') && row.length > 9 && iTotal > 0,
+    JSON.stringify({ title: A.title, cells: row.length, iTotal }));
+  if (!(row.length > 9 && iTotal > 0)) return c.out;
+
+  c.ok(`AVG FUTURE: the QB cell is the mean over weeks ${counted[0]}–${counted[counted.length - 1]} (${qb})` +
+      (ahead.length && played ? `, not the whole season (${qbAll})` : ''),
+    row[1].v === String(qb) && (!(ahead.length && played) || qb !== qbAll),
+    JSON.stringify(row[1]));
+  c.ok(`AVG FUTURE: the Total is the lineup averaged over those weeks (${total})`,
+    Math.abs(Number(row[iTotal].v) - total) < 0.051, JSON.stringify(row[iTotal]));
+  c.ok('AVG FUTURE: the QB cell says how many weeks it averages',
+    new RegExp(`over ${counted.length} regular-season weeks?`).test(row[1].title), row[1].title);
+  // The roster detail's Proj avg and the team card read the same figure.
+  const glance = (A.glance || []).find(([k]) => k === 'Proj avg');
+  c.ok('AVG FUTURE: the roster detail’s Proj avg is the grid’s Total for that squad',
+    Boolean(glance) && glance[1] === Number(row[iTotal].v).toFixed(1), JSON.stringify(glance));
+  if (ahead.length && played) {
+    c.ok('AVG FUTURE: the note says only weeks still to come count',
+      /weeks still to come/i.test(A.note) && !/played ones too/.test(A.note), A.note.slice(0, 400));
+    c.ok('AVG FUTURE: and the switch hint says so too', /still to come/.test(A.hint), A.hint);
+  } else if (!ahead.length) {
+    c.ok('AVG FUTURE: after the last week the note says the whole season is back',
+      /no week is left/i.test(A.note), A.note.slice(0, 400));
+  }
+  return c.out;
+}
+
+/**
  * PROJ | VALUE (Tim, 2026-10-09): "for all graphs or charts that show avg
  * position's proj or value or anything like that (except total proj like a
  * team's proj for that week), have a switch for that graph that also shows the
@@ -2622,10 +2746,13 @@ async function checkValue(c, scenario) {
 
   // ---- All teams, Proj avg
   {
-    const want = mean(ALL.map((w) => worth(0, w)));
-    const ofMean = valueOf(VALUE_BASE, 'QB', mean(ALL.map((w) => stub.projFor(0, w))));
-    c.ok(`VALUE: PROJ AVG — a slot is the MEAN OF ITS WEEKS’ VALUES (${want}), not the value of the mean (${ofMean})`,
-      num(VA.overview.row[1]) === want.toFixed(1) && want !== ofMean, JSON.stringify(VA.overview.row[1]));
+    // Over the weeks still to come only (Tim, 2026-10-17). On weeks 8–13 the
+    // QB's Value is a straight line, so the mean of the Values and the Value of
+    // the mean happen to meet; the week cells above already pin each Value.
+    const want = mean(AHEAD.map((w) => worth(0, w)));
+    c.ok(`VALUE: PROJ AVG — a slot is the MEAN OF ITS WEEKS’ VALUES over the weeks to come (${want})`,
+      num(VA.overview.row[1]) === want.toFixed(1) && /over 6 regular-season weeks still to come/.test(VA.overview.row[1].title),
+      JSON.stringify(VA.overview.row[1]));
     c.ok('VALUE: and its Total column is the projection it was',
       JSON.stringify(VA.overview.totals) === JSON.stringify(PA.overview.totals) && PA.overview.totals.length === 10,
       JSON.stringify([PA.overview.totals, VA.overview.totals]));
@@ -3035,6 +3162,7 @@ async function check(scenario, boot) {
   // below were all written about a league between weeks.
   if (scenario === 'history-live') return checkHistory(c, scenario);
   if (scenario === 'fine-sum') return checkFineSum(c);
+  if (scenario.startsWith('avg-future')) return checkAvgFuture(c, scenario);
   if (scenario === 'value' || scenario === 'value-kept' || scenario === 'value-nolines') {
     return checkValue(c, scenario);
   }
@@ -4859,7 +4987,8 @@ async function check(scenario, boot) {
     const avgWrong = [];
     SLOT_ROWS.forEach((key, i) => {
       const vals = [];
-      for (let wk = 1; wk <= 13; wk++) {
+      // Only the weeks still to come (Tim, 2026-10-17): 8–13 on this stub.
+      for (let wk = stub.SCHEDULE_PLAYED_THROUGH + 1; wk <= 13; wk++) {
         const v = fillOf(4, wk).get(key);
         if (typeof v === 'number') vals.push(v);
       }
@@ -4867,7 +4996,7 @@ async function check(scenario, boot) {
       const got = Number(a4.cells[i].v);
       if (Math.abs(got - want) > 0.06) avgWrong.push(`${key} want ${want} got ${got}`);
     });
-    c.ok('PROJ AVG IS EACH LINEUP SLOT AVERAGED OVER THE REGULAR SEASON',
+    c.ok('PROJ AVG IS EACH LINEUP SLOT AVERAGED OVER THE REGULAR-SEASON WEEKS STILL TO COME',
       avgWrong.length === 0, avgWrong.slice(0, 4).join(' | '));
 
     // And it really is a different answer from the one it replaced, which was
@@ -4906,9 +5035,10 @@ async function check(scenario, boot) {
       weekTotals.push([...fillOf(4, wk).values()]
         .filter((v) => typeof v === 'number').reduce((x, y) => x + y, 0));
     }
+    const ahead = weekTotals.slice(stub.SCHEDULE_PLAYED_THROUGH);
     const wantTotal = Math.round(
-      (weekTotals.map((t) => Math.round(t * 10) / 10)
-        .reduce((x, y) => x + y, 0) / weekTotals.length) * 10) / 10;
+      (ahead.map((t) => Math.round(t * 10) / 10)
+        .reduce((x, y) => x + y, 0) / ahead.length) * 10) / 10;
     c.ok('TOTAL IS THE WHOLE LINEUP IN AN AVERAGE WEEK',
       Math.abs(Number(a4.cells[SLOT_ROWS.length].v) - wantTotal) < 0.06,
       `${a4.cells[SLOT_ROWS.length].v} vs ${wantTotal}`);
@@ -5013,19 +5143,20 @@ async function check(scenario, boot) {
     // columns are slots rather than men, so the shared paragraphs would have
     // been describing a table that is not on the screen.
     c.ok('the average note says a cell is a lineup slot averaged, not a player',
-      /lineup slot averaged over the season, not a player/.test(w.notes.avg),
+      /lineup slot averaged over the weeks still to come, not a player/.test(w.notes.avg),
       w.notes.avg.slice(0, 200));
     // With weeks played it may no longer claim to be the panel below's Avg
-    // (2026-10-06): that column averages the scores shown, this projects all 13.
+    // (2026-10-06): that column averages the scores shown; since 2026-10-17
+    // this counts only the weeks still to come.
     c.ok('AND, WITH WEEKS PLAYED, THAT IT IS NOT THE AVG COLUMN OF THE PANEL BELOW, and why',
-      /Every week counts at its projection, played ones too/.test(w.notes.avg) &&
+      /Only weeks still to come count/.test(w.notes.avg) &&
       /not the Avg column of Season by week/.test(w.notes.avg) &&
       !/cannot disagree/.test(w.notes.avg), w.notes.avg.slice(0, 500));
     c.ok('it owns up to what it replaced and why',
       /over 17 games/.test(w.notes.avg) && /bye week/.test(w.notes.avg),
       w.notes.avg.slice(0, 900));
     c.ok('it says how much of the season is actually in the averages',
-      /13 of 13 regular-season weeks are in these averages/.test(w.notes.avg),
+      /6 of 6 regular-season weeks to come are in these averages/.test(w.notes.avg),
       w.notes.avg.slice(0, 900));
     c.ok('it says the Total is the lineup averaged, not the columns added',
       /added up, then those totals averaged/.test(w.notes.avg), w.notes.avg.slice(0, 1200));
@@ -5058,10 +5189,11 @@ async function check(scenario, boot) {
       w.title === 'All teams · proj avg 2026' && JSON.stringify(w.lit) === JSON.stringify(['avg']),
       `${w.title} / ${JSON.stringify(w.lit)}`);
     // Team 4's QB slot is player 00 in every week — (20 - 0) + 0.3w — so over
-    // weeks 1 to 13 it averages 20 + 0.3 x 7 = 22.1. Not week 8's 22.4, and not
-    // the 20.0 the old per-player measure gave (his season line over 17 games).
-    c.ok('and the numbers are that measure’s — 22.1, neither 22.4 nor the old 20.0',
-      w.qb === '22.1', String(w.qb));
+    // the weeks still to come, 8 to 13, it averages 20 + 0.3 x 10.5 = 23.15,
+    // printed 23.2. Not week 8's 22.4, not the whole season's 22.1 (before
+    // 2026-10-17), and not the 20.0 of the old per-player measure.
+    c.ok('and the numbers are that measure’s — 23.2, not 22.4, 22.1 or the old 20.0',
+      w.qb === '23.2', String(w.qb));
     c.ok('while the WEEK is still the coming one, so the panels below are unaffected',
       w.week === '8' && JSON.stringify(w.seasonNow) === JSON.stringify(['8']),
       `${w.week} / ${JSON.stringify(w.seasonNow)}`);

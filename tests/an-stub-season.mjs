@@ -43,11 +43,18 @@ export const POS = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'WR', 'DST', 'K', 'RB', 
 // the lineup's own (`fine-sum`, 2026-10-06). Off by default.
 const FINE = process.env.AN_FINE === '1';
 
+// AN_PAST_SPIKE=N adds N points to every projection in the weeks the schedule
+// has played (`avg-future`, 2026-10-17). Tim: "Fix the proj avg 2026 box so
+// that it only considers proj of future weeks, not past weeks." With the past
+// weeks projecting far above the rest, a Proj avg that still counts them is
+// off by several points, not a rounding. Off by default.
+const PAST_SPIKE = Number(process.env.AN_PAST_SPIKE || 0);
+
 /** What the stub says ESPN projects. null = no number; 0 = bye. */
 export function projFor(i, week) {
   if (i === 3 && week === 6) return 0;      // on bye
   if (i === 4 && week === 7) return null;   // ESPN carried nothing
-  const v = Math.round(((20 - i) + week * 0.3) * 10) / 10;
+  const v = Math.round(((20 - i) + week * 0.3 + (week <= SCHEDULE_PLAYED_THROUGH ? PAST_SPIKE : 0)) * 10) / 10;
   return FINE && i < 3 ? v + 0.04 : v;
 }
 
