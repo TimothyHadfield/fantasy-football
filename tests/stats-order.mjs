@@ -989,7 +989,8 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
     assert(avgCard.rows.length === t0.weekly.length && near(cardNum(last(row(avgCard, 'Average'))), t0.avgActual),
       `grid Avg card is not the ${t0.weekly.length} weeks and their average: "${avgCard.text}"`);
   }
-  // The League row and the week heading are the week itself; only the row links.
+  // The League row is the week itself and links. The week heading only sorts: no card
+  // (Tim, 2026-10-18: "Remove the previews when hovering over the weekly number").
   const foot = $('weeklyTable').querySelector('tfoot tr');
   const lg = hoverCard(foot.children[1]);
   if (see('League row', lg)) {
@@ -998,7 +999,7 @@ assert(/F−A:/.test(noteText) && /Luck\/wk:/.test(noteText),
   }
   assert(goes(foot.children[1]) === `schedule.html?week=${st.weekNumbers[0]}`, `a click on the League row went to "${window.location.href}"`);
   const head = $('weeklyHead').children[1];
-  see('week heading', hoverCard(head));
+  assert(!hoverCard(head), 'a week heading opened a card');
   assert(goes(head) === 'about:blank', `a click on a week heading left the page (it sorts): "${window.location.href}"`);
   assert(!head.hasAttribute('title'), 'the week heading has a card and a title');
 
