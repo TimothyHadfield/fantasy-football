@@ -1,0 +1,244 @@
+/* THE ESPN SKIN, for a page shown inside one of the extension's ESPN tabs.
+ *
+ * Loaded only by js/espn-embed-boot.js, which puts `espn-embed` on <html>, so
+ * every rule here is scoped to it and the site itself is untouched.
+ *
+ * Tim, 2026-10-17: "make everything in it the same style as what is on the
+ * other tabs of ESPN". So the site's dark tokens are swapped for ESPN's light
+ * ones, and the type, tables, button groups and drop-downs copy ESPN's own
+ * rules (espn-ui.css, read 2026-10-17: .Table__TH, .Table__TD, .Table__Title,
+ * .ButtonGroup, .dropdown, .tabs__list__item). What is NOT changed is anything
+ * that carries meaning: the red/green scale (js/heat.js), the arrows, the
+ * series colours, which columns show and how they sort. */
+
+html.espn-embed {
+  color-scheme: light;
+  --bg: #fff;
+  --panel: #fff;
+  --panel-2: #f9f9fb;
+  --panel-3: #f1f2f3;
+  --row-alt: #fafafa;
+  --line: #f1f2f3;
+  --line-2: #dcdddf;
+  --text: #2b2c2d;
+  --dim: #6c6d6f;
+  /* The same hues as the site, dark enough to read on white. */
+  --accent: #19803a;
+  --accent-hi: #1d9443;
+  --on-accent: #fff;
+  --err: #c8102e;
+  --warn: #9a6400;
+  --assumed: #c2571a;
+  --good: #1f6fae;
+  --focus: #06c;
+  --bye-get: #e8d44d;
+  --on-bye-get: #262003;
+  --espn-font: -apple-system, BlinkMacSystemFont, Roboto, Arial, "Helvetica Neue", Helvetica, sans-serif;
+  background: #fff;
+}
+
+/* Shown once this file has loaded (the boot script hides the page until then). */
+html.espn-embed body {
+  visibility: visible !important;
+  background: #fff;
+  color: var(--text);
+  font: 12px/1.5 var(--espn-font);
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- what shows
+ * Only the panels js/espn-embed.js marked. The site header, the connection
+ * strip, the page title and every other panel are still in the document (the
+ * page modules need them) and simply not drawn. Pop-ups and cards are <body>
+ * children, outside .wrap, so they are unaffected. */
+html.espn-embed header.site { display: none !important; }
+html.espn-embed .wrap > :not(.ffx-keep) { display: none !important; }
+html.espn-embed .ffx-off { display: none !important; }
+html.espn-embed .wrap.wide { max-width: none; padding: 0; }
+
+/* The loading / loaded line, at the top of the frame. */
+html.espn-embed .ffx-status #sourceStatus {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: #6c6d6f !important;
+}
+html.espn-embed .ffx-status #sourceStatus:empty { display: none; }
+
+/* ---------------------------------------------------------------- panels */
+html.espn-embed section.panel,
+html.espn-embed .panel {
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+  padding: 0 0 16px;
+  margin: 0 0 20px;
+  box-shadow: none;
+  --pad-panel: 0px;
+}
+html.espn-embed section.panel > h2,
+html.espn-embed .panel > h2 {
+  /* .Table__Title */
+  color: #2b2c2d;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 21px;
+  letter-spacing: 0;
+  text-transform: none;
+  margin: 8px 0 8px;
+}
+html.espn-embed .lede { color: #6c6d6f; font-size: 12px; margin: -4px 0 10px; }
+html.espn-embed .panel-note,
+html.espn-embed .key-line,
+html.espn-embed .ctl-hint,
+html.espn-embed .table-status { font-size: 11px; color: #6c6d6f; }
+html.espn-embed .panel-row { gap: 0; margin-bottom: 0; }
+html.espn-embed .panel-row.ffx-one { grid-template-columns: 1fr; }
+
+html.espn-embed details.explain { border-top: 1px solid #f1f2f3; margin-top: 8px; padding-top: 6px; }
+html.espn-embed details.explain > summary { color: #06c; font-size: 12px; font-weight: 400; }
+html.espn-embed details.explain > summary:hover { color: #004d9a; text-decoration: underline; }
+
+/* ---------------------------------------------------------------- tables
+ * .Table__TH / .Table__TD. No box scrolls up and down (a wide table still
+ * scrolls sideways, as on ESPN). */
+html.espn-embed .table-scroll { max-height: none; margin: 0; padding: 0; }
+html.espn-embed table { font-size: 12px; line-height: 19px; }
+html.espn-embed th {
+  background: #fff;
+  color: #48494a;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 15px;
+  height: 24px;
+  padding: 4px 6px 3px;
+  border-top: 1px solid #dcdddf;
+  border-bottom: 1px solid #dcdddf;
+}
+html.espn-embed tr.colgroup th { color: #6c6d6f; font-size: 10px; border-bottom: 0; }
+html.espn-embed td {
+  color: #2b2c2d;
+  padding: 4px 6px 3px;
+  border-bottom: 1px solid #f1f2f3;
+  height: 28px;
+}
+html.espn-embed td.name, html.espn-embed th.name {
+  background-color: #fff;
+  box-shadow: none;
+  border-right: 1px solid #dcdddf;
+}
+html.espn-embed td.name { color: #000; font-weight: 400; }
+html.espn-embed th.sorted { color: #000; font-weight: 700; }
+html.espn-embed th.sorted::after { color: #48494a; }
+html.espn-embed tfoot td { border-top: 1px solid #dcdddf; }
+html.espn-embed a { color: #06c; }
+
+/* ---------------------------------------------------------------- controls
+ * A segmented switch is ESPN's .ButtonGroup: a grey pill, the choice a white
+ * pill in ESPN red. */
+html.espn-embed button {
+  font-family: var(--espn-font);
+  font-size: 12px;
+  color: #48494a;
+  background: #fff;
+  border: 1px solid #cbccce;
+  border-radius: 50px;
+  padding: 5px 14px;
+}
+html.espn-embed button:hover:not(:disabled) { background: #f1f2f3; }
+html.espn-embed .segmented {
+  background: #f1f2f3;
+  border: 0;
+  border-radius: 50px;
+  overflow: visible;
+  padding: 0;
+}
+html.espn-embed .segmented button {
+  background: transparent;
+  border: 0;
+  border-radius: 50px;
+  color: #48494a;
+  font-weight: 600;
+  padding: 6px 14px;
+}
+html.espn-embed .segmented button + button { border-left: 0; }
+html.espn-embed .segmented button.on,
+html.espn-embed .segmented button[aria-pressed="true"] {
+  background: #fff;
+  color: #d00;
+  box-shadow: 0 1px 8px 0 rgba(0, 0, 0, .32);
+}
+html.espn-embed .segmented button:hover:not(:disabled):not(.on) { background: transparent; color: #000; }
+
+/* A drop-down is ESPN's .dropdown: a rounded box with the label above it. */
+html.espn-embed select,
+html.espn-embed input {
+  background: #fbfbfb;
+  border: 1px solid #cbccce;
+  border-radius: 40px;
+  color: #2b2c2d;
+  font: 12px/1.4 var(--espn-font);
+  padding: 5px 12px;
+}
+html.espn-embed input[type="checkbox"] { border-radius: 0; }
+html.espn-embed label,
+html.espn-embed .ctl-label,
+html.espn-embed .src-label {
+  color: #48494a;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+/* ---------------------------------------------------------------- the picker
+ * Schedule luck | Roster strength | Future proj diff — ESPN's tab strip
+ * (.tabs__list__item): grey text, the chosen one dark with a 4px underline. */
+html.espn-embed .ffx-tabs {
+  display: flex;
+  border-bottom: 1px solid #edeef0;
+  margin: 0 0 4px;
+}
+html.espn-embed .ffx-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 4px solid transparent;
+  border-radius: 0;
+  color: #6c6d6f;
+  font-size: 13px;
+  font-weight: 400;
+  height: 37px;
+  padding: 0 12px;
+}
+html.espn-embed .ffx-tabs button:hover:not(:disabled) { background: transparent; color: #151617; border-bottom: 2px solid #c00; }
+html.espn-embed .ffx-tabs button.on { color: #151617; border-bottom: 4px solid #dcdddf; }
+
+/* ---------------------------------------------------------------- Trade
+ * "Put the selected user at the top": the team picker alone. */
+html.espn-embed .ffx-picker > :not(.ctl-row):not(#sourceStatus) { display: none !important; }
+html.espn-embed .ffx-picker .ctl-row > :not(.ffx-pick) { display: none !important; }
+html.espn-embed .ffx-picker { padding-bottom: 8px; }
+html.espn-embed .ffx-picker #sourceStatus { margin-top: 6px; font-size: 11px; }
+html.espn-embed .ffx-pick select { min-width: 220px; }
+
+/* ---------------------------------------------------------------- pop-ups
+ * The frame is as tall as its page, so "the middle of the window" inside it is
+ * nowhere near what is on screen. ESPN's page says which slice is showing
+ * (--ffx-vt, --ffx-vh, from extension/content-espn-tabs.js) and the pop-ups sit
+ * in that slice. */
+html.espn-embed .modal {
+  position: absolute;
+  inset: auto 0 auto 0;
+  top: var(--ffx-vt, 0px);
+  height: var(--ffx-vh, 100vh);
+}
+html.espn-embed .modal-card { max-height: calc(var(--ffx-vh, 100vh) - 48px); }
+html.espn-embed .espn-outcome {
+  position: absolute;
+  bottom: auto;
+  top: calc(var(--ffx-vt, 0px) + var(--ffx-vh, 100vh) - 96px);
+}
+
+/* "Reading ESPN's own projections…": the site's dark notice, in ESPN's light grey. */
+html.espn-embed .pending { background: #f7f7f7; border: 1px dashed #dcdddf; color: #6c6d6f; }
+html.espn-embed .pending strong { color: #2b2c2d; }

@@ -641,7 +641,18 @@ eq(
     'the site bridge runs on /fantasy-football/ and local dev only'
   );
   ok(!site.matches.includes('https://timothyhadfield.github.io/*'), 'and not on the whole github.io origin');
-  ok(!site.all_frames, 'and only in the top frame');
+  // Since 0.5.0 it is registered for every frame, because the ESPN tabs frame
+  // the site's pages on fantasy.espn.com. The script itself answers only in the
+  // top frame or a frame whose every ancestor is ESPN's page (checked below).
+  eq(site.all_frames, true, 'registered in frames too, for the ESPN tabs');
+
+  const tabs = scripts.find((s) => (s.js || []).includes('content-espn-tabs.js'));
+  ok(tabs, 'the ESPN tabs script is registered');
+  eq(JSON.stringify(tabs && tabs.matches), JSON.stringify(['https://fantasy.espn.com/football/*']),
+    'and only on ESPN’s fantasy football pages');
+  ok(tabs && !tabs.all_frames, 'in ESPN’s top frame only');
+  ok(fs.existsSync(repoFile('extension/content-espn-tabs.js')), 'and the file it names exists');
+  ok(!MANIFEST.web_accessible_resources, 'nothing of the extension is exposed to web pages');
 }
 
 // ---- the page-side half: content-site.js answers only inside the scope ----
@@ -649,24 +660,36 @@ eq(
   const SITE_SCRIPT = fs.readFileSync(repoFile('extension/content-site.js'), 'utf8');
 
   /** Run content-site.js as if loaded at `href`; report what it wired up. */
-  const bootSiteScript = (href) => {
+  const bootSiteScript = (href, ancestors = null) => {
     const loc = new URL(href);
     const posted = [];
     const listeners = [];
     const sent = [];
+    const stored = [];
     const win = {
-      location: { origin: loc.origin, pathname: loc.pathname, href: loc.href },
+      location: { origin: loc.origin, pathname: loc.pathname, href: loc.href, ancestorOrigins: ancestors || [] },
       postMessage: (data, target) => posted.push({ data, target }),
       addEventListener: (type, fn) => listeners.push({ type, fn }),
     };
+    // A top frame is its own top; a framed page's top is somebody else.
+    win.top = ancestors ? {} : win;
+    const mem = new Map();
     const context = {
       window: win,
+      localStorage: {
+        get length() { return mem.size; },
+        key: (i) => [...mem.keys()][i] ?? null,
+        getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+        setItem: (k, v) => mem.set(k, String(v)),
+      },
+      setInterval: () => 0,
       chrome: {
         runtime: {
           getManifest: () => ({ version: MANIFEST.version }),
           sendMessage: (req, cb) => { sent.push(req); cb({ ok: true, data: 'x' }); },
           lastError: undefined,
         },
+        storage: { local: { get: (k, cb) => cb({}), set: (v) => stored.push(v) } },
       },
     };
     vm.createContext(context);
@@ -676,7 +699,7 @@ eq(
       source: win, origin: loc.origin,
       data: { source: 'ff-site', id: 'q1', request: { type: 'PING' } },
     });
-    return { posted, listeners, sent, ask };
+    return { posted, listeners, sent, ask, stored };
   };
 
   for (const href of [
@@ -706,7 +729,143 @@ eq(
     b.ask();
     eq(b.sent.length, 0, `content-site forwards nothing on ${href}`);
   }
-  eq(MANIFEST.version, '0.4.0', 'the bridge with the lineup switch ships as 0.4.0');
+  // FRAMES (0.5.0). The ESPN tabs frame the site on fantasy.espn.com; that
+  // frame, and only that kind, gets the bridge.
+  {
+    const b = bootSiteScript('https://timothyhadfield.github.io/fantasy-football/stats.html?embed=espn&part=stats',
+      ['https://fantasy.espn.com']);
+    ok(b.posted.some((p) => p.data.type === 'HELLO'), 'content-site says hello in a frame on ESPN’s page');
+    b.ask();
+    eq(b.sent.length, 1, 'and forwards its requests');
+  }
+  for (const [why, anc] of [
+    ['framed by another site', ['https://evil.example']],
+    ['framed by ESPN inside another site', ['https://fantasy.espn.com', 'https://evil.example']],
+    ['framed by espn.com but not the fantasy page', ['https://www.espn.com']],
+    ['framed with no ancestor list', []],
+  ]) {
+    const b = bootSiteScript('https://timothyhadfield.github.io/fantasy-football/stats.html', anc);
+    eq(b.posted.length, 0, `content-site stays silent ${why}`);
+    eq(b.listeners.length, 0, `content-site listens for nothing ${why}`);
+    b.ask();
+    eq(b.sent.length, 0, `content-site forwards nothing ${why}`);
+  }
+  eq(MANIFEST.version, '0.5.0', 'the bridge with the ESPN tabs ships as 0.5.0');
+}
+
+// ---- the mirror: the site's choices, to the ESPN tabs and back (0.5.0) ----
+{
+  const SITE_SCRIPT = fs.readFileSync(repoFile('extension/content-site.js'), 'utf8');
+  const run = ({ href, ancestors = null, local = {}, mirror = null }) => {
+    const loc = new URL(href);
+    const mem = new Map(Object.entries(local));
+    const area = { mirror };
+    const timers = [];
+    const listeners = [];
+    const win = {
+      location: { origin: loc.origin, pathname: loc.pathname, href: loc.href, ancestorOrigins: ancestors || [] },
+      postMessage: () => {},
+      addEventListener: (type, fn) => listeners.push({ type, fn }),
+    };
+    win.top = ancestors ? {} : win;
+    const context = {
+      window: win,
+      localStorage: {
+        get length() { return mem.size; },
+        key: (i) => [...mem.keys()][i] ?? null,
+        getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+        setItem: (k, v) => mem.set(k, String(v)),
+      },
+      setInterval: (fn) => { timers.push(fn); return timers.length; },
+      chrome: {
+        runtime: { getManifest: () => ({ version: MANIFEST.version }), sendMessage: () => {}, lastError: undefined },
+        storage: { local: {
+          get: (k, cb) => cb(area.mirror ? { siteMirror: area.mirror } : {}),
+          set: (v) => { area.mirror = v.siteMirror; },
+        } },
+      },
+    };
+    vm.createContext(context);
+    vm.runInContext(SITE_SCRIPT, context, { filename: 'content-site.js' });
+    const tick = () => timers.forEach((fn) => fn());
+    const ready = () => listeners.filter((l) => l.type === 'DOMContentLoaded').forEach((l) => l.fn());
+    return { mem, area, tick, ready };
+  };
+  const conn = (id) => JSON.stringify({ leagueId: String(id), season: 2026, teamId: 4 });
+  const prefsA = JSON.stringify({ 'stats.view.weekly': 'luck' });
+  const prefsB = JSON.stringify({ 'stats.view.weekly': 'luck', 'espn.luckView': 'diff' });
+
+  // The site, in its own tab: its small keys go up; its week caches do not.
+  const site = run({
+    href: 'https://timothyhadfield.github.io/fantasy-football/stats.html',
+    local: { 'ff.prefs': prefsA, 'ff.connection': conn(1241838), 'ff.value.1241838-2026': '{}', 'ff.weeks.v3.x': 'big', 'ff.cloud': '{}' },
+  });
+  const m = site.area.mirror;
+  ok(m && m.from === 'site', 'the site tab mirrors its choices into the extension');
+  eq(m && m.keys['ff.prefs'], prefsA, 'ff.prefs among them');
+  ok(m && m.keys['ff.value.1241838-2026'] === '{}', 'and the kept Value lines');
+  ok(m && !('ff.weeks.v3.x' in m.keys) && !('ff.cloud' in m.keys), 'but not the week caches or the cloud notes');
+  site.mem.set('ff.prefs', prefsB);
+  site.tick();
+  eq(site.area.mirror.keys['ff.prefs'], prefsB, 'a change on the site goes up on the next tick');
+
+  // An ESPN frame on the same league: a choice made there comes back.
+  const frame = run({
+    href: 'https://timothyhadfield.github.io/fantasy-football/stats.html?embed=espn&part=stats',
+    ancestors: ['https://fantasy.espn.com'],
+    local: { 'ff.prefs': prefsA, 'ff.connection': conn(1241838) },
+    mirror: { at: 1, from: 'site', keys: { 'ff.prefs': prefsA, 'ff.connection': conn(1241838) } },
+  });
+  frame.ready();
+  frame.tick();
+  eq(frame.area.mirror.from, 'site', 'the seeded value alone sends nothing back');
+  frame.mem.set('ff.prefs', prefsB);
+  frame.tick();
+  eq(frame.area.mirror.from, 'espn', 'a choice made in the ESPN tab goes back');
+  eq(frame.area.mirror.keys['ff.prefs'], prefsB, 'as the new ff.prefs');
+  eq(frame.area.mirror.keys['ff.connection'], conn(1241838), 'and nothing else of the site’s changes');
+
+  // ... but never for another league.
+  const other = run({
+    href: 'https://timothyhadfield.github.io/fantasy-football/stats.html?embed=espn&part=stats',
+    ancestors: ['https://fantasy.espn.com'],
+    local: { 'ff.prefs': prefsA, 'ff.connection': conn(555) },
+    mirror: { at: 1, from: 'site', keys: { 'ff.prefs': prefsA, 'ff.connection': conn(1241838) } },
+  });
+  other.ready();
+  other.mem.set('ff.prefs', prefsB);
+  other.tick();
+  eq(other.area.mirror.keys['ff.prefs'], prefsA, 'another league’s choices never reach the site');
+
+  // The frame forces its data source to live; that is the frame's business, not a choice to send back.
+  const siteSrc = JSON.stringify({ 'stats.source': 'sample', 'analysis.measure': 'week' });
+  const forced = run({
+    href: 'https://timothyhadfield.github.io/fantasy-football/analysis.html?embed=espn&part=analysis',
+    ancestors: ['https://fantasy.espn.com'],
+    local: { 'ff.prefs': JSON.stringify({ 'stats.source': 'live', 'analysis.source': 'live', 'analysis.measure': 'week' }), 'ff.connection': conn(1241838) },
+    mirror: { at: 1, from: 'site', keys: { 'ff.prefs': siteSrc, 'ff.connection': conn(1241838) } },
+  });
+  forced.ready();
+  forced.mem.set('ff.prefs', JSON.stringify({ 'stats.source': 'live', 'analysis.source': 'live', 'analysis.measure': 'avg' }));
+  forced.tick();
+  const sent = JSON.parse(forced.area.mirror.keys['ff.prefs']);
+  eq(sent['analysis.measure'], 'avg', 'the choice goes back');
+  eq(sent['stats.source'], 'sample', 'with the site’s own data source left as it was');
+  ok(!('analysis.source' in sent), 'and no source the site never chose');
+
+  // The site, opened after a choice was made on ESPN, takes it.
+  const back = run({
+    href: 'https://timothyhadfield.github.io/fantasy-football/analysis.html',
+    local: { 'ff.prefs': prefsA, 'ff.connection': conn(1241838), 'ff.relayAt': '5' },
+    mirror: { at: 10, from: 'espn', keys: { 'ff.prefs': prefsB, 'ff.connection': conn(1241838) } },
+  });
+  eq(back.mem.get('ff.prefs'), prefsB, 'the site picks up a choice made in an ESPN tab');
+  const stale = run({
+    href: 'https://timothyhadfield.github.io/fantasy-football/analysis.html',
+    local: { 'ff.prefs': prefsA, 'ff.connection': conn(1241838), 'ff.relayAt': '50' },
+    mirror: { at: 10, from: 'espn', keys: { 'ff.prefs': prefsB, 'ff.connection': conn(1241838) } },
+  });
+  eq(stale.mem.get('ff.prefs'), prefsA, 'but not one older than what it already has');
 }
 
 {
