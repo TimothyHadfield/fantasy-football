@@ -226,6 +226,8 @@ const state = {
   // kept for ONE thing, the record on a team's card. Null in demo and when the
   // schedule would not load: the card then simply has no Record row.
   games: null,
+  // The bracket's games off the same read, for Weekly totals' opponent outline.
+  poGames: null,
 
   // The league's frozen Value lines (js/value.js), null until read — and while
   // null the Proj | Value switches stay hidden. `valueKey` is the source they
@@ -802,21 +804,12 @@ function totalOf(row, slots = gridSlots()) {
 // the card's run) run through the playoff weeks; the line is `po-start` in
 // css/app.css; the averages stay regular-season.
 
-// ------------------------------------------- a week heading → that week on Schedule
+// ------------------------------------------------------------ a week heading
 //
-// "A week heading → that week on Schedule" (docs/previews-plan.md), on a header
-// whose click already SORTS the column. Both are kept:
-//
-//   A MOUSE  the week's NUMBER is a link to `schedule.html?week=N`; a click
-//            anywhere else in the header sorts, as it always did. Hovering
-//            shows the heading's one line as a card.
-//   A FINGER the tap sorts, as it always did, and opens the card as a sheet
-//            whose button is the link — a week number is far too small a target
-//            to be a link under a thumb, and a tap meant to sort must never
-//            leave the page.
-//
-// So the card carries its `href` only for a finger (`weekHeadCard`), and the
-// number's own link is what a mouse follows.
+// A week heading is plain text whose click SORTS the column, nothing else.
+// Tim, 2026-10-18: "Remove the previews when hovering over the weekly number as
+// a column" and "remove the automatic connection to the schedule when you click
+// on that same weekly number". The old card and Schedule link are gone.
 
 // ------------------------------------------------ the week run on the hover
 //
@@ -1129,7 +1122,9 @@ async function getDemoGenerator() {
 }
 
 function setStatus(msg, isError = false) {
-  const el = $('sourceStatus');
+  // In the ESPN Analysis tab this page shares one document with the Stats page
+  // (js/espn-embed.js), and each keeps its own status line.
+  const el = $('ffxNextStatus') || $('sourceStatus');
   el.innerHTML = msg;
   el.style.color = isError ? 'var(--err)' : 'var(--dim)';
 }
@@ -1225,6 +1220,7 @@ async function useDemo() {
   state.floors = null;
   state.floorWeek = null;
   state.games = null;           // the sample league has no schedule, so no record
+  state.poGames = null;
   state.weeks = Array.from({ length: DEMO_WEEKS }, (_, i) => i + 1);
   // The sample league's bracket weeks (14–16); demo-rosters.js projects them.
   state.poWeeks = leaguePlayoffWeeks({ weeks: state.weeks });
@@ -1275,6 +1271,7 @@ async function useLive() {
   try {
     const schedule = await fetchSchedule();
     state.games = Array.isArray(schedule.games) ? schedule.games : null;
+    state.poGames = Array.isArray(schedule.playoffGames) ? schedule.playoffGames : null;
     scheduleWeeks = schedule.weeks || [];
     poWeeks = leaguePlayoffWeeks(schedule);
     // A week is played once EVERY game in it is. A matchup can be final before
@@ -1287,6 +1284,7 @@ async function useLive() {
   } catch {
     state.playedWeeks = [];
     state.games = null;
+    state.poGames = null;
   }
   state.byes = await byesRead;
   if (state.source !== 'live') return;   // the reader went back to demo meanwhile
@@ -3702,9 +3700,50 @@ function renderSeason() {
  * here and its band below cannot disagree. Coloured the same way too: each week
  * column against the other squads in that week.
  */
+// THE PICKED TEAM'S SCHEDULE ON WEEKLY TOTALS (Tim, 2026-10-18: "allow me to
+// select a specific user and the specific boxes that that user plays against
+// boarder in white, as another display of their schedule"). Kept per league;
+// with nothing saved it is your own team, 'none' is off. Read off the schedule
+// `useLive` already holds, bracket games included; demo has none, so the
+// picker hides there.
+const oppPrefKey = () => `oppOf.${sourceKey()}`;
+
+function oppOfTeam() {
+  const teams = state.data ? state.data.teams : [];
+  const saved = prefs.get(oppPrefKey(), null);
+  if (saved === 'none') return null;
+  const id = saved === null ? state.myTeamId : Number(saved);
+  return teams.some((t) => t.id === id) ? id : null;
+}
+
+/** week -> the id of the team `id` plays that week. */
+function opponentsOf(id) {
+  const out = new Map();
+  if (id === null) return out;
+  for (const g of [...(state.games || []), ...(state.poGames || [])]) {
+    if (g.homeId == null || g.awayId == null) continue;
+    if (g.homeId === id) out.set(g.week, g.awayId);
+    else if (g.awayId === id) out.set(g.week, g.homeId);
+  }
+  return out;
+}
+
+function paintOppPicker(teams) {
+  const sel = $('totalsOppOf');
+  if (!sel) return;
+  const has = Boolean(state.games) && teams.length > 0;
+  $('totalsOppBar').classList.toggle('hidden', !has);
+  const pick = oppOfTeam();
+  sel.innerHTML = `<option value=""${pick === null ? ' selected' : ''}>None</option>` +
+    teams.map((t) => `<option value="${t.id}"${t.id === pick ? ' selected' : ''}>${esc(t.name)}</option>`).join('');
+}
+
 function paintTotals() {
   const table = $('totalsTable');
   const teams = state.data ? state.data.teams : [];
+  paintOppPicker(teams);
+  const oppOf = oppOfTeam();
+  const opps = opponentsOf(oppOf);
   const weeks = spanWeeks();
   const rows = slotRows(leagueSlots());
   const show = teams.length > 0 && weeks.length > 0 && rows.length > 0;
@@ -3755,7 +3794,7 @@ function paintTotals() {
     const ah = heatOf(avg, avgScale, { what: 'the other squads’ lineups' });
     const counted = regularCount(vals.map((v, i) => (partScores(weeks[i], hist) ? null : v)), weeks);
     // `data-team`: a click on the row loads that team, as on the grid above.
-    return `<tr data-team="${t.id}">` +
+    return `<tr data-team="${t.id}"${t.id === oppOf ? ' class="opp-of"' : ''}>` +
       teamNameCell(t, 'wt', true) +
       `<td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`} ` +
       `title="${esc(avg === null ? bandAvgLabel(avg, t, ah, hist.size > 0) : avgLine(counted, ah))}">` +
@@ -3772,7 +3811,7 @@ function paintTotals() {
         // THE TEAM-WEEK CARD: the total as the starters it adds up.
         const card = cardAttr(sheetWeekCard(t, w, v, h, rows, slots, weeks), 'wt', false);
         return withFut(withPo(withCard(
-          `<td class="wk${past ? ' hist' : ''}${w === state.week ? ' now' : ''}${h ? ` ${h.cls}` : ''}"` +
+          `<td class="wk${past ? ' hist' : ''}${w === state.week ? ' now' : ''}${opps.get(w) === t.id ? ' opp' : ''}${h ? ` ${h.cls}` : ''}"` +
           `${v === null ? '' : ` data-v="${v}"`} ` +
           `title="${esc(`${t.name}: ` + says + (h ? ` ${h.words}` : ''))}">` +
           `${fmt(v)}${heatMarkHtml(h)}</td>`, card), w, weeks), w, fut);
@@ -5531,6 +5570,13 @@ for (const id of ['totalsTable', 'seasonTable', 'startersTable']) {
     paintSeason();
   });
 }
+
+// WEEKLY TOTALS' "Opponents of" picker: a repaint of that one table.
+$('totalsOppOf').addEventListener('change', (e) => {
+  const v = e.target.value;
+  prefs.set(oppPrefKey(), v === '' ? 'none' : Number(v) === state.myTeamId ? null : Number(v));
+  paintTotals();
+});
 
 // POSITION | PLAYER (Tim, 2026-10-05): what a row of the sheet is. Kept per
 // league, and "Proj changes" below follows it — `paintSeason` repaints both.

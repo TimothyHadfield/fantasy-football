@@ -53,11 +53,9 @@ import {
 } from './player-card.js';
 // A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
 import './loose-weeks.js';
-import { coarsePointer } from './connection.js';
 import { optimalLineup } from './forecast.js';
 import { heatScale, heatOf, heatMarkHtml, ordinal } from './heat.js';
-import { statCard, clearPops, wirePops } from './pop.js';
-import { weekHref } from './links.js';
+import { statCard, clearPops } from './pop.js';
 import * as espn from './espn.js';
 import { slotRows, fillSlots } from './lineup-slots.js';
 import { bestFill, identified, slotsFromTeamLists } from './lineup-avg.js';
@@ -248,44 +246,20 @@ export function weekHead(w, weeks, cls, title, tag = '') {
       '<span class="sr-only"> (playoffs)</span>'
     : `${w}${tag}`;
   const why = isPlayoff(w) ? `${title} A playoff week: shown, not counted in Avg.` : title;
-  // THE WEEK'S HEADING IS A CARD, NOT A `title` (2026-10-08): it says the same
-  // one line, and it is the connector to that week on Schedule. See
-  // `weekHeadCard` for who clicks what.
+  // Plain text: no hover card and no Schedule link (Tim, 2026-10-18). A click sorts.
   return `<th data-sort class="${classes}" ${WEEK_HEAD_ATTR}="${w}"${alignCols ? ` data-col="w${w}"` : ''} data-def="${esc(why)}">` +
-    `${weekLink(w, label)}</th>`;
+    `${label}</th>`;
 }
 
 export const WEEK_HEAD_ATTR = 'data-wkh';
 
-/** The week number as a link, with the rest of the heading's markup after it. */
-export function weekLink(w, label) {
-  const n = String(w);
-  const rest = String(label).startsWith(n) ? String(label).slice(n.length) : null;
-  const href = weekHref(w);
-  if (rest === null || !href) return label;
-  // NOT `a.pref`: that class means "a player's page" to js/player-card.js.
-  return `<a class="wk-go" href="${esc(href)}" aria-label="Week ${n} on Schedule">${n}</a>${rest}`;
-}
-
-/** The card a week heading opens: built when asked for, from the heading itself. */
-export function weekHeadCard(th) {
-  const w = Number(th.getAttribute(WEEK_HEAD_ATTR));
-  if (!Number.isFinite(w)) return null;
-  return {
-    title: `Week ${w}`,
-    sub: isPlayoff(w) ? 'playoffs' : w === state.week ? nowSays : '',
-    foot: th.getAttribute('data-def') || '',
-    href: coarsePointer() ? weekHref(w) : null,
-    hrefLabel: `Week ${w} matchups`,
-  };
-}
-
-/** Week headings open their card on this table. Safe to call again. */
-export function wireWeekHeads(table) {
-  wirePops(table, { selector: `th[${WEEK_HEAD_ATTR}]`, card: weekHeadCard });
-  // On a finger the number's link must not fire before the sheet opens; pop.js
-  // prevents the tap's default, which is that link's navigation.
-}
+/**
+ * Week headings open NO card (Tim, 2026-10-18: "Remove the previews when
+ * hovering over the weekly number as a column accross all the charts on the
+ * cite."). The number stays a plain link to that week on Schedule, so a tap
+ * goes straight there. Kept as a no-op so callers don't change.
+ */
+export function wireWeekHeads() {}
 
 /**
  * One player's whole season, as the data the three-row chart is drawn from.

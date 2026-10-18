@@ -47,6 +47,13 @@
   var root = document.documentElement;
   root.classList.add('espn-embed');
   root.setAttribute('data-embed', part);
+  // The Analysis tab is stats.html with analysis.html's panels brought into
+  // the same page (`next=analysis`, js/espn-embed.js); that page's source
+  // switch is forced to the league too.
+  var NEXT = { stats: 'analysis' };
+  var next = q.get('next');
+  var parts = [part];
+  if (next && NEXT[part] === next) parts.push(next);
 
   // Nothing is shown until the ESPN skin has loaded: the site is dark, and a
   // dark flash inside ESPN's white page is the first thing anyone would see.
@@ -72,10 +79,11 @@
   // sample. Each page keeps its own source switch ("stats.source", ...).
   try {
     var prefs = JSON.parse(localStorage.getItem('ff.prefs') || '{}') || {};
-    if (prefs[part + '.source'] !== 'live') {
-      prefs[part + '.source'] = 'live';
-      localStorage.setItem('ff.prefs', JSON.stringify(prefs));
-    }
+    var changed = false;
+    parts.forEach(function (p) {
+      if (prefs[p + '.source'] !== 'live') { prefs[p + '.source'] = 'live'; changed = true; }
+    });
+    if (changed) localStorage.setItem('ff.prefs', JSON.stringify(prefs));
   } catch (e) { /* storage refused: the page's own fallback applies */ }
 
   var css = document.createElement('link');

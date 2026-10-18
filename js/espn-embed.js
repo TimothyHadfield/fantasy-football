@@ -13,9 +13,12 @@
 //   3. On Trade, puts the team picker at the top and Custom trades above the
 //      list (Tim: "Put the selected user at the top, then the custome trades
 //      box, and then the trades ranked by net increase below that").
-//   4. Tells ESPN's page how tall it is, so the frame never scrolls inside
-//      itself, and takes from it which slice of the frame is on screen, so a
-//      pop-up opens where it can be seen.
+//   4. Tells ESPN's page it is drawn (the frame is window-high and scrolls
+//      inside itself). On Analysis (`?next=analysis`), brings analysis.html's
+//      panels into this page below its own and runs that page's module, so one
+//      page, one scroll, holds both.
+//   5. Sends any page change (a click on a number or name) to a new tab of the
+//      site, so the frame never turns into the plain, dark site page.
 
 import { scope } from './prefs.js';
 
@@ -97,8 +100,8 @@ function setupStats() {
   });
 }
 
-function setupAnalysis() {
-  liftStatus();
+function setupAnalysis({ lift = true } = {}) {
+  if (lift) liftStatus();
   keep($('overviewTable'));
   keep($('totalsTable'));
   const season = keep($('seasonTable'));
@@ -120,6 +123,96 @@ function setupTrade() {
   }
 }
 
+// ------------------------------------------------- the second page
+
+// The Analysis tab is ONE frame, window-high, that scrolls its own page (see
+// extension/content-espn-tabs.js for why: Chrome draws a frame late wherever
+// it was off screen). So its second page's panels are brought into THIS page,
+// below the Stats panels, and run by that page's own module: analysis.html's
+// styles and panels are copied in, then js/analysis-page.js is imported. The
+// two pages share five ids (the hidden header bits and the Data source box);
+// those come from this page, and the second page's status line is its own
+// (#ffxNextStatus, read first by analysis-page.js `setStatus`).
+const NEXT = { stats: { part: 'analysis', page: 'analysis.html' } };
+const SHARED_IDS = ['connBar', 'modeBadge', 'pageSub', 'sourceToggle', 'sourceStatus'];
+
+async function setupNext() {
+  let want = null;
+  try { want = new URLSearchParams(location.search).get('next'); } catch { /* none */ }
+  const next = NEXT[part];
+  const wrap = mainWrap();
+  if (!next || want !== next.part || !wrap) return;
+  let src;
+  try {
+    const res = await fetch(next.page, { cache: 'no-cache' });
+    if (!res.ok) return;
+    src = new DOMParser().parseFromString(await res.text(), 'text/html');
+  } catch { return; }
+  const skin = document.head.querySelector('link[href="css/espn-embed.css"]');
+  for (const st of src.head.querySelectorAll('style')) {
+    document.head.insertBefore(document.importNode(st, true), skin);
+  }
+  const theirs = src.querySelector('body > .wrap');
+  if (!theirs) return;
+  const status = document.createElement('div');
+  status.className = 'ffx-status';
+  const line = document.createElement('div');
+  line.id = 'ffxNextStatus';
+  line.className = 'panel-note';
+  status.appendChild(line);
+  wrap.appendChild(status);
+  const shared = (el) => SHARED_IDS.some((id) => el.id === id || el.querySelector(`#${id}`));
+  for (const el of [...theirs.children]) {
+    if (el.matches('h1, p.sub') || shared(el)) continue;
+    wrap.appendChild(document.importNode(el, true));
+  }
+  // Its pop-ups and cards live outside its .wrap.
+  for (const el of [...src.body.children]) {
+    if (el === theirs || el.matches('header, script')) continue;
+    if (el.id && document.getElementById(el.id)) continue;
+    document.body.appendChild(document.importNode(el, true));
+  }
+  setupAnalysis({ lift: false });
+  status.classList.add('ffx-keep');
+  for (const s of src.querySelectorAll('script[type="module"][src]')) {
+    const rel = s.getAttribute('src');
+    if (document.querySelector(`script[src="${rel}"]`)) continue;
+    try { await import(new URL(rel, location.href).href); } catch (e) { console.error(e); }
+  }
+}
+
+// ------------------------------------------------- links
+
+// A click on a number or a name follows its link (a team's week, a player's
+// row). Inside the tab that loaded the plain site page INTO the frame: the
+// site's dark theme, its header and the whole page, under ESPN's nav (Tim:
+// "the bottom half turns into another darker version and then displays week 7
+// matchups"). Every page change a frame would make goes to a new browser tab
+// of the site instead; the tab itself never leaves its panels. A reload (the
+// site's own "new version" refresh) and in-page anchors stay.
+function guardLinks() {
+  const out = (url) => {
+    try { window.open(url, '_blank', 'noopener'); } catch { /* blocked: stay */ }
+  };
+  const nav = window.navigation;
+  if (nav && typeof nav.addEventListener === 'function') {
+    nav.addEventListener('navigate', (e) => {
+      if (e.navigationType === 'reload' || e.hashChange || (e.destination && e.destination.sameDocument)) return;
+      if (!e.cancelable) return;
+      e.preventDefault();
+      out(e.destination.url);
+    });
+    return;
+  }
+  // No Navigation API: links at least (scripted moves are the rarer path).
+  document.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest && e.target.closest('a[href]');
+    if (!a || a.target === '_blank' || /^#/.test(a.getAttribute('href') || '')) return;
+    e.preventDefault();
+    out(a.href);
+  }, true);
+}
+
 // ------------------------------------------------- talking to ESPN's page
 
 function postHeight() {
@@ -128,20 +221,11 @@ function postHeight() {
   const h = Math.ceil(bottom + 8);
   if (h === postHeight.last) return;
   postHeight.last = h;
+  // ESPN's page uses this as "drawn" (and checks it).
   window.parent.postMessage({ type: 'ffx-height', part, height: h }, ESPN);
 }
 
 function listen() {
-  window.addEventListener('message', (e) => {
-    if (e.source !== window.parent || e.origin !== ESPN) return;
-    const d = e.data;
-    if (!d || d.type !== 'ffx-vis') return;
-    const top = Math.max(0, Number(d.top) || 0);
-    const height = Math.max(120, Number(d.height) || 0);
-    const root = document.documentElement.style;
-    root.setProperty('--ffx-vt', `${Math.round(top)}px`);
-    root.setProperty('--ffx-vh', `${Math.round(height)}px`);
-  });
   const ro = new ResizeObserver(() => postHeight());
   ro.observe(document.body);
   const wrap = mainWrap();
@@ -153,6 +237,8 @@ function run() {
   if (part === 'stats') setupStats();
   else if (part === 'analysis') setupAnalysis();
   else if (part === 'trade') setupTrade();
+  setupNext();
+  guardLinks();
   // The page is shown by css/espn-embed.css itself, once it has loaded.
   listen();
 }

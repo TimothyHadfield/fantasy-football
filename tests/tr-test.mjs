@@ -4579,7 +4579,7 @@ SCENARIOS.previews = async function previews() {
     bandWeek: bandTd ? bandTd.getAttribute('data-wk') : null,
     band: cell(bandTd),
     weekHead: cell(box && box.querySelector('th[data-hw]')),
-    // A click on it is the connector: the Schedule page, on that week.
+    // A click on it must stay on the page.
     weekHeadLink: (() => {
       const th = box && box.querySelector('th[data-hw]');
       if (!th) return null;
@@ -10055,8 +10055,10 @@ if (!gl.boot) {
     }
     ok('a season-box lineup total opens that lineup, ending on the cell',
       /QB /.test(C.band.card) && C.band.card.includes(`Total ${C.band.text}`), `${C.band.text} / ${C.band.card.slice(-80)}`);
-    ok('a season-box week heading opens the week, with a way to the Schedule',
-      /^Week \d+/.test(C.weekHead.card) && /schedule\.html\?week=\d+/.test(C.weekHeadLink || ''),
+    // Tim, 2026-10-18: "Remove the previews when hovering over the weekly number" and
+    // "remove the automatic connection to the schedule when you click on that same weekly number".
+    ok('a season-box week heading opens no card and goes nowhere',
+      !C.weekHead.card && !/schedule\.html/.test(C.weekHeadLink || ''),
       `${C.weekHead.card} / ${C.weekHeadLink}`);
 
     // -- the pop-up ------------------------------------------------------------

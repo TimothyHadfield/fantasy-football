@@ -10848,7 +10848,7 @@ function wirePreviews() {
     const el = $(id);
     if (!el) continue;
     wirePops(el, { selector: 'table.sbw-table td.split-total[data-wk]', card: cardAt(seasonBandSpec, seasonCellOffer) });
-    wirePops(el, { selector: 'table.sbw-table th[data-hw]', card: cardAt(seasonWeekSpec, seasonCellOffer) });
+    // Week headings open no card (Tim, 2026-10-18: "Remove the previews when hovering over the weekly number").
     wirePops(el, {
       selector: 'table.sbw-table td[data-empty]',
       card: (td) => ({

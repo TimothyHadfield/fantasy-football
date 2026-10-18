@@ -539,6 +539,12 @@
   #changesTable tbody.split td.wk { font-weight: 700; font-size: 13.5px; }
   /* `.toolbar` is declared after app.css's `.hidden`, and would win. */
   #changesControls.hidden { display: none; }
+  #totalsOppBar.hidden { display: none; }
+  /* WEEKLY TOTALS, "Opponents of" (Tim, 2026-10-18): the picked team's
+     opponent each week boxed in white, drawn inside the cell so nothing
+     moves; the picked team's own name in bold. */
+  #totalsTable tbody td.wk.opp { box-shadow: inset 0 0 0 2px #fff; }
+  #totalsTable tbody tr.opp-of td.name { font-weight: 700; color: var(--text); }
   /* Proj | Value, one per panel: hidden until the league's Value lines are
      known. The phone's `.segmented` grid is declared after `.hidden` too. */
   .show-as.hidden { display: none; }
@@ -982,6 +988,12 @@
        Season by week panel's "Starting lineup" band, one row per squad. -->
   <section class="panel">
     <h2>Weekly totals</h2>
+    <div class="toolbar hidden" id="totalsOppBar">
+      <div class="select-md">
+        <label for="totalsOppOf">Opponents of</label>
+        <select id="totalsOppOf"></select>
+      </div>
+    </div>
     <div class="table-scroll" id="totalsWrap"><table id="totalsTable">
       <thead><tr></tr></thead>
       <tbody></tbody>
