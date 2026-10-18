@@ -13,14 +13,17 @@
 //
 //  1. NO BLANK WHILE SCROLLING. "they only load the parts of the page that you
 //     can currently see so if you scroll up and down it's blank for a bit".
-//     A real scroll gesture (Input.synthesizeScrollGesture, 4000 px/s, down
-//     then up) is filmed with Page.startScreencast — the frames Chrome actually
-//     drew. In each, the tallest band of rows that is plain white across the
-//     whole tab is measured. Settled pages have bands up to ~100 px (the gaps
-//     between panels; 97 px under Trade's team picker); a band over LIMIT_PX
-//     is a part of the tab Chrome had not drawn. Measured on the code before
-//     the fix: up to 606–710 px, in 26 of 43 frames (Trade) and 14–25 of
-//     37–99 (Analysis). After: 0.
+//     A real scroll gesture (Input.synthesizeScrollGesture, --speed px/s,
+//     default 1500, down then up) is filmed with Page.startScreencast — the
+//     frames Chrome actually drew. In each, the tallest band of rows that is
+//     plain white across the whole tab is measured. Settled pages have bands
+//     up to ~100 px (the gaps between panels; 97 px under Trade's team
+//     picker); a band over LIMIT_PX is a part of the tab Chrome had not drawn.
+//     Measured 2026-10-18 at 1500 px/s: before the fix 34 of 120 frames
+//     (Analysis, up to 1.6 s) and 52 of 87 (Trade); after, 0 of ~210 and 0 of
+//     91. At --speed 4000 (a hard flick) the fix still shows a short blank at
+//     the bottom of Analysis in about half the runs (up to 0.7 s, vs 1.4 s and
+//     80 of 111 frames before); a plain top-level page shows none.
 //
 //  2. A CLICK NEVER TURNS THE TAB INTO THE PLAIN SITE (Analysis only). "the
 //     bottom half turns into another darker version and then displays week 7
@@ -43,7 +46,9 @@ const opt = (name, dflt) => { const i = args.indexOf(name); return i >= 0 ? args
 const SITE = path.resolve(opt('--site', path.join(HERE, '..')));
 const TABS = (opt('--tab', 'analysis,trade')).split(',');
 const OUT = opt('--out', fs.mkdtempSync(path.join(os.tmpdir(), 'espn-tab-check-')));
+fs.mkdirSync(OUT, { recursive: true });
 const LIMIT_PX = 120;
+const SPEED = Number(opt('--speed', '1500'));   // px per second (see the header)
 const W = 1280, H = 800;
 const LEAGUE = 'https://fantasy.espn.com/football/league?leagueId=1241838';
 
@@ -109,17 +114,18 @@ async function scrollCheck(page, tab) {
     return { top, bottom: innerHeight, left: v.left, right: v.right };
   });
   const cdp = await page.context().newCDPSession(page);
-  const frames = [];
+  const frames = [], times = [];
   cdp.on('Page.screencastFrame', async (f) => {
     frames.push(f.data);
+    times.push(f.metadata.timestamp);
     try { await cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }); } catch { /* closing */ }
   });
   await cdp.send('Page.startScreencast', { format: 'png', maxWidth: W, maxHeight: H, everyNthFrame: 1 });
   await page.waitForTimeout(400);
   const at = { x: Math.round((box.left + box.right) / 2), y: Math.round((box.top + H) / 2) };
-  await cdp.send('Input.synthesizeScrollGesture', { ...at, yDistance: -3000, speed: 4000, gestureSourceType: 'mouse', preventFling: true });
+  await cdp.send('Input.synthesizeScrollGesture', { ...at, yDistance: -3000, speed: SPEED, gestureSourceType: 'mouse', preventFling: true });
   await page.waitForTimeout(300);
-  await cdp.send('Input.synthesizeScrollGesture', { ...at, yDistance: 3000, speed: 4000, gestureSourceType: 'mouse', preventFling: true });
+  await cdp.send('Input.synthesizeScrollGesture', { ...at, yDistance: 3000, speed: SPEED, gestureSourceType: 'mouse', preventFling: true });
   await page.waitForTimeout(600);
   await cdp.send('Page.stopScreencast');
   await cdp.detach();
@@ -130,7 +136,15 @@ async function scrollCheck(page, tab) {
     fs.writeFileSync(path.join(OUT, `${tab}-blank-${b}px.png`), Buffer.from(frames[i], 'base64'));
   }
   if (frames.length) fs.writeFileSync(path.join(OUT, `${tab}-mid-scroll.png`), Buffer.from(frames[Math.floor(frames.length / 4)], 'base64'));
-  return { frames: frames.length, blankFrames: bad.length, worstBandPx: Math.max(0, ...bands) };
+  // How long the longest blank lasted: from its first frame to the next clean one.
+  let longestMs = 0;
+  for (let i = 0; i < bands.length; i++) {
+    if (bands[i] <= LIMIT_PX || (i && bands[i - 1] > LIMIT_PX)) continue;
+    let j = i; while (j < bands.length && bands[j] > LIMIT_PX) j++;
+    const end = j < times.length ? times[j] : times[times.length - 1];
+    longestMs = Math.max(longestMs, Math.round((end - times[i]) * 1000));
+  }
+  return { frames: frames.length, blankFrames: bad.length, worstBandPx: Math.max(0, ...bands), longestMs };
 }
 
 async function clickCheck(ctx, page) {
@@ -162,7 +176,7 @@ for (const tab of TABS) {
   const s = await scrollCheck(page, tab);
   const blankOk = s.blankFrames === 0 && s.frames > 10;
   if (!blankOk) failed++;
-  console.log(`${blankOk ? 'PASS' : 'FAIL'} ${tab}: ${s.blankFrames} of ${s.frames} frames drawn while scrolling had a blank band over ${LIMIT_PX} px (worst ${s.worstBandPx} px)`);
+  console.log(`${blankOk ? 'PASS' : 'FAIL'} ${tab}: ${s.blankFrames} of ${s.frames} frames drawn while scrolling had a blank band over ${LIMIT_PX} px (worst ${s.worstBandPx} px, longest ${s.longestMs} ms)`);
   if (tab === 'analysis') {
     const c = await clickCheck(ctx, page);
     const clicked = c.clicks.filter((x) => !x.error).length;

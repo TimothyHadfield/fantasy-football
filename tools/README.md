@@ -9,9 +9,10 @@ The extension's ESPN tabs (Analysis, Trade) in headless Chromium with the
 unpacked extension, on ESPN's real public league 1241838, with this checkout
 served in place of the live site. Two checks, both from Tim (2026-10-18):
 
-- **No blank while scrolling.** A real scroll gesture is filmed frame by frame
-  (`Page.startScreencast`); a frame fails if a plain-white band taller than
-  120 px runs across the tab (a part Chrome hadn't drawn).
+- **No blank while scrolling.** A real scroll gesture (`--speed`, default
+  1500 px/s) is filmed frame by frame (`Page.startScreencast`); a frame fails
+  if a plain-white band taller than 120 px runs across the tab (a part Chrome
+  hadn't drawn). It prints the worst band and how long the longest blank lasted.
 - **A click never turns the tab into the plain site** (Analysis): clicks a
   number in Week by week and All teams; fails if a non-embed site page loads
   into the tab.
@@ -24,7 +25,8 @@ node tools/espn-tab-check.mjs --tab trade --out <dir>
 
 Exit 1 on a failure; screenshots of the worst frame go to `--out`. Before the
 0.5.1 fix it failed 3 checks (blank bands up to 710 px; a click loaded the dark
-page); after, all pass.
+page); after, all pass. At `--speed 4000` (a hard flick) Analysis can still
+show a short blank at its bottom (up to 0.7 s in about half the runs).
 
 ## measure-layout.mjs
 
