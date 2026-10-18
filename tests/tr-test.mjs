@@ -2,8 +2,8 @@
 //
 //   node tr-test.mjs
 //
-// `test-trade.mjs` proves the engine. This proves the PAGE — that the depth map
-// and the finder actually reach the screen, that the controls repaint the right
+// `test-trade.mjs` proves the engine. This proves the PAGE — that the All teams
+// grid and the finder actually reach the screen, that the controls repaint the right
 // panel, and that none of them costs a request. Those are the failures a pure
 // engine suite cannot see, and the ones that only ever show up in a browser.
 //
@@ -381,23 +381,31 @@ function readPanelOrder(document) {
   });
 }
 
-function readDepth(document) {
-  const table = document.getElementById('depthTable');
+/**
+ * THE ALL TEAMS · PROJ AVG GRID, which stands where the depth map was (Tim,
+ * 2026-10-18). One row per squad; `cells` are its lineup slots in header order,
+ * `total` its best lineup in an average week still to come.
+ */
+function readGrid(document) {
+  const table = document.getElementById('projAvgTable');
+  if (!table) return { heads: [], rows: [] };
   const heads = [...table.querySelectorAll('thead th')].map((th) => text(th));
-  const rows = [...table.querySelectorAll('tbody tr')].map((tr) => ({
-    team: text(tr.querySelector('td.name')),
-    me: tr.getAttribute('class') === 'me',
-    cells: [...tr.querySelectorAll('td.cell')].map((td) => ({
-      v: td.getAttribute('data-v'),
-      text: text(td),
-      deep: (td.getAttribute('class') || '').includes('deep'),
-      thin: (td.getAttribute('class') || '').includes('thin'),
-      tip: popText(td),
-      rawTitle: td.getAttribute('title') || '',
-    })),
-    total: text(tr.querySelector('td.grouped')),
-  }));
-  return { heads, rows, bars: [...document.querySelectorAll('#depthBars .bar-chip')].map(text) };
+  const rows = [...table.querySelectorAll('tbody tr')].map((tr) => {
+    const tot = tr.querySelector('td.grid-total');
+    return {
+      team: text(tr.querySelector('td.name')),
+      me: tr.getAttribute('class') === 'me',
+      cells: [...tr.querySelectorAll('td.slot-avg')].map((td) => ({
+        v: td.getAttribute('data-v'),
+        text: text(td),
+        cls: td.getAttribute('class') || '',
+        says: td.getAttribute('aria-label') || td.getAttribute('title') || '',
+      })),
+      total: tot ? tot.getAttribute('data-v') : null,
+      totalCls: tot ? tot.getAttribute('class') || '' : '',
+    };
+  });
+  return { heads, rows };
 }
 
 /** The ESPN id out of a `waivers.html?player=123` href, which is the identity. */
@@ -1811,19 +1819,15 @@ const SCENARIOS = {
     await settle(25000);
     return {
       errors, fetchCalls,
-      depth: readDepth(document),
+      grid: readGrid(document),
       trades: readTrades(document),
       heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
       count: text(document.getElementById('tradeCount')),
-      note: text(document.getElementById('depthNote')),
-      // Phase 5, V18: the depth map's tint rule, in its VISIBLE key.
-      depthKey: text(document.getElementById('depthKey')),
-      depthKeyHidden: (() => {
-        const el = document.getElementById('depthKey');
-        if (!el) return true;
-        return !!el.hidden || !!el.closest('details');
-      })(),
-      tintedDepthCells: document.querySelectorAll('#depthTable td.deep, #depthTable td.thin').length,
+      // The depth map is gone (Tim, 2026-10-18); the All teams grid stands there.
+      hasDepth: !!document.getElementById('depthTable') || /Depth map/.test(text(document.body)),
+      gridKey: text(document.getElementById('projAvgLegend')),
+      gridNote: text(document.getElementById('projAvgNote')),
+      gridTitle: text(document.getElementById('projAvgTitle')),
       tradeNote: text(document.getElementById('tradeNote')),
       empty: text(document.getElementById('tradeEmpty')),
       emptyHidden: (document.getElementById('tradeEmpty').getAttribute('class') || '').includes('hidden'),
@@ -1967,14 +1971,14 @@ const SCENARIOS = {
   /** Switching team repaints both panels; switching partner narrows one. */
   async controls() {
     const { document, fetchCalls, errors } = await boot();
-    const before = { depth: readDepth(document), trades: readTrades(document) };
+    const before = { grid: readGrid(document), trades: readTrades(document) };
 
     const teamSel = document.getElementById('teamSelect');
     const second = [...teamSel.querySelectorAll('option')][3];
     teamSel.value = second.getAttribute('value');
     fire(teamSel);
     await settle();
-    const afterTeam = { depth: readDepth(document), trades: readTrades(document) };
+    const afterTeam = { grid: readGrid(document), trades: readTrades(document) };
 
     // Narrow to a manager who DOES have offers, so "only his offers" is a real
     // claim rather than a vacuous one about an empty list — and then to one who
@@ -2035,7 +2039,7 @@ const SCENARIOS = {
     measure.value = 'week';
     fire(measure);
     await settle();
-    const afterMeasure = { depth: readDepth(document), note: text(document.getElementById('depthNote')) };
+    const afterMeasure = { grid: readGrid(document) };
 
     return {
       fetchCalls, errors, before, afterTeam,
@@ -2070,7 +2074,7 @@ const SCENARIOS = {
 
     const after = {
       cost: readCost(document),
-      depth: readDepth(document),
+      grid: readGrid(document),
       trades: readTrades(document),
       combo: readCombo(document),
       heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
@@ -2078,8 +2082,6 @@ const SCENARIOS = {
       // The visible line under the finder, which now also carries the colour
       // key — channel 4 of "never colour alone".
       count: text(document.getElementById('tradeCount')),
-      depthNote: text(document.getElementById('depthNote')),
-      spares: [...document.querySelectorAll('#spareStrip .spare-chip[data-tip]')].map(text),
       measure: document.getElementById('measureSelect').value,
       weeks: [...document.querySelectorAll('#weekSelect option')].map((o) => o.getAttribute('value')),
       week: document.getElementById('weekSelect').value,
@@ -2094,7 +2096,7 @@ const SCENARIOS = {
     await settle(2000);
     const scalar = {
       cost: readCost(document),
-      depth: readDepth(document),
+      grid: readGrid(document),
       trades: readTrades(document),
       combo: readCombo(document),
       measure: measure.value,
@@ -2119,7 +2121,6 @@ const SCENARIOS = {
 
     // And a card on a player name, which is ask 1.
     const card = openCard(document, '#tradeTable .man[data-tip]');
-    const spareCard = openCard(document, '#spareStrip .spare-chip[data-tip]');
 
     // A deal that moves one of HIS OWN men, found by opening the offers in
     // order. The top row is no longer that deal by construction: since the goal
@@ -2149,7 +2150,7 @@ const SCENARIOS = {
       : openCard(document, '#dealModal [data-tip]');
 
     return {
-      errors, fetchCalls, before, after, deal, dealRoute, card, spareCard, dealCard, ownDeal, ownOpened, dealRowGain,
+      errors, fetchCalls, before, after, deal, dealRoute, card, dealCard, ownDeal, ownOpened, dealRowGain,
       // What the parent needs to rebuild the same league and price the same
       // packing independently.
       myTeamId: document.getElementById('teamSelect').value,
@@ -2259,7 +2260,7 @@ const SCENARIOS = {
 
     // -- opened again, closed by a click anywhere outside the card
     await openRowDeal(document, document.querySelector('#tradeTable tbody tr'), 1200);
-    click(document.getElementById('depthNote'));
+    click(document.getElementById('projAvgNote'));
     await settle(600);
     const closedByOutside = readDeal(document);
 
@@ -2442,11 +2443,11 @@ const SCENARIOS = {
     // and reported a missing feature. The page's own "I have finished" signal is
     // the only honest moment to count its rows.
     await settleGoal(document);
-    // Read off the depth map's highlighted row, not the <select>: the harness's
+    // Read off the All teams grid's highlighted row, not the <select>: the harness's
     // select shim falls back to the FIRST option, which is team 1 either way.
     const nameOf = (id) =>
       text([...document.querySelectorAll('#teamSelect option')].find((o) => o.getAttribute('value') === String(id)));
-    const mine = readDepth(document).rows.find((r) => r.me);
+    const mine = readGrid(document).rows.find((r) => r.me);
     const opened = mine ? (mine.team === nameOf(1) ? '1' : mine.team === nameOf(2) ? '2' : mine.team) : '';
     const ownLinks = document.querySelectorAll('#tradeTable a.espn-open').length;
 
@@ -2467,7 +2468,7 @@ const SCENARIOS = {
     weekSel.value = otherWeek;
     fire(weekSel);
     await settle(1500);
-    const afterWeek = readDepth(document).rows.find((r) => r.me);
+    const afterWeek = readGrid(document).rows.find((r) => r.me);
     return {
       afterWeek: afterWeek ? afterWeek.team : null,
       otherName: nameOf(2),
@@ -2498,7 +2499,7 @@ const SCENARIOS = {
       text([...document.querySelectorAll('#teamSelect option')].find((o) => o.getAttribute('value') === String(id)));
     const read = () => ({
       title: text(document.getElementById('finderTitle')),
-      me: (readDepth(document).rows.find((r) => r.me) || {}).team || null,
+      me: (readGrid(document).rows.find((r) => r.me) || {}).team || null,
       selected: (document.querySelector('#teamSelect option[selected]') || { getAttribute: () => null }).getAttribute('value'),
       rows: document.querySelectorAll('#tradeTable tbody tr').length,
       links: document.querySelectorAll('#tradeTable a.espn-open').length,
@@ -2607,7 +2608,7 @@ const SCENARIOS = {
       cost: readCost(document),
       trades: readTrades(document),
       combo: readCombo(document),
-      depth: readDepth(document),
+      grid: readGrid(document),
       heads: [...document.querySelectorAll('#tradeTable thead th')].map(text),
       note: text(document.getElementById('tradeNote')),
       requests: stub.calls.week.length,
@@ -4576,7 +4577,6 @@ SCENARIOS.progress = async function progressScenario() {
   const weekMeasure = {
     mine: readCustomList(document, 'cuListA').map((r) => ({ name: r.name, v: r.v })),
     his: readCustomList(document, 'cuListB').map((r) => ({ name: r.name, v: r.v })),
-    warn: { hidden: !!$('depthWarn').hidden, text: text($('depthWarn')) },
   };
   // The finder on that one-week measure: it cannot be played out by the goal
   // (not every remaining week is priced), and is read once it has said so.
@@ -4639,19 +4639,14 @@ SCENARIOS.previews = async function previews() {
     key: text($('finderKey') || q('#tradePanel .heat-key')),
   };
 
-  const depthRow = q('#depthTable tbody tr');
-  const lineupCells = qa('#depthTable tbody tr td.grouped');
-  const depth = {
-    name: cell(depthRow && depthRow.querySelector('[data-tc]')),
-    lineup: cell(lineupCells[0]),
-    lineupCls: lineupCells.map((td) => ((td.getAttribute('class') || '').match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0]),
-    lineupV: lineupCells.map((td) => Number(td.getAttribute('data-v') || text(td).replace(/[^\d.-]/g, ''))),
-    // A chip opens the player card of the man who sets the bar — or, when the
-    // bar is the waiver floor and no man sets it, a stat card that says so.
-    chips: qa('#depthBars .bar-chip').map((c) => ({
-      text: text(c), rawTitle: c.getAttribute('title') || '',
-      card: cardWords(c) || popText(c.hasAttribute('data-pop') ? c : c.querySelector('[data-pop]')),
-    })),
+  const gridRow = q('#projAvgTable tbody tr');
+  const totalCells = qa('#projAvgTable tbody tr td.grid-total');
+  const grid = {
+    name: cell(gridRow && gridRow.querySelector('[data-tc]')),
+    total: cell(totalCells[0]),
+    slot: cell(q('#projAvgTable tbody tr td.slot-avg')),
+    totalCls: totalCells.map((td) => ((td.getAttribute('class') || '').match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0]),
+    totalV: totalCells.map((td) => Number(td.getAttribute('data-v'))),
   };
 
   // The builder: one man each way with whoever is on the other side.
@@ -4754,8 +4749,7 @@ SCENARIOS.previews = async function previews() {
     send: qa('#cuListA input[type="checkbox"]').slice(1, 2).map((i) => i.getAttribute('value')),
   };
 
-  return { errors, fetchCalls, finder, depth, custom, deal, mgrClick, titled, both, said, heads, link,
-    depthKey: text($('depthKey')) };
+  return { errors, fetchCalls, finder, grid, custom, deal, mgrClick, titled, both, said, heads, link };
 };
 
 /**
@@ -5281,130 +5275,58 @@ if (!fresh.boot) {
     fresh.fetchCalls.length === 0, fresh.fetchCalls.slice(0, 2).join(' | '));
   eq(fresh.badge, 'Demo', 'it opens on demo data and says so');
 
-  // ---- Phase 5, V18: the depth map says what its tint is, in view ---------
-  //
-  // Its deep/thin shades borrow the ±1 SD scale's red and green under a
-  // different rule (a rank within each column), and the visible part of the
-  // panel did not say so. One sentence (rule 16), not behind the toggle.
-  ok('the depth map tints some cells, so the key has something to describe',
-    fresh.tintedDepthCells > 0, String(fresh.tintedDepthCells));
-  ok('its visible key says the three deepest and thinnest are tinted',
-    /three deepest and three thinnest/.test(fresh.depthKey) && !fresh.depthKeyHidden, fresh.depthKey);
-  // 2026-10-08 (docs/colour-plan.md): the Lineup column IS coloured against the
-  // league now, so the key says which part is the tint and which the scale.
-  ok('and that the Lineup column is coloured against the league',
-    /Lineup is coloured against the league/.test(fresh.depthKey) && !/\bSD\b/.test(fresh.depthKey), fresh.depthKey);
-  ok('in one sentence',
-    (fresh.depthKey.match(/[.!?](\s|$)/g) || []).length === 1, fresh.depthKey);
-
   // ---- the panels are in order of usefulness -----------------------------
   //
   // Tim, 2026-09-17: the finder first, then the best combo, then the depth map,
-  // with the Data source toolbar above all three. The depth map had been first
-  // — it is what the engine computes first, which is a fact about the code and
-  // not about anybody reading the page.
-  //
-  // Asserted as a SEQUENCE rather than as "the finder is somewhere above the
-  // depth map", because the weaker claim passes with the combo panel anywhere
-  // at all, and where the combo sits is half of what he asked for. Both the
-  // heading and the id are checked: the heading is what he sees, the id is what
-  // every other test and the module itself address the panel by, and a rename
-  // of one without the other is its own defect.
-  // CUSTOM TRADES was added on 2026-09-18 and went LAST, deliberately: his
-  // ordering of the three panels above is left exactly as he set it, and a new
-  // panel inserted among them would have quietly re-ordered a thing he chose.
-  // The sequence below still pins all of that — it is the same assertion with
-  // one more entry, not a weaker one.
-  // RE-AIMED 2026-09-23, not weakened: the finder's heading changed, because
-  // "Trades that help both squads" was a claim about a search rule the page gave
-  // up when the goal weights landed (the other manager may lose up to 2 a week,
-  // and on the sample league every offer makes him worse). The sequence is still
-  // pinned as a sequence, with the same number of entries; only the one word that
-  // moved has moved. These scenarios open on "Don't finish last" (`boot`), so the
-  // heading names that goal's chance.
+  // with the Data source toolbar above all three; custom trades went LAST on
+  // 2026-09-18. Asserted as a SEQUENCE, heading and id both. On 2026-10-18 the
+  // depth map gave its place to the All teams grid (Tim: "in the trade section,
+  // the depth map is useless and I don't like it. Just show the all teams proj
+  // avg 2026 graph there instead."), so the sequence is the same length with
+  // that one entry changed. These scenarios open on "Don't finish last" (`boot`).
   eq(
     fresh.panels.map((p) => p.heading).join(' > '),
-    'Data source > Trades ranked by net increase > Best combo > Depth map > Custom trades',
-    'the panels read finder, combo, depth map, custom — under the toolbar'
+    'Data source > Trades ranked by net increase > Best combo > All teams > Custom trades',
+    'the panels read finder, combo, all teams, custom — under the toolbar'
   );
   ok('and the finder no longer claims a trade helps both squads — it cannot, and does not',
     !/help(s)? both squads/i.test(fresh.panels.map((p) => p.heading).join(' ')),
     fresh.panels.map((p) => p.heading).join(' > '));
   eq(
     fresh.panels.map((p) => p.id).join(','),
-    ',finderTitle,,depthTitle,',
+    ',finderTitle,,projAvgTitle,',
     'and the two ids the module writes into are on the right panels'
   );
-  ok('the depth map still comes after the finder and the combo, and before custom',
-    fresh.panels.length === 5 &&
-    fresh.panels[3].id === 'depthTitle' &&
-    fresh.panels[4].heading === 'Custom trades',
-    fresh.panels.map((p) => p.heading).join(' > '));
 
-  // ---- the depth map -----------------------------------------------------
-  eq(fresh.depth.rows.length, 10, 'a row per manager');
+  // ---- the depth map is gone; the All teams grid is in its place -----------
+  ok('the depth map is gone: no table, no heading', fresh.hasDepth === false);
+  eq(fresh.gridTitle, 'All teams · proj avg 2026', 'the grid carries the Analysis page’s own title');
+  eq(fresh.grid.rows.length, 10, 'a row per manager');
   eq(fresh.teams.length, 10, 'every manager is offered as "your team"');
   eq(fresh.partners.length, 10, 'and nine partners plus "Any manager"');
   eq(fresh.partners[0], 'Any manager', 'the partner filter opens wide');
   ok('exactly one row is marked as yours',
-    fresh.depth.rows.filter((r) => r.me).length === 1,
-    `${fresh.depth.rows.filter((r) => r.me).length} marked`);
-
-  eq(fresh.depth.heads[0], 'Manager', 'the first column names the manager');
-  ok('the positions are the ones this league starts',
-    fresh.depth.heads.slice(1, -1).join(',') === 'QB,RB,WR,TE,DST,K',
-    fresh.depth.heads.join(','));
-  eq(fresh.depth.heads[fresh.depth.heads.length - 1], 'Lineup', 'and the squad total closes it');
-
-  ok('every cell carries a sortable value', fresh.depth.rows.every((r) =>
-    r.cells.length === 6 && r.cells.every((c) => c.v !== null && c.v !== '')),
-    JSON.stringify(fresh.depth.rows[0]));
-
-  // COLOUR IS NEVER THE ONLY CUE. Every cell prints a number, and every cell
-  // that is not exactly level prints its own sign — so the table reads with the
-  // tint off, in greyscale, or to anyone who cannot separate the two hues. Same
-  // rule as the two greens on the Players page. A true zero is left unsigned
-  // because it has no sign to print; it is also, by definition, the one value
-  // that is not saying anything.
-  ok('every cell prints a number', fresh.depth.rows.every((r) =>
-    r.cells.every((c) => /^[+−]?\d/.test(c.text))),
-    fresh.depth.rows.flatMap((r) => r.cells.map((c) => c.text)).join(' '));
-  ok('and every cell that is not level carries an explicit sign',
-    fresh.depth.rows.every((r) =>
-      r.cells.every((c) => Number(c.v) === 0 || /^[+−]/.test(c.text))),
-    fresh.depth.rows.flatMap((r) => r.cells.filter((c) => !/^[+−]/.test(c.text)).map((c) => `${c.v}:${c.text}`)).join(' '));
-
-  // The tint is a ranking within a column, so it cannot be all of one column
-  // or none of it.
-  for (let i = 0; i < 6; i++) {
-    const deep = fresh.depth.rows.filter((r) => r.cells[i].deep).length;
-    const thin = fresh.depth.rows.filter((r) => r.cells[i].thin).length;
-    const pos = fresh.depth.heads[i + 1];
-    ok(`${pos}: the tint marks some squads, not all of them`,
-      deep + thin < fresh.depth.rows.length, `${deep} deep, ${thin} thin of 10`);
-    ok(`${pos}: no squad is both deep and thin`,
-      !fresh.depth.rows.some((r) => r.cells[i].deep && r.cells[i].thin));
-  }
-
-  // 2026-10-08: a card naming the starters, the spare men and the bar, in
-  // place of one sentence counting them.
-  ok('every cell opens a card: its starters over the bar, ending on the cell’s own figure',
-    fresh.depth.rows.every((r) => r.cells.every((c) => /over the bar/.test(c.tip) &&
-      /Starters over the bar/.test(c.tip) && c.rawTitle === '')),
-    fresh.depth.rows[0].cells[0].tip);
-  ok('and the card’s last figure is the one the cell prints',
-    fresh.depth.rows.every((r) => r.cells.every((c) =>
-      c.tip.includes(`Starters over the bar ${(c.text.match(/^[+−-]?[\d.]+/) || [c.text])[0]}`))),
-    `${fresh.depth.rows[0].cells[0].text} / ${fresh.depth.rows[0].cells[0].tip}`);
-
-  ok('the replacement bar for every column is stated, not implied',
-    fresh.depth.bars.length === 6, fresh.depth.bars.join(' | '));
-
-  // The note has to say what the number IS. This is the house rule: state the
-  // basis of every derived number in a panel note.
-  for (const phrase of ['points above replacement', 'not starting anywhere', 'down a column']) {
-    ok(`the depth note explains "${phrase}"`, fresh.note.includes(phrase), fresh.note.slice(0, 160));
-  }
+    fresh.grid.rows.filter((r) => r.me).length === 1,
+    `${fresh.grid.rows.filter((r) => r.me).length} marked`);
+  eq(fresh.grid.heads.join(','), 'Team,QB,RB1,RB2,WR1,WR2,TE,FLEX,D/ST,K,Total',
+    'one column per lineup slot the league starts, then the Total — the Analysis grid’s columns');
+  ok('every slot cell prints a number', fresh.grid.rows.every((r) =>
+    r.cells.length === 9 && r.cells.every((c) => c.v !== null && c.v !== '' && /^\d/.test(c.text))),
+    JSON.stringify(fresh.grid.rows[0]));
+  ok('opened on the Total, best first, as on the Analysis page',
+    fresh.grid.rows.every((r, i, a) => i === 0 || Number(a[i - 1].total) >= Number(r.total)),
+    fresh.grid.rows.map((r) => r.total).join(','));
+  // THE WEEKS STILL TO COME. The sample season is replayed from the week picker
+  // (week 1 played), so a cell averages weeks 2–13 — twelve — and says so.
+  ok('a cell is averaged over the weeks still to come, and says how many',
+    fresh.grid.rows.every((r) => r.cells.every((c) => /over 12 regular-season weeks still to come/.test(c.says))),
+    (fresh.grid.rows[0].cells[0] || {}).says);
+  ok('the note says only the weeks still to come count, and names them',
+    /lineup slot averaged over the weeks still to come/.test(fresh.gridNote) && /weeks 2–13/.test(fresh.gridNote),
+    fresh.gridNote.slice(0, 300));
+  ok('every column is coloured against the league, with its key in view',
+    fresh.grid.rows.some((r) => r.cells.some((c) => /heat-up-4/.test(c.cls))) &&
+    /best in that COLUMN/.test(fresh.gridKey), fresh.gridKey);
 
   // ---- the finder --------------------------------------------------------
   ok('the finder found trades in the demo league', fresh.trades.length > 0,
@@ -5823,23 +5745,24 @@ if (!ctl.boot) {
   ok('and logs no error', ctl.errors.length === 0, ctl.errors.slice(0, 2).join(' | '));
 
   // Changing YOUR team moves the highlight and re-runs the search from the new
-  // squad. The depth numbers themselves are a property of the league, not of
-  // who is reading, so they must NOT move.
-  const wasMine = ctl.before.depth.rows.findIndex((r) => r.me);
-  const nowMine = ctl.afterTeam.depth.rows.findIndex((r) => r.me);
+  // squad. The grid's numbers are a property of the league, not of who is
+  // reading, so they must NOT move.
+  const wasMine = ctl.before.grid.rows.findIndex((r) => r.me);
+  const nowMine = ctl.afterTeam.grid.rows.findIndex((r) => r.me);
   ok('picking another team moves the highlight', wasMine !== nowMine, `${wasMine} -> ${nowMine}`);
   ok('exactly one row is still yours',
-    ctl.afterTeam.depth.rows.filter((r) => r.me).length === 1);
-  ok('but the depth numbers do not move — they are the league, not the reader',
-    JSON.stringify(ctl.before.depth.rows.map((r) => r.cells.map((c) => c.v))) ===
-    JSON.stringify(ctl.afterTeam.depth.rows.map((r) => r.cells.map((c) => c.v))));
+    ctl.afterTeam.grid.rows.filter((r) => r.me).length === 1);
+  const byTeam = (g) => JSON.stringify(g.rows.map((r) => [r.team, r.cells.map((c) => c.v), r.total])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  ok('but the grid’s numbers do not move — they are the league, not the reader',
+    ctl.before.grid.rows.length === 10 && byTeam(ctl.before.grid) === byTeam(ctl.afterTeam.grid));
   ok('and the search is re-run from the new squad',
     JSON.stringify(ctl.before.trades.map((t) => t.send)) !==
     JSON.stringify(ctl.afterTeam.trades.map((t) => t.send)),
     'the offers are identical after switching team');
   ok('you are never offered a trade with yourself',
-    ctl.afterTeam.trades.every((t) => t.partner !== ctl.afterTeam.depth.rows[nowMine].team),
-    ctl.afterTeam.depth.rows[nowMine].team);
+    ctl.afterTeam.trades.every((t) => t.partner !== ctl.afterTeam.grid.rows[nowMine].team),
+    ctl.afterTeam.grid.rows[nowMine].team);
 
   // The partner select is the one true filter on the page: it can only ever
   // narrow what the whole-league search already found.
@@ -5866,11 +5789,11 @@ if (!ctl.boot) {
     ok('and the page says why in words',
       /No trade here helps (your goal|both teams)/.test(ctl.afterQuietPartner.empty),
       ctl.afterQuietPartner.empty.slice(0, 140));
-    // And it sends the reader the right way. The message pointed at "the depth
-    // map above" while the map was first; the map is last now.
-    ok('and points DOWN to the depth map, which now sits under it',
-      /depth map below/.test(ctl.afterQuietPartner.empty) &&
-      !/depth map above/.test(ctl.afterQuietPartner.empty),
+    // And it sends the reader the right way: the All teams grid sits under it,
+    // where the depth map was.
+    ok('and points DOWN to the All teams grid, which sits under it',
+      /All teams grid below/.test(ctl.afterQuietPartner.empty) &&
+      !/depth map/.test(ctl.afterQuietPartner.empty),
       ctl.afterQuietPartner.empty.slice(-160));
   }
 
@@ -5878,13 +5801,10 @@ if (!ctl.boot) {
     ctl.afterReset.length === ctl.afterTeam.trades.length,
     `${ctl.afterReset.length} vs ${ctl.afterTeam.trades.length}`);
 
-  // The measure really is wired to both panels.
-  ok('switching to the week measure changes the depth numbers',
-    JSON.stringify(ctl.afterMeasure.depth.rows.map((r) => r.cells.map((c) => c.v))) !==
-    JSON.stringify(ctl.afterTeam.depth.rows.map((r) => r.cells.map((c) => c.v))),
-    'the measure toggle changed nothing, so one of the two is being ignored');
-  ok('and the note says which basis is in use',
-    /selected week/.test(ctl.afterMeasure.note), ctl.afterMeasure.note.slice(0, 200));
+  // The grid is always the weeks still to come: the finder's measure is a
+  // question about deals, not about what a slot is worth on average.
+  ok('switching the finder to the week measure leaves the grid alone',
+    byTeam(ctl.afterMeasure.grid) === byTeam(ctl.afterTeam.grid));
 }
 
 // ------------------------------------------------- re-deriving, not reading
@@ -6379,41 +6299,20 @@ if (!wk.boot) {
   ok('and every gain carries its per-week twin',
     wk.after.trades.length > 0 && wk.after.trades.every((t) => /\/wk/.test(t.gainText)),
     (wk.after.trades[0] || {}).gainText);
-  ok('the depth map says it is still per week, unlike the panels above it',
-    /per week/.test(wk.after.depthNote), wk.after.depthNote.slice(0, 400));
-  // THE PROSE HAS TO FOLLOW THE PANELS. The depth note pointed at "the panels
-  // below" and "the deals below" while the map sat first; it is last now, and a
-  // note telling a reader to look the wrong way is a defect of exactly the kind
-  // the reorder was meant to remove rather than create.
-  ok('and points UP at the deals, now that it sits under them',
-    /panels above/.test(wk.after.depthNote) && /deals above/.test(wk.after.depthNote) &&
-    !/(panels|deals|offer) below/.test(wk.after.depthNote),
-    wk.after.depthNote.slice(0, 600));
 
   // The two bases must actually produce different numbers, or one of them is
   // being ignored — the failure this whole scenario exists to catch.
-  ok('the weekly basis moves the depth numbers',
-    JSON.stringify(wk.before.depth.rows.map((r) => r.cells.map((c) => c.v))) !==
-    JSON.stringify(wk.after.depth.rows.map((r) => r.cells.map((c) => c.v))));
   ok('and the gains are on a different scale entirely',
     wk.after.trades.length > 0 && wk.before.trades.length > 0 &&
     Math.max(...wk.after.trades.map((t) => t.myGain)) >
       Math.max(...wk.before.trades.map((t) => t.myGain)) * 2,
     `${wk.before.trades[0] && wk.before.trades[0].myGain} -> ${wk.after.trades[0] && wk.after.trades[0].myGain}`);
 
-  // -- ask 6: the depth map and the drill-down cannot contradict each other -
-  ok('the depth note explains that a surplus is not a gain',
-    /surplus is not the same as a gain/i.test(wk.after.depthNote),
-    wk.after.depthNote.slice(0, 500));
-  ok('and says the two panels are the same projections',
-    /cannot disagree/.test(wk.after.depthNote), wk.after.depthNote.slice(-300));
 
   // -- ask 1: a card on every name -----------------------------------------
   ok('every man in the finder carries a card',
     wk.after.trades.every((t) => t.cards === t.send.length + t.receive.length),
     JSON.stringify(wk.after.trades.map((t) => [t.cards, t.send.length + t.receive.length])));
-  ok('your spare men are named under the depth map', wk.after.spares.length > 0,
-    wk.after.spares.join(' | '));
 
   ok('hovering a player name opens the card', wk.card && wk.card.hidden === false,
     JSON.stringify(wk.card));
@@ -6472,10 +6371,6 @@ if (!wk.boot) {
       wk.card.vsSpoken.length === want.length &&
       wk.card.vsSpoken.every((t) => t.includes(partnerName)), JSON.stringify(wk.card.vsSpoken));
   }
-  ok('a spare chip is about no deal, so it carries no arrow',
-    wk.spareCard && wk.spareCard.vs.length === 0, JSON.stringify(wk.spareCard && wk.spareCard.vs));
-  ok('a spare chip opens the same card', wk.spareCard && wk.spareCard.hidden === false,
-    JSON.stringify(wk.spareCard));
 
   // THE GLANCE LINE (Tim, 2026-10-02): "show the player's avg points, this
   // week proj, and position rank … at the top of the preview by the player's
@@ -6503,7 +6398,7 @@ if (!wk.boot) {
       return `Avg ${f(p.seasonAvg)} · Proj ${f(typeof rest === 'number' ? rest : here ? here.projected : null)} · ` +
         `${p.position === 'DST' ? 'D/ST' : p.position} #${p.posRank}`;
     };
-    for (const [where, k] of [['a finder name', wk.card], ['a spare chip', wk.spareCard], ['a man in the deal pop-up', wk.dealCard]]) {
+    for (const [where, k] of [['a finder name', wk.card], ['a man in the deal pop-up', wk.dealCard]]) {
       ok(`GLANCE: ${where} shows Value · Avg · Proj · rank right under the name`,
         !!k && k.glanceUnderName && /^Value \d+\.\d · Avg \d+\.\d · Proj (\d+\.\d|—) · (QB|RB|WR|TE|D\/ST|K) #\d+$/.test(k.glance),
         JSON.stringify(k && { g: k.glance, under: k.glanceUnderName, id: k.ident }));
@@ -7032,7 +6927,7 @@ if (!ya.boot) {
     JSON.stringify(ya.before));
   ok('YOU ARE: after the change the title names the new manager',
     ya.after.title.endsWith(`· ${ya.names[1]}`), ya.after.title);
-  eq(ya.after.me, ya.names[1], 'YOU ARE: and the depth map marks his row as yours');
+  eq(ya.after.me, ya.names[1], 'YOU ARE: and the All teams grid marks his row as yours');
   eq(ya.after.selected, '2', 'YOU ARE: and Your team shows him');
   ok('YOU ARE: and the finder searched again as him — his own rows carry the ESPN links',
     ya.after.rows > 0 && ya.after.links > 0, JSON.stringify(ya.after));
@@ -7410,7 +7305,7 @@ if (!live.boot) {
     // page is silently answering the wrong question. The card names the squad
     // it solved against, and that cannot coincide: a man you are trading for
     // must be measured against YOUR squad, never against the one he is on.
-    const mineName = (live.after.depth.rows.find((r) => r.me) || {}).team || '';
+    const mineName = (live.after.grid.rows.find((r) => r.me) || {}).team || '';
     ok('the card for a man he is trading for names HIS OWN squad, not the seller’s',
       mineName.length > 0 &&
       live.getCard.notes.some((n) => /Bold, underlined/.test(n) && n.includes(mineName) &&
@@ -7513,50 +7408,34 @@ if (!live.boot) {
   }
 
   // The fixture's loud played week: Cy's tight end projects 30 in weeks 1-4 and
-  // 4 from week 5 on. The depth map's per-week basis must be built from the 4.
-  const meanOver = (weeks) => (p) => {
-    let sum = 0;
-    let counted = 0;
-    let byes = 0;
-    for (const w of weeks) {
-      const v = L.projFor(p, w);
-      if (v === null) continue;
-      sum += v;
-      counted++;
-      if (v === 0) byes++;
-    }
-    const playable = weeks.length - byes;
-    return counted && playable > 0 ? Math.round((sum / playable) * 10) / 10 : null;
-  };
-  const mapRight = depthTable(L.teams, L.slots, meanOver(unplayed));
-  const mapWrong = depthTable(L.teams, L.slots, meanOver(withPlayed));
-  const cyRow = live.after.depth.rows.find((r) => r.team === 'Cy');
-  if (cyRow) {
-    // His LINEUP, not his tight-end cell: the cell is points above the
-    // replacement bar, and Cy's tight end IS the bar — he is the worst in the
-    // league at it either way, so the cell reads 0.0 on both spans and could
-    // never tell them apart. The lineup total is the number the 30 would move.
-    const shown = Number(cyRow.total);
-    const right = mapRight.rows.find((r) => r.team.name === 'Cy').total;
-    const wrong = mapWrong.rows.find((r) => r.team.name === 'Cy').total;
-    ok('the depth map’s per-week basis is the unplayed weeks too',
-      Math.abs(shown - right) <= 0.15, `page ${shown}, engine ${right}`);
-    ok('and week 4’s 30-point tight end is nowhere in it',
-      Math.abs(right - wrong) > 0.15 && Math.abs(shown - wrong) > 0.15,
-      `unplayed ${right}, with the played week ${wrong}, page ${shown}`);
+  // 4 from week 5 on. THE ALL TEAMS GRID COUNTS ONLY THE WEEKS STILL TO COME
+  // (Tim, 2026-10-18: "make sure that it's only taking into account future
+  // weeks like I asked"), so Cy's TE slot must be built from the 4s. Written
+  // out by hand here — the best tight end Cy can start each regular-season week
+  // still to come, averaged — rather than taken from the module it tests.
+  {
+    const cy = L.teams.find((t) => t.name === 'Cy');
+    const tes = cy ? cy.players.filter((p) => p.position === 'TE') : [];
+    const teMean = (weeks) => {
+      const per = weeks.map((w) => Math.max(...tes.map((p) => L.projFor(p, w) ?? -Infinity)))
+        .filter((v) => Number.isFinite(v));
+      return per.length ? Math.round((per.reduce((a, b) => a + b, 0) / per.length) * 10) / 10 : null;
+    };
+    const right = teMean(unplayed);
+    const wrong = teMean(withPlayed);
+    const cyRow = live.after.grid.rows.find((r) => r.team === 'Cy');
+    const teAt = live.after.grid.heads.indexOf('TE') - 1;
+    const shown = cyRow && teAt >= 0 ? Number(cyRow.cells[teAt].v) : NaN;
+    ok('ALL TEAMS: Cy’s TE slot is averaged over the weeks still to come',
+      Number.isFinite(shown) && right !== null && Math.abs(shown - right) <= 0.05,
+      `page ${shown}, by hand ${right} over ${unplayed.join(',')}`);
+    ok('ALL TEAMS: and week 1-4’s 30-point tight end is nowhere in it',
+      right !== null && wrong !== null && Math.abs(right - wrong) > 1 && Math.abs(shown - wrong) > 1,
+      `still to come ${right}, with the played weeks ${wrong}, page ${shown}`);
+    ok('ALL TEAMS: and the cell says how many weeks it is over',
+      !!cyRow && new RegExp(`over ${unplayed.length} regular-season weeks still to come`).test(cyRow.cells[teAt].says),
+      cyRow && cyRow.cells[teAt].says);
   }
-
-  // The bar every tight-end cell is measured against is the same fact said out
-  // loud, and the page prints it in a chip. It must be Cy's 4, not his 6.6.
-  const teBar = (map) => {
-    const r = map.replacement.get('TE');
-    return r ? r.value : null;
-  };
-  const teChip = live.after.depth.bars.find((b) => /^TE /.test(b)) || '';
-  ok('and the replacement bar it prints says the same',
-    teChip.includes(teBar(mapRight).toFixed(1)) &&
-    !teChip.includes(teBar(mapWrong).toFixed(1)),
-    `chip "${teChip}" — unplayed ${teBar(mapRight)}, with the played week ${teBar(mapWrong)}`);
 
   // ---- ask 3: the per-week figure ignores the bye, hand-computed ----------
   //
@@ -10691,27 +10570,28 @@ if (!gl.boot) {
       /Week \d+ projected \d+\.\d/.test(F.mgr.card), F.mgr.card);
     ok('and a click on it goes to his roster on Analysis, not into the deal',
       /analysis\.html\?team=\d+.*#rosterDetail$/.test(pv.mgrClick.href) && !pv.mgrClick.openAfter, JSON.stringify(pv.mgrClick));
-    ok('the depth map’s names open the same card', /Record \d+–\d+/.test(pv.depth.name.card), pv.depth.name.card);
+    ok('the All teams grid’s names open the same card', /Record \d+–\d+/.test(pv.grid.name.card), pv.grid.name.card);
 
     // -- the zero-anchored colour, on the page --------------------------------
     ok('no gain above zero is red and none below zero green, anywhere in the finder',
       F.gains.length > 0 && F.gains.every((g) => !(g.v > 0.05 && /heat-dn/.test(g.cls)) && !(g.v < -0.05 && /heat-up/.test(g.cls))),
       JSON.stringify(F.gains.filter((g) => (g.v > 0.05 && /heat-dn/.test(g.cls)) || (g.v < -0.05 && /heat-up/.test(g.cls))).slice(0, 6)));
 
-    // -- the depth map ---------------------------------------------------------
-    ok('the depth Lineup cell opens the team’s lineup, slot by slot, ending on the cell',
-      /QB /.test(pv.depth.lineup.card) && pv.depth.lineup.card.endsWith(`Total ${pv.depth.lineup.text}`),
-      `${pv.depth.lineup.text} / ${pv.depth.lineup.card.slice(-80)}`);
+    // -- the All teams grid -----------------------------------------------------
+    ok('the grid’s Total opens the lineup, slot by slot, ending on the average',
+      /QB /.test(pv.grid.total.card) && pv.grid.total.card.includes(pv.grid.total.text) &&
+        /Avg of \d+ weeks/.test(pv.grid.total.card) && pv.grid.total.rawTitle === '',
+      `${pv.grid.total.text} / ${pv.grid.total.card.slice(-120)}`);
+    ok('a slot cell opens who fills it and for how many weeks',
+      /Proj avg/.test(pv.grid.slot.card) && /\d+ weeks?/.test(pv.grid.slot.card) && pv.grid.slot.rawTitle === '',
+      pv.grid.slot.card.slice(0, 160));
     {
       // Coloured against the league: the best lineup is green, the worst red.
-      const v = pv.depth.lineupV; const c = pv.depth.lineupCls;
+      const v = pv.grid.totalV; const c = pv.grid.totalCls;
       const hi = v.indexOf(Math.max(...v)); const lo = v.indexOf(Math.min(...v));
-      ok('the Lineup column is coloured against the league: highest green, lowest red',
+      ok('the Total column is coloured against the league: highest green, lowest red',
         c.every((x) => x !== '') && /heat-up/.test(c[hi]) && /heat-dn/.test(c[lo]), `${v.join(',')} / ${c.join(',')}`);
     }
-    ok('every bar chip opens a card — the man who sets the bar — and carries no raw title',
-      pv.depth.chips.length === 6 && pv.depth.chips.every((ch) => ch.card.length > 0 && ch.rawTitle === ''),
-      JSON.stringify(pv.depth.chips).slice(0, 300));
 
     // -- the builder -----------------------------------------------------------
     const C = pv.custom;
@@ -10750,7 +10630,7 @@ if (!gl.boot) {
       `${pv.deal.slotNamesWithCard} of ${pv.deal.slotNames}`);
 
     // -- the rules -------------------------------------------------------------
-    const cards = [F.gain, F.their, F.goal, F.alt, F.opp, F.mgr, pv.depth.name, pv.depth.lineup,
+    const cards = [F.gain, F.their, F.goal, F.alt, F.opp, F.mgr, pv.grid.name, pv.grid.total, pv.grid.slot,
       C.gainA, C.gainB, C.meet, C.delta, C.deltaB, C.band, C.weekHead, pv.deal.delta].map((c) => c.card).join(' ¦ ');
     ok('no card says SD, z-score or "step n of 4"', !/\bSD\b|z-score|standard deviation|step \d of \d/i.test(cards),
       (cards.match(/.{30}(\bSD\b|z-score|step \d of \d).{30}/i) || [''])[0]);

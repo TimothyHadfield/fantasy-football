@@ -17,7 +17,7 @@
 
 import { heatScale, heatOf } from '../js/heat.js';
 import {
-  zeroScale, signed, gainWeeksSpec, slotChangeSpec, goalSpec, altGoalSpec, oppSpec, depthSpec,
+  zeroScale, signed, gainWeeksSpec, slotChangeSpec, goalSpec, altGoalSpec, oppSpec,
   teamSpec, recordOf, meetSpec, yesSpec,
 } from '../js/trade-cards.js';
 import { acceptVerdict } from '../js/accept.js';
@@ -262,25 +262,6 @@ const tableOf = (spec) => {
   ok('no meeting: the reason, and no rows', none.rows.length === 0 && /do not play/.test(none.foot));
 }
 
-// ------------------------------------------------------------ 6. the depth map
-{
-  const d = depthSpec({
-    team: 'Austin', position: 'RB', bar: 9.4, barName: 'Tony Pollard',
-    starters: [{ name: 'Hampton', v: 16.1 }, { name: 'Warren', v: 12.4 }], spare: [{ name: 'Pollard', v: 12.3 }],
-    edge: 9.7, shown: '+9.7',
-  });
-  ok('the starters, each with his points and what he is over the bar',
-    d.rows[0].label === 'Hampton' && d.rows[0].note === '16.1' && /\+6\.7/.test(d.rows[0].html) && /\+3\.0/.test(d.rows[1].html),
-    JSON.stringify(d.rows));
-  const sum = d.rows.reduce((a, r) => a + Math.round(num(r.html) * 10), 0) / 10;
-  eq(sum, 9.7, 'adding up to the cell');
-  ok('the spare men', d.totals.length === 1 && /Spare: Pollard 12\.3/.test(d.totals[0].label));
-  ok('and the bar, with the man who sets it', /Bar 9\.4 — Tony Pollard/.test(d.foot), d.foot);
-  ok('ending on the cell’s own figure', /\+9\.7/.test(d.total.html));
-  const thin = depthSpec({ team: 'Austin', position: 'TE', bar: 8, starters: [], missing: 1, edge: -8, shown: '−8.0' });
-  ok('a spot nobody fills is a line', thin.rows[0].label === 'nobody' && /−8\.0/.test(thin.rows[0].html), JSON.stringify(thin.rows));
-}
-
 // ------------------------------------------------------------- 7. a manager
 {
   const games = [
@@ -308,7 +289,6 @@ const tableOf = (spec) => {
     slotChangeSpec({ title: 'Week 5', slots: [], before: 1, after: 2, vs: 1, shown: '+1.0' }),
     goalSpec({ mine: { before: 0.1, after: 0.2 }, theirs: { before: 0.1, after: 0.2 }, accept: 0.5 }),
     altGoalSpec({ before: 0.1, after: 0.2 }), oppSpec({ per: [{ week: 5, delta: 1 }] }),
-    depthSpec({ team: 'A', position: 'QB', bar: 1, starters: [{ name: 'x', v: 2 }], edge: 1, shown: '+1.0' }),
     teamSpec({ name: 'A', record: '1–0', avg: 100, games: 1, proj: 100 }), meetSpec({ partner: 'B', meetings: [] }),
   ];
   for (const spec of all) {

@@ -38,7 +38,7 @@
 
   /* ---------------------------------------------------------- trade finder
 
-     THESE BLOCKS ARE IN PANEL ORDER — finder, combo, depth map — so the
+     THESE BLOCKS ARE IN PANEL ORDER — finder, combo, all teams — so the
      stylesheet reads the way the page does. None of it is cascade-sensitive:
      no selector here is repeated between blocks, so moving one cannot change
      what another wins. */
@@ -522,58 +522,64 @@
   }
   .combo-alt h3 { font-size: 13px; margin: 0 0 6px; }
 
-  /* ------------------------------------------------------------- depth map
+  /* ------------------------------------------------- all teams · proj avg
 
-     LAST, matching the panel it styles. It used to be the first block in this
-     file because the panel used to be the first on the page. */
-
-  /* Ten rows by six positions. Everything is tuned to be read DOWN a column,
-     because the question the table answers is "who is thin where I am deep",
-     and that is a column comparison rather than a row one. */
-  table.depth th, table.depth td { white-space: nowrap; }
-  table.depth td.cell { font-variant-numeric: tabular-nums; }
-
-  /* Deep and thin at a position. The tint is a SECOND cue and never the only
-     one: every cell prints a signed number, so the sign is readable with the
-     colour off, printed in greyscale, or by anyone who cannot separate the two
-     hues. Same principle as the two greens on the Players page. */
-  table.depth tbody tr td.deep { background: #16311f; }
-  table.depth tbody tr td.thin { background: #33151a; }
-  /* Hover and the "your team" band both paint their own background, so these
-     have to be written loudly enough to survive both. */
-  table.depth tbody tr:hover td.deep { background: #1b3b26; }
-  table.depth tbody tr:hover td.thin { background: #3f1a20; }
-
-  /* The spare-value badge: what this manager could send without touching his
-     own lineup. Quieter than the number it hangs off — it is the follow-up
-     question, not the headline. */
-  .cell .spare {
+     LAST, matching the panel it styles. The Analysis page's grid (Tim,
+     2026-10-18: "Just show the all teams proj avg 2026 graph there instead"),
+     drawn by the same code, so these are analysis.html's own rules for it —
+     the numbers right-aligned, nothing wrapping, the Total heavier — scoped to
+     this one table so nothing else on this page moves. The red/green tints are
+     css/app.css's `.heat-*`, as on every page. */
+  #projAvgTable th, #projAvgTable td { white-space: nowrap; }
+  #projAvgTable td.slot-avg { font-variant-numeric: tabular-nums; }
+  #projAvgTable td.slot-avg.wait { color: var(--line-2); }
+  #projAvgTable td.grid-total { font-weight: 700; }
+  #projAvgTable td.assumed {
+    color: var(--assumed);
+    text-decoration: underline dotted var(--assumed);
+    text-underline-offset: 3px;
+  }
+  /* The key under it: each mark as the table draws it, then a few words. */
+  .pa-key {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 18px;
+    margin: 10px 0 0;
     color: var(--dim);
-    font-size: 10.5px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .pa-key:empty { display: none; }
+  .pa-key .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .pa-key .lg-hint { margin-left: auto; }
+  .pa-key .lg-mark {
+    display: inline-block;
+    min-width: 24px;
+    text-align: center;
+    font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.03em;
-    margin-left: 5px;
-  }
-  table.depth tbody tr td.deep .spare { color: #7fd99b; }
-
-  /* The replacement-level strip under the table: the bar each column is
-     measured against, stated rather than implied. */
-  .bars { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-  .bar-chip {
-    font-size: 11.5px;
-    font-variant-numeric: tabular-nums;
-    padding: 3px 9px;
-    border-radius: var(--r-pill);
-    background: var(--panel-2);
+    padding: 1px 6px;
+    border-radius: 4px;
     border: 1px solid var(--line);
-    color: var(--dim);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
-  .bar-chip strong { color: var(--text); font-weight: 650; }
-
-  /* The spare-men strip. The depth map's cells are numbers; this is the one
-     place on that panel a player is NAMED. It is the part of a squad a trade
-     can actually reach, so it is also the part worth putting a week run on. */
-  .spares { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .pa-key .lg-mark.faint { color: var(--line-2); }
+  .pa-key .lg-mark.assumed {
+    color: var(--assumed);
+    text-decoration: underline dotted var(--assumed);
+    text-underline-offset: 3px;
+  }
+  .pa-key .lg-mark.heat-up-4 { border-color: #1d5330; }
+  .pa-key .lg-mark.heat-dn-4 { border-color: #4a1b21; }
+  .pa-key.bars-line { font-variant-numeric: tabular-nums; }
+  .pa-key.bars-line .lg-lead { color: var(--dim); }
+  #projAvgNote p { margin: 0 0 8px; }
+  #projAvgNote p:last-child { margin-bottom: 0; }
+  @media (max-width: 760px) {
+    .pa-key .lg-hint { margin-left: 0; }
+  }
 
   /* ------------------------------------------------------- custom trades */
   .cu-pick { margin-bottom: 12px; }
@@ -1136,18 +1142,6 @@
     #assumedPanel { margin-bottom: 12px; }
     #assumedPanel > h2 { margin-bottom: 11px; }
   }
-  .spare-chip {
-    font-size: 11.5px;
-    font-variant-numeric: tabular-nums;
-    padding: 3px 9px;
-    border-radius: var(--r-pill);
-    background: var(--panel-2);
-    border: 1px solid var(--line);
-    color: var(--dim);
-  }
-  .spare-chip strong { color: var(--text); font-weight: 600; }
-  .spare-chip .pp { margin: 0 4px; letter-spacing: 0.04em; font-size: 10.5px; }
-
   /* PER WEEK ON TOP, the rest-of-season total underneath in small type — Tim's
      order. The two scales differ by a factor of nine or more, so the unit is
      always printed and the total is never dropped. */
@@ -1701,7 +1695,8 @@
     </details>
   </section>
 
-  <!-- PANEL ORDER, TOP TO BOTTOM: the finder, the combo, then the depth map.
+  <!-- PANEL ORDER, TOP TO BOTTOM: the finder, the combo, then the depth map
+       (since 2026-10-18 the All teams grid stands where the depth map was).
        Tim, 2026-09-17, and it is ordered by usefulness rather than by how the
        page thinks. The finder answers the question somebody came here with —
        "what deal should I offer?" — the combo answers "and how many of them at
@@ -1823,31 +1818,25 @@
     </details>
   </section>
 
-  <!-- LAST, and deliberately: this is the working behind the two panels above.
-       It is the panel to read when you want to check an offer, or go hunting
-       for a manager the finder has not paired you with yet. -->
+  <!-- ALL TEAMS · PROJ AVG — Tim, 2026-10-18: "in the trade section, the depth
+       map is useless and I don't like it. Just show the all teams proj avg 2026
+       graph there instead. (make sure that it's only taking into account future
+       weeks like I asked)." The Analysis page's grid, drawn by the same code
+       (js/proj-avg-grid.js), in the depth map's place. Head and body are
+       rendered by the module: the columns are the league's own lineup slots. -->
   <section class="panel">
-    <div class="segmented goal-copy" data-goal-toggle role="group" aria-label="Your goal">
-      <button type="button" data-goal="title" class="on" aria-pressed="true">Win it all</button>
-      <button type="button" data-goal="last" aria-pressed="false">Don&rsquo;t finish last</button>
-    </div>
-    <h2 id="depthTitle">Depth map</h2>
-    <p class="lede">How far each squad's starters sit above a free replacement. Read down a column: high is depth, low is a need.</p>
-    <div class="table-scroll" id="depthWrap"><table id="depthTable" class="depth">
+    <h2 id="projAvgTitle">All teams · proj avg</h2>
+    <p class="lede">Every squad&rsquo;s lineup slots, averaged over the weeks still to come.</p>
+    <div class="table-scroll" id="projAvgWrap"><table id="projAvgTable" class="grid">
       <thead><tr></tr></thead>
       <tbody></tbody>
     </table></div>
-    <div class="empty hidden" id="depthEmpty">No roster data for this week.</div>
-    <div class="bars" id="depthBars"></div>
-    <div class="spares" id="spareStrip"></div>
-    <!-- The tint's rule, in view (rule 16: one sentence). It borrows the red
-         and green of the ±1 SD scale on the panels above but is NOT that scale,
-         so without this a reader would take it for one. -->
-    <p class="panel-note heat-key" id="depthKey"></p>
-    <p class="panel-note warn-line" id="depthWarn" hidden></p>
+    <div class="empty hidden" id="projAvgEmpty">No roster data for this week.</div>
+    <p class="pa-key" id="projAvgLegend"></p>
     <details class="explain">
-      <summary>How the depth numbers are worked out</summary>
-      <p class="panel-note" id="depthNote"></p>
+      <summary>How this grid works</summary>
+      <div class="panel-note" id="projAvgNote"></div>
+      <p class="pa-key bars-line" id="projAvgBars"></p>
     </details>
   </section>
 

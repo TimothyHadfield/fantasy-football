@@ -279,7 +279,7 @@ function readPage(document) {
     seasonTop: sec.querySelectorAll('.sbw-top').length,
     whoParent: (() => { const w = sec.querySelector('.sbw-who'); return w && w.parentNode ? cls(w.parentNode).join(' ') : null; })(),
     everySwitch: document.querySelectorAll('.value-view').length,
-    depthSwitch: (() => { const d = $('depthTable'); const p = d && d.closest('section'); return p ? p.querySelectorAll('.value-view').length : null; })(),
+    gridSwitch: (() => { const d = $('projAvgTable'); const p = d && d.closest('section'); return p ? p.querySelectorAll('.value-view').length : null; })(),
     listA: readList(document, 'cuListA'),
     listB: readList(document, 'cuListB'),
     before: readBox(sec, 'before'),
@@ -288,7 +288,7 @@ function readPage(document) {
     gainB: gainText($('cuGainB')),
     valA: topValue(document),
     valB: oldValue(document),
-    depth: text($('depthTable')),
+    grid: text($('projAvgTable')),
     // THE FINDER, LESS ITS VALUE COLUMN (2026-10-12). A trade row carries a
     // "Value" split cell now (Tim: "Do Value change / (top) you, (bottom)
     // them"): the custom box's own figure, which follows no switch and is a
@@ -593,8 +593,8 @@ if (!process.argv[2]) {
   ok('lines: one copy on the season boxes, on Proj',
     P.seasonSwitches.length === 1 && same(sw0(P.seasonSwitches).on, ['proj']) &&
     sw0(P.seasonSwitches).classes.includes('seg-sm'), JSON.stringify(P.seasonSwitches));
-  ok('lines: none on the depth map, and none anywhere else', P.depthSwitch === 0 && P.everySwitch === 2,
-    `depth ${P.depthSwitch}, all ${P.everySwitch}`);
+  ok('lines: none on the All teams grid, and none anywhere else', P.gridSwitch === 0 && P.everySwitch === 2,
+    `grid ${P.gridSwitch}, all ${P.everySwitch}`);
   // `finderValue` joins `valA`/`valB` (2026-10-12): the row's Value column is a
   // Value whichever view is on, so it is the one thing on a row that lines
   // change. It is held to its own claims in section 10.
@@ -695,7 +695,7 @@ if (!process.argv[2]) {
   }
   ok('Value: the opponent row has not moved', P.after.opp.length > 0 && same(P.after.opp, V.after.opp), JSON.stringify(V.after.opp));
   ok('Value: the gains over the squads have not moved', P.gainA.length > 0 && P.gainA === V.gainA && P.gainB === V.gainB, `${V.gainA} | ${V.gainB}`);
-  ok('Value: the depth map has not moved', P.depth.length > 50 && P.depth === V.depth);
+  ok('Value: the All teams grid has not moved (it is Proj only)', P.grid.length > 50 && P.grid === V.grid);
   ok('Value: the finder has not moved', P.finder.length > 200 && P.finder === V.finder, where({ f: P.finder }, { f: V.finder }));
   // One cell by hand: Ana's QB slot holds whichever quarterback is on his 19,
   // every week — (15 − 10) / 2 + 4 = 6.5.

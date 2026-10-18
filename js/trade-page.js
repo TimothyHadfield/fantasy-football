@@ -1,5 +1,5 @@
 // The Trade page: a search for swaps that help both squads, the best set of
-// them to make at once, and the depth map the two are built on — plus, when you
+// them to make at once, and every squad's lineup slot by slot — plus, when you
 // ask for it, the same question priced across every remaining week.
 //
 // Four panels, and they are four halves of one question. THEY ARE IN ORDER OF
@@ -9,10 +9,11 @@
 //   1. the FINDER — what to offer, and to whom. The answer somebody came for.
 //   2. the BEST COMBO — which of those offers can all be made at once, because
 //      a player can only be traded once and their gains do not add up.
-//   3. the DEPTH MAP — who is deep where. The working behind both of the above:
-//      read down a column and find the manager whose sign is the opposite of
-//      yours. It used to be first, because it is what the engine computes
-//      first, which is a fact about the code and not about the reader.
+//   3. ALL TEAMS · PROJ AVG — every squad's lineup slots, averaged over the
+//      weeks still to come: the Analysis page's grid, drawn by the same code
+//      (js/proj-avg-grid.js). It replaced the depth map on 2026-10-18 (Tim: "the
+//      depth map is useless and I don't like it. Just show the all teams proj
+//      avg 2026 graph there instead.").
 //
 // Clicking any offer opens the deal week by week in a pop-up, which is the only
 // place the real shape of it shows.
@@ -85,7 +86,7 @@ import * as season from './season.js';
 // Analysis page does about an assumed number. See js/floor.js.
 import { describeFloors, flooredValue, slotFloor } from './floor.js';
 import { slotCountsFromLineups } from './projection.js';
-import { enableSort, resort } from './sortable.js';
+import { enableSort, resort, sortBy } from './sortable.js';
 import { savedConfig, onConnection, coarsePointer } from './connection.js';
 import { scope } from './prefs.js';
 import * as espn from './espn.js';
@@ -172,9 +173,18 @@ import { slotRows, fillSlots } from './lineup-slots.js';
 import { statCard, clearPops, wirePops, hidePop, teamWeekSpec } from './pop.js';
 import { teamHref, weekHref, readParam } from './links.js';
 import {
-  zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, yesSpec, altGoalSpec, oppSpec, depthSpec,
+  zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, yesSpec, altGoalSpec, oppSpec,
   teamSpec, recordOf, meetSpec, chancePct, chanceChange,
 } from './trade-cards.js';
+// ALL TEAMS · PROJ AVG (Tim, 2026-10-18), the Analysis page's own grid. It reads
+// its weeks through js/who-to-start.js, configured below on this page's weeks.
+import {
+  configure as configureWeeks, spanWeeks as gridWeeks, leagueSlots as gridSlots,
+} from './who-to-start.js';
+import {
+  configure as configureProjAvg, gridHtml, keyItems, keyHtml, heatBandsHtml,
+  projAvgWeeks, projAvgSeasonOver,
+} from './proj-avg-grid.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('trade');
@@ -3071,123 +3081,6 @@ function manLine(p, ctx = null) {
   return `<span class="man"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
 }
 
-// ------------------------------------------------------------- the depth map
-
-/**
- * Which cells get a tint, decided per COLUMN rather than per cell.
- *
- * The number in a cell is points above replacement, and how big a number counts
- * as "deep" is not the same at quarterback as at kicker — so an absolute
- * threshold would tint whole columns and mean nothing. Ranking inside the
- * column asks the only question the table is for: of these ten managers, who is
- * strongest here and who is weakest. The top and bottom three are marked and
- * the middle is left alone, which is also an answer.
- *
- * Ties get the same treatment as each other rather than being split by roster
- * order: three managers level at the bottom are all three of them the bottom.
- */
-function tintsFor(rows, position) {
-  const values = rows
-    .map((r) => r.cells.get(position))
-    .map((c) => (c && Number.isFinite(c.startersEdge) ? c.startersEdge : null))
-    .filter((v) => v !== null);
-
-  if (values.length < 6) return { deep: null, thin: null }; // too few to rank
-  const sorted = [...values].sort((a, b) => b - a);
-  const deep = sorted[2];                      // 3rd best
-  const thin = sorted[sorted.length - 3];      // 3rd worst
-  // A column where everyone is level is a column with nothing to say.
-  return deep <= thin ? { deep: null, thin: null } : { deep, thin };
-}
-
-function renderDepthHead(positions) {
-  $('depthTable').querySelector('thead').innerHTML =
-    `<tr>
-       <th class="name" data-sort>Manager</th>
-       ${positions
-         .map(
-           (p) =>
-             `<th data-sort title="Points above replacement that this manager’s ` +
-             `starters at ${esc(p)} are worth.">${esc(p)}</th>`
-         )
-         .join('')}
-       <th class="grouped" data-sort title="The best legal lineup this squad could field, added up.">Lineup</th>
-     </tr>`;
-}
-
-/**
- * THE CELL'S PREVIEW (2026-10-08) names what the number is made of: each
- * starter at the position with his points and how far over the bar he is, the
- * spare men, and the bar itself. It used to be a sentence counting "startable"
- * men, which said how many and never who.
- */
-function depthCellHtml(cell, tints, row = null, map = null) {
-  if (!cell || !Number.isFinite(cell.startersEdge)) {
-    return '<td class="cell muted" data-v="">—</td>';
-  }
-
-  const cls = ['cell'];
-  if (tints.deep !== null && cell.startersEdge >= tints.deep) cls.push('deep');
-  else if (tints.thin !== null && cell.startersEdge <= tints.thin) cls.push('thin');
-
-  const spare =
-    cell.surplusEdge > 0
-      ? `<span class="spare">spare ${signedText(cell.surplusEdge)}</span>`
-      : '';
-
-  return (
-    `<td class="${cls.join(' ')}" data-v="${cell.startersEdge}"` +
-    `${row && map ? statCard(depthCardSpec(cell, row, map), { prefix: 'depth' }) : ''}>` +
-    `${signedText(cell.startersEdge)}${spare}</td>`
-  );
-}
-
-/** The man who sets a position's bar: the best one starting nowhere. Null when every one starts. */
-function barManOf(map, position) {
-  const r = map.replacement.get(position);
-  if (!r || r.exhausted || !Number.isFinite(r.value)) return null;
-  const measure = measureFn();
-  let best = null;
-  for (const row of map.rows) {
-    const starting = new Set(row.lineup.starters.map((s) => s.playerId));
-    for (const p of row.team.players || []) {
-      if (p.position !== position || starting.has(p.playerId)) continue;
-      const v = measure(p);
-      if (!Number.isFinite(v)) continue;
-      // The bar is "the first man past the last starter" in the league's pool,
-      // which is a value; the man is whoever on a bench carries it.
-      if (Math.abs(v - r.value) < 1e-9 && !best) best = { p, v, team: row.team };
-    }
-  }
-  return best;
-}
-
-function depthCardSpec(cell, row, map) {
-  const position = cell.position;
-  const bar = map.replacement.get(position);
-  const barValue = bar ? bar.value : null;
-  const measure = measureFn();
-  const starting = new Set(row.lineup.starters.map((s) => s.playerId));
-  const mine = (row.team.players || [])
-    .filter((p) => p.position === position)
-    .map((p) => ({ name: p.name, v: measure(p), id: p.playerId }))
-    .filter((e) => Number.isFinite(e.v))
-    .sort((a, b) => b.v - a.v);
-  const startable = (v) => Number.isFinite(barValue) && (bar.exhausted ? v >= barValue : v > barValue);
-  const barMan = barManOf(map, position);
-  return depthSpec({
-    team: row.team.name,
-    position,
-    bar: barValue,
-    barName: barMan ? barMan.p.name : '',
-    starters: mine.filter((e) => starting.has(e.id)),
-    spare: mine.filter((e) => !starting.has(e.id) && startable(e.v)),
-    missing: Math.max(0, (map.required[position] || 0) - cell.starting),
-    edge: cell.startersEdge,
-    shown: signedText(cell.startersEdge),
-  });
-}
-
 // ------------------------------------------------------ a manager, as a card
 //
 // Every manager named on this page opens the same card (docs/previews-plan.md):
@@ -3228,229 +3121,112 @@ function wireTeamCards(el) {
   });
 }
 
-function renderDepth() {
-  const teams = state.data ? state.data.teams : [];
-  const table = $('depthTable');
+// ------------------------------------------------- all teams · proj avg
+//
+// Tim, 2026-10-18: "in the trade section, the depth map is useless and I don't
+// like it. Just show the all teams proj avg 2026 graph there instead. (make sure
+// that it's only taking into account future weeks like I asked)."
+//
+// So this is the Analysis page's "All teams · proj avg" grid, drawn by the same
+// code (js/proj-avg-grid.js) from this page's own weeks: one column per lineup
+// slot, each the slot's projection averaged over the regular-season weeks still
+// to come, whoever fills it. A played week, or one somebody has already finished
+// in, is out — the Analysis page's rule, so the two grids agree number for
+// number. The rosters are the ones this page prices, so with a trade assumed
+// (`assumedTeams`) the grid shows the league after it. Proj only: this page has
+// no Value switch of its own on a whole-league table.
 
-  $('depthWrap').classList.toggle('hidden', teams.length === 0);
-  $('depthEmpty').classList.toggle('hidden', teams.length > 0);
-  if (!teams.length) {
-    $('depthBars').innerHTML = '';
-    $('spareStrip').innerHTML = '';
-    $('depthNote').innerHTML = '';
-    $('depthKey').innerHTML = '';
-    $('depthWarn').innerHTML = '';
-    $('depthWarn').hidden = true;
+/** A stamp for the rosters held: a re-read or an assumed trade replaces the arrays. */
+const teamsIds = new WeakMap();
+let teamsIdNext = 0;
+function teamsStamp() {
+  return [...weekly.teams].sort((a, b) => a[0] - b[0]).map(([w, list]) => {
+    if (!teamsIds.has(list)) teamsIds.set(list, ++teamsIdNext);
+    return `${w}:${teamsIds.get(list)}`;
+  }).join(',');
+}
+
+configureWeeks({
+  // Read live: js/who-to-start.js asks on every call.
+  state: {
+    get seasonWeeks() { return weekly.teams; },
+    get seasonFailed() { return weekly.failed; },
+    get weeks() { return state.weeks; },
+    get poWeeks() { return state.poWeeks; },
+    // The sample season is replayed from the week picker (`playedWeeks()`); a
+    // live league's played weeks are the schedule's, as on the Analysis page.
+    get playedWeeks() { return state.isDemo ? playedWeeks() : state.playedWeeks; },
+    get week() { return state.week; },
+    get data() { return state.data; },
+    get isDemo() { return state.isDemo; },
+    get byes() { return state.byes; },
+  },
+  valueOn: () => false,
+  asValue: () => null,
+  historyMode: () => 'actual',
+  sourceKey: () => `${sourceKey()}|${teamsStamp()}`,
+  glanceFor: () => null,
+});
+configureProjAvg({ floors: () => state.floors });
+
+let projAvgShape = null;
+function renderProjAvg() {
+  const table = $('projAvgTable');
+  if (!table) return;
+  const teams = state.data ? state.data.teams : [];
+  const slots = gridSlots();
+  const rows = slots ? slotRows(slots) : [];
+  const weeks = gridWeeks();
+  const show = teams.length > 0 && rows.length > 0 && weeks.length > 0;
+
+  $('projAvgTitle').textContent = `All teams · proj avg ${espn.getConfig().season || ''}`.trim();
+  $('projAvgWrap').classList.toggle('hidden', !show);
+  $('projAvgEmpty').classList.toggle('hidden', show);
+  clearPops('pa');
+  if (!show) {
+    $('projAvgEmpty').textContent = teams.length === 0
+      ? 'No roster data for this week.'
+      : 'The league’s lineup shape is not known yet, so there are no slots to average.';
+    $('projAvgLegend').innerHTML = '';
+    $('projAvgBars').innerHTML = '';
+    $('projAvgNote').innerHTML = '';
+    bodyOf(table).innerHTML = '';
     return;
   }
 
-  const map = depthTable(teams, state.slots, measureFn());
-  renderDepthHead(map.positions);
-
-  const tints = new Map(map.positions.map((p) => [p, tintsFor(map.rows, p)]));
-
-  // THE LINEUP COLUMN IS ON THE SITE'S ONE SCALE (docs/colour-plan.md): each
-  // squad's best lineup against the league's. The position cells keep their own
-  // deep/thin tint — a rank within the column, and a different rule.
-  const lineupScale = heatScale(map.rows.map((r) => r.total));
-  const slotKeys = state.slots ? slotRows(state.slots) : [];
-  const lineupWeek = basis() === 'week' ? state.week : null;
-  const lineupCell = (row) => {
-    const h = heatOf(row.total, lineupScale);
-    const filled = slotKeys.length ? fillSlots(row.lineup.starters, slotKeys) : new Map();
-    const starters = slotKeys
-      .map((s) => ({ slot: s.key, pick: filled.get(s.key) }))
-      .filter((s) => s.pick && s.pick.p)
-      .map((s) => ({ slot: s.slot, name: s.pick.p.name, pts: s.pick.v }));
-    const spec = teamWeekSpec({
-      team: row.team.name, week: lineupWeek, total: row.total, starters,
-      href: teamHref(row.team.id, lineupWeek),
-    });
-    if (lineupWeek === null) spec.sub = 'best lineup, a week';
-    return (
-      `<td class="grouped${h ? ` ${h.cls}` : ''}" data-v="${row.total ?? ''}"` +
-      `${Number.isFinite(row.total) ? statCard(spec, { prefix: 'depth' }) : ''}>` +
-      `${fmt(row.total)}${h ? heatMarkHtml(h) : ''}</td>`
-    );
-  };
-
-  clearPops('depth');
-  bodyOf(table).innerHTML = map.rows
-    .map((row) => {
-      const mine = row.team.id === state.myTeamId;
-      return (
-        `<tr${mine ? ' class="me"' : ''} data-team="${esc(row.team.id)}">` +
-        `<td class="name"><span class="mgr"${teamCardAttr(row.team)}>${esc(row.team.name)}</span></td>` +
-        map.positions.map((p) => depthCellHtml(row.cells.get(p), tints.get(p), row, map)).join('') +
-        lineupCell(row) +
-        `</tr>`
-      );
-    })
-    .join('');
-
-  // THE TINT'S RULE, IN VIEW (trade plan Phase 5, V18). The deep/thin shades
-  // are the heat scale's two hues under a different rule — a RANK within each
-  // column, not ±1 SD — so the visible key says which, in one sentence (rule
-  // 16). Only when something is actually tinted: a league too small to rank
-  // draws no shade, and a key for one would describe nothing on screen.
-  const tinted = [...tints.values()].some((t) => t.deep !== null || t.thin !== null);
-  // Since 2026-10-08 the Lineup column IS on the colour scale (against the
-  // league), so the sentence says which column is which — in the same length.
-  $('depthKey').innerHTML = tinted
-    ? `Tint marks the three deepest and three thinnest per position; ${lineupScale
-      ? 'Lineup is coloured against the league.' : 'not the colour scale above.'}`
-    : '';
-
-  renderBars(map);
-  renderSpares(map);
-  renderDepthNote(map);
-  resort(table);
-}
-
-/** The bar every column is measured against, stated rather than implied. */
-function renderBars(map) {
-  $('depthBars').innerHTML = map.positions
-    .map((p) => {
-      const r = map.replacement.get(p);
-      if (!r || !Number.isFinite(r.value)) return '';
-      // THE BAR IS A MAN (2026-10-08), so the chip opens HIS card — the best one
-      // at the position starting nowhere — instead of a sentence about how many
-      // start. With every one of them starting there is no such man, and the
-      // chip says that in a small card of its own.
-      const man = barManOf(map, p);
-      if (man) {
-        const key = registerRun(cardFor(man.p), 'bar');
-        return (
-          `<span class="bar-chip"${tipAttr(key)}>` +
-          playerRef(man.p, `${esc(p)} <strong>${fmt(r.value)}</strong>`) + `</span>`
-        );
-      }
-      const spec = {
-        title: `${p} bar`,
-        rows: [{ label: r.exhausted ? 'The worst starter' : 'The best one not starting', value: r.value }],
-        foot: r.exhausted ? `Every ${p} in the league is in somebody’s lineup.` : '',
-      };
-      return (
-        `<span class="bar-chip"${statCard(spec, { prefix: 'depth' })}>${esc(p)} ` +
-        `<strong>${fmt(r.value)}</strong>${r.exhausted ? ' *' : ''}</span>`
-      );
-    })
-    .join('');
-}
-
-/**
- * Your own spare men, named.
- *
- * The depth map's cells are numbers, and "spare +4.2" at running back does not
- * tell you WHO. This is the one place on that panel a player is named, and it
- * is the part of a squad a trade can actually reach — so it is also the part
- * most worth putting a week run on. Same card as everywhere else.
- */
-function renderSpares(map) {
-  const row = map.rows.find((r) => r.team.id === state.myTeamId);
-  if (!row) { $('spareStrip').innerHTML = ''; return; }
-
-  const chips = map.positions
-    .map((position) => {
-      const cell = row.cells.get(position);
-      if (!cell || !cell.spare) return '';
-      const p = cell.spare.p;
-      const key = registerRun(cardFor(p), 'spare');
-      const inner =
-        `<strong>${esc(p.name)}</strong>${posTag(position)}${fmt(cell.spare.v)}`;
-      return `<span class="spare-chip"${tipAttr(key)}>${playerRef(p, inner)}</span>`;
-    })
-    .filter(Boolean);
-
-  $('spareStrip').innerHTML = chips.length
-    ? `<span class="spare-chip">Your spare men →</span>${chips.join('')}`
-    : '';
-}
-
-function renderDepthNote(map) {
-  const m = meta();
-  const anyExhausted = map.positions.some((p) => {
-    const r = map.replacement.get(p);
-    return r && r.exhausted;
+  const g = gridHtml({
+    teams, rows, slots, weeks,
+    teamHead: 'The manager. Point at a name for his record.',
+    nameCell: (t) => `<td class="name"><span class="mgr"${teamCardAttr(t)}>${esc(t.name)}</span></td>`,
+    // The manager picked at the top of the page is "you" here, as on every
+    // other table this page draws.
+    rowClass: (t) => (t.id === state.myTeamId ? 'me' : ''),
+    prefix: 'pa',
   });
-  const span = weeklySpan();
+  table.querySelector('thead').innerHTML = g.head;
+  bodyOf(table).innerHTML = g.body;
+  // Opened on its Total, best first, as on the Analysis page; after that a
+  // column the reader picked is kept across repaints.
+  const shape = `pa:${rows.length}`;
+  enableSort(table); // once; a no-op after the first call
+  if (projAvgShape !== shape) { projAvgShape = shape; sortBy(table, rows.length + 1, false); } else resort(table);
 
-  $('depthNote').innerHTML =
-    `<strong>What the number is.</strong> Every number is <strong>points above replacement</strong> ` +
-    `— how much better this manager’s starters at that position are than the man anybody could ` +
-    `have instead. <strong>Replacement</strong> is not a typed-in constant: it is the best player ` +
-    `at that position who is <strong>not starting anywhere in the league</strong>. The chips ` +
-    `under the table show what that came out at, valued on ${esc(m.label)} (${m.basis}).` +
-    `<br><br>` +
-    (basis() === 'weeks'
-      ? `<strong>Per week.</strong> Every figure in this table is <strong>per week</strong>, over ` +
-        `${weekRange(span)} — <strong>the weeks still to be played</strong>, read off the league ` +
-        `schedule rather than the calendar, because a week with a result against it is banked and ` +
-        `no trade can reach it. <strong>A man’s average is taken over the weeks he is projected ` +
-        `to score in</strong>, and over nothing else: his byes, any week ESPN is quiet about or ` +
-        `this page has not read yet, and any week he is ruled out and projected 0.00 are all out ` +
-        `of the divisor. An average that sits below every week it came from is not describing the ` +
-        `player, and that is what counting those weeks did. ` +
-        `<strong>So an injured man’s figure flatters him</strong>: it is what he is worth in a ` +
-        `week he plays, not what he is worth to your season. The panels above are per week too, ` +
-        `but a deal’s gain is spread over <em>every</em> week in the span — byes, blanks and ` +
-        `ruled-out zeros included — so a man’s figure here is deliberately not the same ` +
-        `arithmetic and does not multiply up to one.` +
-        `<br><br>` +
-        `<strong>Lineup</strong> is what those averages would field. Picking each week separately ` +
-        `always beats it, and the gap between the two is what depth is worth: a squad whose men ` +
-        `swing about has a higher week-by-week total than its averages suggest, and a squad of ` +
-        `metronomes has none. That is why the deals above are priced week by week and this table ` +
-        `is not.` +
-        `<br><br>`
-      : '') +
-    `<strong>How to read it.</strong> A high number is depth worth trading from; a low one is a ` +
-    `lineup spot going to waste. <strong>Read down a column</strong>, not across a row — the ` +
-    `manager worth talking to is the one whose number is low where yours is high. ` +
-    `<strong>spare</strong> beside a number is what that manager could send ` +
-    `<em>without weakening his own lineup</em> — the part of his squad a trade can actually ` +
-    // Which cells are tinted is said under the table (`#depthKey`), not twice.
-    `reach; your own spare men are named under the table. Every cell prints its sign whether or ` +
-    `not it is tinted.` +
-    (anyExhausted
-      ? ` A <strong>*</strong> means every player at that position is already in somebody’s ` +
-        `lineup, so there is no spare man in the league to set a bar with and the worst ` +
-        `starter stands in for one.`
-      : '') +
-    `<br><br>` +
-    // Tim's question, answered where it is asked: "if we trade an RB for a QB,
-    // we might get +1.3, however if we have 3RBs, and 3QBs, then that trade
-    // might not be too good." It needs no second rule — the weekly measure
-    // already answers it — so this says so rather than inventing one.
-    `<strong>A surplus is not the same as a gain.</strong> Being deep at a position says you ` +
-    `have men to send; it does not say that acquiring one more there is worth anything. ` +
-    (basis() === 'weeks'
-      // THE ONE PLACE A PLAYED WEEK CAN STILL REACH A NUMBER on this page, and
-      // it is said out loud rather than quietly allowed. "The selected week" is
-      // a measure the reader asked for BY NAME, so it is not overridden — but
-      // when that week has a result against it, it is history, and pricing a
-      // trade on history is the thing the weekly measure exists to stop.
-      ? `On this basis it is priced properly: a manager starts whichever of his men is highest ` +
-        `<em>that week</em>, so a fourth good quarterback adds nothing once three of them already ` +
-        `put an 18 in the lineup most weeks — which is why an offer above can be worth little ` +
-        `even where this table says the other manager is thin. Click any offer to see it week by ` +
-        `week; those rows and this table are the same projections, so they cannot disagree.`
-      : `On a single scalar per man it cannot be priced at all — only one quarterback can ever ` +
-        `count, so a fourth good one looks like a straight upgrade. <strong>Every remaining week</strong> ` +
-        `is the measure that answers it, because it picks each week’s lineup separately.`) +
-    `<br><br>` +
-    `Nobody here can be claimed off the wire, so nothing on this page is a waiver ` +
-    `suggestion — the <a href="waivers.html">Players</a> page answers that.`;
+  $('projAvgLegend').innerHTML = keyHtml(keyItems(bodyOf(table), g.bandCols),
+    'Tap or hover a number for who fills that slot');
+  $('projAvgBars').innerHTML = heatBandsHtml(g.bandCols);
 
-  // A played week changes what every number in the table means, so it is said
-  // in view rather than behind the toggle.
-  const playedPick = basis() === 'week' && playedWeeks().includes(state.week);
-  $('depthWarn').innerHTML = playedPick
-    ? `<strong>Week ${state.week} has already been played.</strong> You asked for it by name, ` +
-      `so this table uses it — but those points are banked and no trade can move them. ` +
-      `<strong>Every remaining week</strong> prices only the weeks a trade can reach.`
-    : '';
-  $('depthWarn').hidden = !playedPick;
+  const ahead = projAvgWeeks(weeks).filter((w) => !state.poWeeks.includes(w));
+  $('projAvgNote').innerHTML =
+    `<p>Every number is a <strong>lineup slot averaged over the weeks still to come</strong>, ` +
+    `not a player: that slot's projection in each regular-season week, whoever fills it. ` +
+    (projAvgSeasonOver(weeks)
+      ? `<strong>No week is left</strong>, so every week of the season counts again. `
+      : `Here that is ${weekRange(ahead)}; a played week, or one under way, is left out. `) +
+    `<strong>Total</strong> is the best legal lineup, week by week, averaged.</p>` +
+    `<p>It is the <a href="analysis.html">Analysis</a> page's All teams grid on Proj avg, drawn by ` +
+    `the same code, so the two agree. The colour compares a squad with the others in the same ` +
+    `column, never one column with another.` +
+    (state.assumed ? ' With a trade assumed, the rosters are the ones after it.' : '') + `</p>`;
 }
 
 // ----------------------------------------------------------- the trade finder
@@ -4661,7 +4437,7 @@ function emptyMessage() {
       ? 'Try <em>Any shape</em> and every manager before reading much into that. '
       : 'That is a real answer rather than a gap: it needs two managers who are weak ' +
         'in opposite places, and this league may simply not have a pair. ') +
-    `The depth map below shows where the league is level and where it is not.`
+    `The All teams grid below shows where the league is level and where it is not.`
   );
 }
 
@@ -7306,16 +7082,11 @@ function renderDealAt() {
     `is worth in a week he SCORES, averaged over only the weeks he is projected to score in, so ` +
     `his byes, any week without a projection and any week he is ruled out at 0.00 are out of its ` +
     `divisor while they are all in these totals. It does not multiply up to them, and is not ` +
-    `meant to; for an injured man it is the more flattering of the two on purpose. ` +
+    `meant to; for an injured man it is the more flattering of the two on purpose.` +
     (priced.cut.length
-      ? `The forced cut above is applied <strong>once</strong>, for the whole season, rather than ` +
-        `re-decided every week — a manager does not get his dropped man back in week 10. `
-      : '') +
-    `These are the <strong>same projections</strong> the depth map is drawn from, over the same ` +
-    `weeks — that table averages them and this one picks each week separately, and the gap ` +
-    `between those two readings is exactly what depth is worth. So the two panels cannot ` +
-    `contradict each other about a player; where they differ, it is the arithmetic differing, ` +
-    `and that difference is the answer rather than a discrepancy.`;
+      ? ` The forced cut above is applied <strong>once</strong>, for the whole season, rather than ` +
+        `re-decided every week — a manager does not get his dropped man back in week 10.`
+      : '');
 
   $('dealNote').innerHTML =
     (basis() !== 'weeks'
@@ -9064,7 +8835,7 @@ function paint() {
   ASK_OFFERS.clear();
   hideTip(); // it may be pointing at an element that is about to be replaced
   hidePop(); // and so may the stat card
-  // IN PANEL ORDER — toolbar, finder, combo, depth map — and the modal last,
+  // IN PANEL ORDER — toolbar, finder, combo, all teams — and the modal last,
   // which is the only one not in the flow of the page.
   //
   // The order is for READING, not for correctness: each of these is a pure
@@ -9077,7 +8848,7 @@ function paint() {
   renderCost();
   renderFinder();
   renderCombo();
-  renderDepth();
+  renderProjAvg();
   renderCustom();
   renderAssumed();
   renderDeal();
@@ -11750,7 +11521,7 @@ function wireRowCards(el) {
 
 /** The team card on every manager's name (`teamCardAttr`). */
 function wireAllTeamCards() {
-  for (const id of ['depthTable', 'tradeTable', 'comboPanel', 'customPanel', 'assumedPanel']) {
+  for (const id of ['projAvgTable', 'tradeTable', 'comboPanel', 'customPanel', 'assumedPanel']) {
     const el = $(id);
     if (el) wireTeamCards(el);
   }
@@ -11762,8 +11533,7 @@ function wirePreviews() {
   // The pop-up's yes-word (`yesLineHtml`, key 'deal-yes') — its only `data-rc`.
   if ($('dealBody')) wirePops($('dealBody'), { selector: '[data-rc="yes"]', card: rowCardSpec });
   wireAllTeamCards();
-  for (const id of ['depthTable', 'depthBars']) if ($(id)) wirePops($(id));
-  if ($('depthBars')) wireTips($('depthBars'));
+  if ($('projAvgTable')) wirePops($('projAvgTable'));
   const delta = { selector: 'table.weeks tr[data-wk] td.delta', card: cardAt(deltaCardSpec, deltaCellOffer) };
   for (const id of ['dealBody', 'customPanel']) if ($(id)) wirePops($(id), delta);
   for (const id of ['customPanel', 'assumedPanel']) {
@@ -12354,7 +12124,7 @@ document.addEventListener('click', (e) => {
   loadIntoCustom(offer);
 }, true);
 
-enableSort($('depthTable'));
+enableSort($('projAvgTable'));
 enableSort($('tradeTable'));
 
 // Every container that names a player gets the card. One call each, delegated,

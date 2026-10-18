@@ -312,45 +312,6 @@ export function oppSpec({ partner = 'He', per = [], shown = '', why = '', href =
   };
 }
 
-// ------------------------------------------------------------ the depth map
-
-/**
- * One depth-map cell: the starters with their points over the bar, the spare
- * men, and the bar itself.
- *
- * @param {Object} o
- * @param {string} o.team o.position
- * @param {number} o.bar                     the replacement level
- * @param {Array<{name, v}>} o.starters      this squad's starters at the position
- * @param {Array<{name, v}>} o.spare         startable men who are not starting
- * @param {number} [o.missing]               lineup spots nobody fills
- * @param {string} o.shown                   the cell's own figure, as printed
- */
-export function depthSpec({ team = '', position = '', bar = null, barName = '', starters = [], spare = [], missing = 0, edge = null, shown = '', href = null, hrefLabel = null } = {}) {
-  const gap = (v) => (finite(v) && finite(bar) ? round1(v - bar) : null);
-  const over = (v) => (gap(v) === null ? '—' : signed(gap(v)));
-  const rows = starters.map((s) => ({ lead: 'Starts', label: s.name, note: f1(s.v), html: over(s.v) }));
-  for (let i = 0; i < missing; i += 1) rows.push({ lead: 'Starts', label: 'nobody', html: finite(bar) ? signed(-bar) : '—' });
-  // The men are rounded one by one; the cell's figure is rounded once.
-  if (finite(edge) && finite(bar)) {
-    const sum = round1(starters.reduce((a, s) => a + (gap(s.v) ?? 0), 0) - missing * round1(bar));
-    const miss = round1(edge - sum);
-    if (Math.abs(miss) >= 0.05 && Math.abs(miss) <= 0.1 * (starters.length + missing) + 0.05) {
-      rows.push({ lead: '', label: 'Rounding', html: signed(miss) });
-    }
-  }
-  const totals = spare.map((s) => ({ label: `Spare: ${s.name} ${f1(s.v)}`, html: over(s.v) }));
-  return {
-    title: team,
-    sub: `${position} over the bar`,
-    rows,
-    totals,
-    total: { label: 'Starters over the bar', html: esc(shown) },
-    foot: finite(bar) ? `Bar ${f1(bar)}${barName ? ` — ${barName}, the best ${position} not starting anywhere` : ''}.` : '',
-    href, hrefLabel,
-  };
-}
-
 // --------------------------------------------------------------- a manager
 
 /** A team card: record, scoring average, this week's projection. */
