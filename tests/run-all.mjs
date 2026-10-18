@@ -73,6 +73,8 @@ const SUITES = [
   ['test-lineup-guard.mjs', 'the one write: a lineup change on your own team, this week, switch on, live site only — every refusal and the exact body sent'],
   ['test-bridge-lineup.mjs', 'the site’s half of the lineup change: canSetLineup and setLineup never reject, and say why not'],
   ['test-espn-tick.mjs', 'ticking your own side on ESPN’s trade page — and never submitting'],
+  ['test-espn-tabs.mjs', 'the Analysis and Trade tabs on ESPN’s league pages: ESPN’s own nav markup, the framed pages and their seed, back/forward, re-renders'],
+  ['test-espn-embed.mjs', 'the site pages framed by those tabs: only when ESPN frames them, the seed, which panels stay, the luck picker, the scoped skin'],
   ['owner-names.mjs', 'real names instead of team names: the ESPN members join'],
   ['test-snapshots.mjs', 'the time machine: what is recorded, and what comes back'],
   ['test-backup.mjs', 'Export archive / Import: every kind of saved week and the preferences in one file, back byte for byte, nothing overwritten'],
