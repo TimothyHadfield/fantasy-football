@@ -3,6 +3,29 @@
 Things that measure the site. Not tests — `tests/` is the suites, and nothing
 in here is in `npm test`, because everything in here needs a real browser.
 
+## espn-tab-check.mjs
+
+The extension's ESPN tabs (Analysis, Trade) in headless Chromium with the
+unpacked extension, on ESPN's real public league 1241838, with this checkout
+served in place of the live site. Two checks, both from Tim (2026-10-18):
+
+- **No blank while scrolling.** A real scroll gesture is filmed frame by frame
+  (`Page.startScreencast`); a frame fails if a plain-white band taller than
+  120 px runs across the tab (a part Chrome hadn't drawn).
+- **A click never turns the tab into the plain site** (Analysis): clicks a
+  number in Week by week and All teams; fails if a non-embed site page loads
+  into the tab.
+
+```
+node tools/espn-tab-check.mjs                    # this checkout
+node tools/espn-tab-check.mjs --site <old-copy>  # e.g. `git archive` of the code before a fix
+node tools/espn-tab-check.mjs --tab trade --out <dir>
+```
+
+Exit 1 on a failure; screenshots of the worst frame go to `--out`. Before the
+0.5.1 fix it failed 3 checks (blank bands up to 710 px; a click loaded the dark
+page); after, all pass.
+
 ## measure-layout.mjs
 
 Drives headless Edge over the DevTools protocol and reports, for each page at
