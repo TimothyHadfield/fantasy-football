@@ -29,6 +29,7 @@ Since 2026-09-29 he sends one concrete feature ask at a time.
 
 ## Status (all on `main`, live)
 One line each. Detail is in the archive snapshot named above unless a commit is given (then read the commit and its tests).
+- **Site icon (2026-10-17):** "FF" letters replaced by a brown football with white laces on the accent green #3ba55d. Source `icon.svg` (linked first on every page); `apple-touch-icon.png` 180 and `favicon.png` 32 rendered from it with Playwright WebKit.
 - **Trade:** opens on a goal; finder → season sim on one seed → order by net increase with the goal-chance guard; custom box, Suggested, saved/Assume, Ask AI, accept-by, bye pills, injury underline, trend arrows; sliced search (`data-ranked` on `#tradeTable` = done). Trade audit Phases 1–4 + phone cards live 10-14/15 (`docs/trade-audit-plan.md` BUILT sections).
 - **2026-10-16 Trade (this chat):**
   - **No K, no D/ST, no man with Value < 1 in any suggestion.** Applies to the finder and Suggested: `notToSuggest(ids)` in `js/trade-page.js`, fed into the engine's `skip` (a ticked man still goes through). Gap: on the finder's scalar basis (`weeks` null) `skip` is null; a reasoned harmless edge, not changed. a2cdf13.
