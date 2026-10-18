@@ -6348,15 +6348,14 @@ async function check(scenario, boot) {
     // -- week headings → Schedule --------------------------------------------
     for (const id of ['totalsTable', 'seasonTable', 'startersTable']) {
       const ths = [...d.querySelectorAll(`#${id} thead th[data-wkh]`)];
-      const off = ths.filter((th) => {
-        const a = th.querySelector('a.wk-go');
-        return !a || a.getAttribute('href') !== `schedule.html?week=${th.getAttribute('data-wkh')}` || th.hasAttribute('title');
-      });
-      c.ok(`PREVIEWS: every week heading of #${id} links its number to that week on Schedule, with no title`,
+      // Tim, 2026-10-18: "remove the automatic connection to the schedule when you click on that same weekly number".
+      const off = ths.filter((th) => th.querySelector('a') || th.hasAttribute('title'));
+      c.ok(`PREVIEWS: no week heading of #${id} links anywhere or has a title`,
         ths.length >= 13 && off.length === 0, `${ths.length} headings, ${off.length} wrong: ${off[0] && off[0].outerHTML}`);
     }
-    c.ok('PREVIEWS: and pointing at one says which week it is',
-      /^Week 3/.test(popOf(d.querySelector('#totalsTable thead th[data-wkh="3"]')) || ''),
+    // Tim, 2026-10-18: "Remove the previews when hovering over the weekly number as a column".
+    c.ok('PREVIEWS: a week heading opens no preview',
+      !popOf(d.querySelector('#totalsTable thead th[data-wkh="3"]')),
       popOf(d.querySelector('#totalsTable thead th[data-wkh="3"]')));
 
     // -- Who to start: Starts -----------------------------------------------

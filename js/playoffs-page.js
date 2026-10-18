@@ -316,7 +316,7 @@ function renderTeams() {
     '<th class="name" data-sort>Team</th>' +
     '<th data-sort title="How often this team made the playoffs in the simulated seasons.">Playoffs %</th>' +
     '<th data-sort title="How often this team seeded high enough to skip the first playoff round.">Bye %</th>' +
-    weeks.map((w) => `<th data-sort data-week="${w}" title="Projected points in week ${w}: the best legal lineup.">Wk ${w}</th>`).join('') +
+    weeks.map((w) => `<th data-sort data-week="${w}">Wk ${w}</th>`).join('') +
     '</tr>';
   const cols = 3 + weeks.length;
   const tbody = table.querySelector('tbody');

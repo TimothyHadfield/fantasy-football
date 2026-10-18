@@ -928,21 +928,12 @@ function totalOf(row, slots = gridSlots()) {
 // the card's run) run through the playoff weeks; the line is `po-start` in
 // css/app.css; the averages stay regular-season.
 
-// ------------------------------------------- a week heading → that week on Schedule
+// ------------------------------------------------------------ a week heading
 //
-// "A week heading → that week on Schedule" (docs/previews-plan.md), on a header
-// whose click already SORTS the column. Both are kept:
-//
-//   A MOUSE  the week's NUMBER is a link to `schedule.html?week=N`; a click
-//            anywhere else in the header sorts, as it always did. Hovering
-//            shows the heading's one line as a card.
-//   A FINGER the tap sorts, as it always did, and opens the card as a sheet
-//            whose button is the link — a week number is far too small a target
-//            to be a link under a thumb, and a tap meant to sort must never
-//            leave the page.
-//
-// So the card carries its `href` only for a finger (`weekHeadCard`), and the
-// number's own link is what a mouse follows.
+// A week heading is plain text whose click SORTS the column, nothing else.
+// Tim, 2026-10-18: "Remove the previews when hovering over the weekly number as
+// a column" and "remove the automatic connection to the schedule when you click
+// on that same weekly number". The old card and Schedule link are gone.
 
 // ------------------------------------------------ the week run on the hover
 //

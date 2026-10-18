@@ -50,7 +50,7 @@ import {
 } from './standings-table.js';
 import { enableSort, resort } from './sortable.js';
 import { scope } from './prefs.js';
-import { savedConfig, onConnection, coarsePointer } from './connection.js';
+import { savedConfig, onConnection } from './connection.js';
 import { wirePops, hidePop } from './pop.js';
 import { readParam, teamHref, weekHref, playerHref } from './links.js';
 import {
@@ -3090,9 +3090,7 @@ function renderWeeklyTable() {
   wirePops(table, { selector: 'td[data-wkavg]', card: (el) => gridAvgSpec(el.dataset.team) });
   wirePops(table, { selector: 'tbody td.name[data-team]', card: (el) => { const t = teamOfId(el.dataset.team); return t ? teamSpec(t) : null; } });
   wirePops(table, { selector: 'tfoot td[data-week]', card: (el) => weekSpec(el.dataset.week) });
-  // A heading's click sorts, so its card links nowhere; and a finger has no
-  // hover, so on a phone the week's card is the League row's.
-  wirePops(table, { selector: 'th[data-week]', card: (el) => (coarsePointer() ? null : weekSpec(el.dataset.week, { link: false })) });
+  // A week heading opens no card; its click sorts (Tim, 2026-10-18: "Remove the previews when hovering over the weekly number").
 
   tbody.innerHTML = s.teams
     .map((t) => {
