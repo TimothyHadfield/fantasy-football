@@ -276,13 +276,16 @@ function snap(d) {
  * document without layout can say it: `s` is a `snap` with the box shown, and
  * `weeks` the week columns both tables must lay out, in order.
  */
-function lined(c, s, weeks, label) {
+function lined(c, s, weeks, label, { onValue = false } = {}) {
   const want = ['player', 'pos', 'team', 'avg', 'extra', ...weeks.map((w) => `w${w}`)];
   c.ok(`${label}: THE SAME COLUMNS IN THE SAME ORDER — both headers carry the same keys`,
     s.cols.length === want.length && s.cols.join(',') === want.join(',') && s.wireCols.join(',') === want.join(','),
     `box ${s.cols.join(',')} | wire ${s.wireCols.join(',')} | want ${want.join(',')}`);
-  c.ok(`${label}: the lead columns read Player, Pos, NFL, Avg, Starts over Player, Pos, Tm, Avg, Gain`,
-    s.heads.join('|') === 'Player|Pos|NFL|Avg|Starts' && s.wireHeads.join('|') === 'Player|Pos|Tm|Avg|Gain',
+  // SINCE 2026-10-19 ("One Value per man", 9ada77e): on Value the list's Avg
+  // column is headed Value — it prints the man's one Value, the card's figure.
+  const wireAvg = onValue ? 'Value' : 'Avg';
+  c.ok(`${label}: the lead columns read Player, Pos, NFL, Avg, Starts over Player, Pos, Tm, ${wireAvg}, Gain`,
+    s.heads.join('|') === 'Player|Pos|NFL|Avg|Starts' && s.wireHeads.join('|') === `Player|Pos|Tm|${wireAvg}|Gain`,
     `${s.heads.join('|')} over ${s.wireHeads.join('|')}`);
   c.ok(`${label}: every row of the box has a cell for each column, as a row of the list does`,
     s.rowCells.length > 0 && s.rowCells.every((n) => n === want.length) && s.wireRowCells === want.length,
@@ -646,7 +649,7 @@ async function check(scenario, boot) {
       firstDiff(seen.value.rows, val.rows));
     c.ok('which is not what it showed on Proj', !sameRows(seen.value.rows, first.rows), 'identical');
     lined(c, first, near3, 'on Proj');
-    lined(c, seen.value, near3, 'on Value');
+    lined(c, seen.value, near3, 'on Value', { onValue: true });
     // By hand: T4 Player 01, an RB projected 19.7 + 0.3·9 … in week 9 = 21.7;
     // against the RB lines (8 free, 11 a starter) that is far over a starter.
     const p = season.projFor(1, 9);
