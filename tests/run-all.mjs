@@ -153,6 +153,7 @@ const SUITES = [
   ['decisions-check.mjs', 'the decisions review page: a squad’s decisions, the weekly totals and the flipped matchup with one undone, the three charts beside their hypotheticals, noise, a what-if trade'],
   ['draft-review-check.mjs', 'the Draft page’s "Our draft": the board, a team’s steals and misses, the previews, and what it asks of ESPN — nothing on the phone’s copy'],
   ['test-summary.mjs', 'the weekly summary page: LUCK, title %, loser %, and the image that gets sent'],
+  ['test-week-summary.mjs', 'the week recap: only finished weeks offered, missed points, booms and busts, new injuries and how long, the standings move'],
   ['touch-check.mjs', 'the analysis grids on a screen with no hover — the tap-opened card'],
   // Last, because it boots all seven pages and is the slowest thing here that
   // is not tr-test. It measures the prose a reader is SHOWN and fails a page

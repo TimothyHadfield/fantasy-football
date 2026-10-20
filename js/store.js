@@ -762,6 +762,55 @@ export function forgetInjury(leagueId, season) {
   try { s.removeItem(injuryKeyOf(leagueId, season)); } catch { /* nothing to do */ }
 }
 
+// ---------------------------------------------------------------------------
+// THE WEEK RECAP'S SNAPSHOT (js/week-summary-page.js)
+//
+// ESPN keeps no injury history: a roster read for week 1 carries TODAY's
+// status (measured 2026-10-19 on 1241838). So when a week is the latest one
+// finished, the recap saves what it read — every hurt man's status and ESPN's
+// word on how long, and the week's league-wide player lines — and every later
+// look at that week uses the saved copy. ONE key a week, `{ v, at, … }`, never
+// expires, and FIRST WRITE WINS: a week's end happens once.
+
+const WEEKSUM_SCHEMA = 1;
+const weekSumKeyOf = (leagueId, season, week) => `ff.weeksum.${WEEKSUM_SCHEMA}.${leagueId}.${season}.${Number(week)}`;
+
+/** The saved copy of `week`, `{ at, injuries, pool }`, or null. */
+export function readWeekSummary(leagueId, season, week) {
+  const s = store();
+  if (!s) return null;
+  try {
+    const e = JSON.parse(s.getItem(weekSumKeyOf(leagueId, season, week)) || 'null');
+    if (!e || e.v !== WEEKSUM_SCHEMA || !Number.isFinite(e.at)) return null;
+    return { at: e.at, injuries: e.injuries && typeof e.injuries === 'object' ? e.injuries : null, pool: Array.isArray(e.pool) ? e.pool : null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save `week`'s copy unless one is already saved. `injuries` null = not known
+ * (the page could not read statuses), and a later look may fill it once.
+ * @returns {boolean} whether it landed
+ */
+export function writeWeekSummary(leagueId, season, week, { injuries = null, pool = null, at = null } = {}) {
+  const s = store();
+  if (!s) return false;
+  const held = readWeekSummary(leagueId, season, week);
+  if (held && (held.injuries || !injuries) && (held.pool || !pool)) return false;
+  try {
+    s.setItem(weekSumKeyOf(leagueId, season, week), JSON.stringify({
+      v: WEEKSUM_SCHEMA,
+      at: held ? held.at : (Number.isFinite(at) ? at : Date.now()),
+      injuries: held && held.injuries ? held.injuries : injuries,
+      pool: held && held.pool ? held.pool : pool,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * "4 minutes ago" / "just now" — the one spelling of an age on this site's
  * stored weeks, so three panels cannot describe the same timestamp three ways.

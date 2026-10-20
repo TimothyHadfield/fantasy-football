@@ -319,6 +319,27 @@ export async function fetchDraftRanks(ids) {
 }
 
 /**
+ * THE WEEK'S BEST SCORERS ACROSS THE NFL, rostered or not — raw `players[]`
+ * entries, best first. Decode each with `parsePlayerWeek`. For the week recap.
+ *
+ * `sortAppliedStatTotalForScoringPeriodId` with `scoringPeriodId` sorts by what
+ * each man scored THAT week (measured on public league 1241838, 2026-10-19,
+ * week 6: 300 entries strictly descending, 27.3 down to 0.0, each carrying the
+ * week's actual and projection; the top 200 held 29 QB, 40 RB, 59 WR, 31 TE,
+ * 23 K, 18 D/ST). About 15 KB an entry, so the page keeps a compact copy.
+ */
+export async function fetchWeekLeaders(week, limit = 200) {
+  const filter = {
+    players: {
+      limit,
+      sortAppliedStatTotalForScoringPeriodId: { sortAsc: false, sortPriority: 1, value: Number(week) },
+    },
+  };
+  const data = await leagueRead(['kona_player_info'], { filter, scoringPeriodId: Number(week) });
+  return data?.players || [];
+}
+
+/**
  * ESPN'S OWN WORD ON AN INJURY, for the players asked — raw `players[]` entries.
  * Decode each with `parseInjuryDetails`.
  *
