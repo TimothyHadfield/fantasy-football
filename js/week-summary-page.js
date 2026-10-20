@@ -1,4 +1,7 @@
-// THE WEEK RECAP on the Summary page: gathers one finished week and draws it.
+// THE WEEK RECAP on the Home page: gathers one finished week and draws it.
+// (On Summary until 2026-10-19, when Tim looked for it on Home: "I don't see
+// pretty much anything in the home weekly recap section except injured players
+// and missed points".)
 //
 // Tim, 2026-10-19 (his words in full at the top of js/week-summary.js): "make
 // a weekly summary where you can choose which week it's summarizing … taking
@@ -17,8 +20,14 @@
 //              when he missed the next week; no status is claimed for him.
 //
 // The source (sample or live) follows the page's own Data source switch, read
-// off its buttons, so js/summary-page.js needs no change. The phone's synced
-// copy asks ESPN for nothing (rule 20): the recap then uses rosters only.
+// off its buttons, so the page's own module needs no change.
+//
+// THE PHONE'S SYNCED COPY asks ESPN for nothing (rule 20) and still fills every
+// block: it carries every week's rosters and wire, the byes, ESPN's injury
+// details and (from 2026-10-19) the NFL kickoffs. What it lacks is said in one
+// line: no transactions (the pickup is rebuilt from the rosters), and an older
+// copy without the wire or the kickoffs (rostered men only; a return date
+// shown as the date).
 
 import * as espn from './espn.js';
 import * as season from './season.js';
@@ -30,16 +39,13 @@ import { esc } from './summary-table.js';
 import {
   buildWeekSummary, completedWeeks, injurySnapshot, nextUnderWay,
 } from './week-summary.js';
+import { injuryRow, returnLabel, gainLabel, RETURN_TITLE, GAINS_TITLE } from './injury-gains.js';
 import { healthy } from './injury.js';
 
 const $ = (id) => document.getElementById(id);
 const f1 = (n) => (typeof n === 'number' && Number.isFinite(n) ? n.toFixed(1) : '—');
 const signed = (n) => (typeof n === 'number' && Number.isFinite(n) ? (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n).toFixed(1) : '—');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const day = (iso) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
-  return m ? `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}` : '';
-};
 const dayOf = (ms) => {
   const d = new Date(ms);
   return Number.isFinite(d.getTime()) ? `${MONTHS[d.getMonth()]} ${d.getDate()}` : '';
@@ -53,6 +59,8 @@ const DEMO_WEEK = 8;
 
 /** How many weeks after the picked one are read to count weeks missed. */
 const LATER_WEEKS = 5;
+/** The regular season's last week when the schedule does not say. */
+const LAST_WEEK = 14;
 
 const state = {
   source: null,
@@ -71,7 +79,7 @@ function sourceNow() {
 /** One ESPN player entry, cut to what the recap needs (and what is saved). */
 function compactLeader(entry, week) {
   const p = espn.parsePlayerWeek(entry, week);
-  return { playerId: p.playerId, name: p.name, position: p.position, projected: p.projected, actual: p.actual };
+  return { playerId: p.playerId, name: p.name, position: p.position, proTeamId: p.proTeamId ?? null, projected: p.projected, actual: p.actual };
 }
 
 async function loadLeague(source) {
@@ -81,15 +89,25 @@ async function loadLeague(source) {
       week: g.week, homeId: g.homeId, awayId: g.awayId,
       homeScore: g.homeActual, awayScore: g.awayActual, played: true,
     }));
-    return { demo: true, games, weeks: completedWeeks(games) };
+    return { demo: true, games, weeks: completedWeeks(games), last: Math.max(...L.games.map((g) => g.week)) };
   }
   const cfg = savedConfig();
   if (!cfg) return null;
   espn.configure({ leagueId: cfg.leagueId, season: cfg.season });
   const sched = await season.fetchSchedule({ settle: false });
-  const pro = await season.fetchProGames();
-  const cloud = !!(await season.cloudSource());
-  return { demo: false, cfg, cloud, pro, games: sched.games || [], weeks: completedWeeks(sched.games || [], pro) };
+  let down = null;
+  try { down = (typeof season.cloudSource === 'function' && (await season.cloudSource())) || null; } catch { down = null; }
+  // The NFL's games say when every game of a week is final. Not on the synced
+  // copy (rule 20): there ESPN's own "played" on every matchup decides alone,
+  // which ESPN sets only once the week is closed.
+  const pro = down ? null : await season.fetchProGames();
+  const games = sched.games || [];
+  const weeks = completedWeeks(games, pro);
+  const regular = (sched.weeks || []).map(Number).filter(Number.isFinite);
+  return {
+    demo: false, cfg, cloud: !!down, down, pro, games, weeks,
+    last: regular.length ? Math.max(...regular) : LAST_WEEK,
+  };
 }
 
 /** The demo week: its rosters carry a status per week, so the next week's is "after". */
@@ -102,10 +120,14 @@ function demoInputs(L, week) {
     later.push({ week: w, players: byId(generateDemoWeekRosters(w).teams) });
   }
   const all = (ts) => ts.flatMap((t) => t.players || []);
+  const poolOf = (w) => (w >= 1 && w <= L.last ? all(generateDemoWeekRosters(w).teams).concat(generateDemoFreeAgents(w)) : []);
   return {
     teams,
     pool: all(teams).concat(generateDemoFreeAgents(week)),
-    moves: [],
+    moves: null,
+    prevTeams: week > 1 ? generateDemoWeekRosters(week - 1).teams : null,
+    poolOf,
+    kickoffs: null,
     injury: {
       after: next ? injurySnapshot(all(next)) : null,
       before: injurySnapshot(all(teams)),
@@ -136,24 +158,56 @@ async function liveInputs(L, week) {
   for (let w = week + 1; w <= week + LATER_WEEKS && w <= latest + 1; w++) after.push(w);
   // The week after the latest finished one is always read too: it is the
   // newest roster read, so it carries today's statuses.
-  const asking = [...new Set([week, ...after, latest + 1])];
+  // The week before too: who was on a roster then is how a pickup is told
+  // apart when the week's transactions are not read (the synced copy).
+  const down = L.down;
+  // On the synced copy only the weeks it holds are asked for: a week it lacks
+  // would fall through to ESPN (rule 20).
+  const held = (shape) => new Set(((down && down.weeks && down.weeks[shape]) || []).map(Number));
+  const rosterWeeks = held('rosters');
+  const wireWeeks = held('wire');
+  const canRead = (w) => w >= 1 && (!cloud || rosterWeeks.has(w));
+  const asking = [...new Set([week - 1, week, ...after, latest + 1])].filter(canRead);
   const weekTeams = await season.fetchWeeksRosters(asking, { assumed: false });
   const teams = weekTeams.get(week) || [];
   if (!teams.length) throw new Error(`ESPN sent no rosters for week ${week}.`);
+  // Byes and kickoffs: the copy's own on the phone, else one public read each
+  // (the kickoffs ride the byes' payload, so they cost nothing more).
   let byes = null;
-  try { byes = await season.fetchByeWeeks(); } catch { byes = null; }
+  let kickoffs = null;
+  if (cloud) {
+    byes = down.byes && Object.keys(down.byes).length ? { ...down.byes } : null;
+    const k = down.schedule && down.schedule.proKickoffs;
+    kickoffs = k && typeof k === 'object' && Object.keys(k).length ? k : null;
+  } else {
+    try { byes = await season.fetchByeWeeks(); } catch { byes = null; }
+    try { kickoffs = typeof season.fetchProKickoffs === 'function' ? await season.fetchProKickoffs() : null; } catch { kickoffs = null; }
+    if (kickoffs && !Object.keys(kickoffs).length) kickoffs = null;
+  }
 
   const snap = store.readWeekSummary(cfg.leagueId, cfg.season, week);
   const snapPrev = week > 1 ? store.readWeekSummary(cfg.leagueId, cfg.season, week - 1) : null;
 
-  // The week's league-wide lines: the saved copy, else one ESPN read.
+  // THE WIRE of a week, kept for the visit: on the copy only a week it holds;
+  // on a laptop one read a week (js/season.js shares and stores it).
+  const wireMemo = new Map();
+  const wireOf = (w) => {
+    if (w < 1 || (cloud && !wireWeeks.has(w)) || typeof season.fetchWireWeek !== 'function') return Promise.resolve(null);
+    if (!wireMemo.has(w)) wireMemo.set(w, season.fetchWireWeek(w).then((x) => (Array.isArray(x) ? x : null), () => null));
+    return wireMemo.get(w);
+  };
+
+  // The week's league-wide lines: the saved copy, else one ESPN read for the
+  // top scorers; on the synced copy, that week's wire.
   let pool = snap && snap.pool ? snap.pool : null;
   if (!pool && !cloud) {
     try { pool = (await espn.fetchWeekLeaders(week)).map((e) => compactLeader(e, week)); } catch { pool = null; }
   }
-  let moves = [];
+  if (!pool && cloud) pool = await wireOf(week);
+  // The week's transactions. null = not read: the pickup is rebuilt from the rosters.
+  let moves = null;
   if (!cloud) {
-    try { moves = espn.parseTransactions(await espn.fetchTransactions(week)); } catch { moves = []; }
+    try { moves = espn.parseTransactions(await espn.fetchTransactions(week)); } catch { moves = null; }
   }
 
   // TODAY's statuses: the freshest roster read (the week after the latest
@@ -185,10 +239,28 @@ async function liveInputs(L, week) {
   }
   const saved = store.readWeekSummary(cfg.leagueId, cfg.season, week);
 
+  // UP WHILE OUT: everyone this page can see in the week and the few after it
+  // (rosters, the wire, the week's top scorers), for js/injury-gains.js.
+  const gainWeeks = [];
+  for (let w = week; w <= Math.min(week + 3, L.last); w++) gainWeeks.push(w);
+  const wires = new Map();
+  await Promise.all(gainWeeks.map(async (w) => { const x = await wireOf(w); if (x) wires.set(w, x); }));
+  const poolOf = (w) => {
+    const out = [];
+    for (const t of weekTeams.get(w) || []) out.push(...(t.players || []));
+    out.push(...(wires.get(w) || []));
+    if (w === week && pool) out.push(...pool);
+    return out;
+  };
+
   return {
     teams,
     pool,
     moves,
+    prevTeams: weekTeams.get(week - 1) || null,
+    poolOf,
+    kickoffs,
+    wireMissing: cloud && !wireWeeks.has(week),
     injury: {
       after: saved && saved.injuries ? saved.injuries : null,
       before: snapPrev && snapPrev.injuries ? snapPrev.injuries : null,
@@ -230,7 +302,23 @@ async function showWeek(week) {
   try {
     const inputs = L.demo ? demoInputs(L, week) : await liveInputs(L, week);
     if (token !== state.token) return;
-    const s = buildWeekSummary({ week, games: L.games, teams: inputs.teams, pool: inputs.pool, moves: inputs.moves, injury: inputs.injury });
+    const s = buildWeekSummary({
+      week, games: L.games, teams: inputs.teams, pool: inputs.pool,
+      moves: inputs.moves, prevTeams: inputs.prevTeams, injury: inputs.injury,
+    });
+    // Est. return and Up while out, per injured man (js/injury-gains.js).
+    s.injuries = s.injuries.map((i) => {
+      const back = i.back !== null && i.back !== undefined ? i.back
+        : i.outForSeason ? 'season' : undefined;
+      const details = i.outForSeason || i.returnDate ? { outForSeason: i.outForSeason, returnDate: i.returnDate } : null;
+      return {
+        ...i,
+        ...injuryRow({
+          hurt: i, from: week + 1, last: L.last, kickoffs: inputs.kickoffs,
+          byes: inputs.injury && inputs.injury.byes, poolOf: inputs.poolOf, details, back,
+        }),
+      };
+    });
     paint(s, inputs, L);
   } catch (err) {
     if (token !== state.token) return;
@@ -261,6 +349,13 @@ function paintPicker(weeks, pick = null) {
   sel.disabled = !weeks.length;
 }
 
+const posLabel = (p) => (p === 'DST' ? 'D/ST' : p || '');
+const returnText = (i) => esc(returnLabel(i));
+const gainsText = (gains) => (gains && gains.length
+  ? gains.map((g) => `${esc(g.name)} <span class="pos">${gainLabel(g)}</span>`).join('<br>')
+  : '<span class="muted">—</span>');
+const INJURY_HEAD = `<th class="name">Player</th><th class="txt" title="${esc(RETURN_TITLE)}">Est. return</th>` +
+  `<th class="txt" title="${esc(GAINS_TITLE)}">Up while out</th>`;
 const table = (head, rows, cls = '') =>
   `<div class="table-scroll"><table class="recap-table ${cls}"><thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 const block = (title, inner, id, cls = '') => `<div class="recap-block ${cls}" id="${id}"><h3>${title}</h3>${inner}</div>`;
@@ -282,7 +377,8 @@ function paint(s, inputs, L) {
     ['League avg', F.avg === null ? '—' : `${f1(F.avg)}${F.avgProj === null ? '' : ` (proj ${f1(F.avgProj)})`}`],
     ['Upsets', String(F.upsets)],
     ['Best bench', s.bench ? `${who(s.bench)} ${f1(s.bench.actual)} · ${esc(s.bench.owner)}` : '—'],
-    ['Best pickup', s.pickup ? `${who(s.pickup)} ${f1(s.pickup.actual)} · ${esc(s.pickup.owner)}` : '—'],
+    ['Best pickup', s.pickup ? `${who(s.pickup)} ${f1(s.pickup.actual)} · ${esc(s.pickup.owner)}`
+      : s.pickupFrom ? 'None started' : '<span class="muted">Not known</span>'],
   ].map(([k, v]) => `<tr><th scope="row" class="name">${k}</th><td class="txt">${v}</td></tr>`);
 
   const games = F.games.map((g) => `<tr${g.upset ? ' class="upset"' : ''}>
@@ -309,34 +405,26 @@ function paint(s, inputs, L) {
     <td class="name">${r.top ? `${who(r.top)} <span class="muted">${f1(r.top.actual)}</span>` : '—'}</td>
     <td title="Average of the top ${r.depth}">${f1(r.topAvg)}</td><td>${f1(r.startAvg)}</td><td class="muted">${f1(r.startProj)}</td></tr>`);
 
-  const outFor = (i) => {
-    if (i.outForSeason) return 'Season';
-    if (i.back) return `Missed ${i.missed}`;
-    if (i.stillOut && i.returnDate) return `Back ~${day(i.returnDate)}`;
-    if (i.returnDate && i.source === 'snapshot') return `Back ~${day(i.returnDate)}`;
-    if (i.missed) return `${i.missed}+ wk`;
-    return '—';
-  };
   const injuries = s.injuries.map((i) => `<tr${i.source === 'reconstructed' ? ' class="rebuilt"' : ''}>
-    <td class="name">${who(i)}</td><td class="txt">${esc(i.owner || '')}</td>
-    <td class="txt">${i.label ? esc(i.label) : `<span class="muted" title="Rebuilt: missed week ${s.week + 1}">Missed</span>`}</td>
-    <td class="txt">${i.type ? esc(i.type) : '—'}</td><td class="txt">${outFor(i)}</td></tr>`);
+    <td class="name" title="${esc([i.owner, i.label || `Missed week ${s.week + 1}`, i.type].filter(Boolean).join(' · '))}">${who(i)} <span class="muted">${esc(posLabel(i.position))}</span></td>
+    <td class="txt">${returnText(i)}</td><td class="txt gains">${gainsText(i.gains)}</td></tr>`);
 
+  // A block is never left blank: an empty one says why in one line.
+  const or = (rows, cols, why) => (rows.length ? rows : none(cols, why));
   $('recapBody').innerHTML = [
     block('The week', table('<th class="name">Fact</th><th class="txt">Who</th>', facts, 'recap-facts'), 'recapFacts'),
-    block('Results', table('<th class="name">Winner</th><th>Pts</th><th class="txt">Loser</th><th>Pts</th><th title="Projected before kickoff, winner–loser">Proj</th>', games), 'recapGames'),
-    block('Standings', table('<th>#</th><th class="name">Manager</th><th>Record</th><th title="Places moved this week">Move</th><th>PF</th>', standings), 'recapStandings'),
-    block('Missed points', table('<th class="name">Manager</th><th>Pts</th><th title="Best lineup by ESPN\'s projections, minus what you scored">Reasonable</th><th title="Best possible lineup, minus what you scored">Perfect</th>', missed), 'recapMissed'),
+    block('Results', table('<th class="name">Winner</th><th>Pts</th><th class="txt">Loser</th><th>Pts</th><th title="Projected before kickoff, winner–loser">Proj</th>', or(games, 5, 'ESPN has no results for this week.')), 'recapGames'),
+    block('Standings', table('<th>#</th><th class="name">Manager</th><th>Record</th><th title="Places moved this week">Move</th><th>PF</th>', or(standings, 5, 'No standings yet.')), 'recapStandings'),
+    block('Missed points', table('<th class="name">Manager</th><th>Pts</th><th title="Best lineup by ESPN\'s projections, minus what you scored">Reasonable</th><th title="Best possible lineup, minus what you scored">Perfect</th>', or(missed, 4, 'No lineups for this week.')), 'recapMissed'),
     block('Booms', table(pHead, s.booms.length ? playerRows(s.booms) : none(6, 'None')), 'recapBooms'),
     block('Busts', table(pHead, s.busts.length ? playerRows(s.busts) : none(6, 'None')), 'recapBusts'),
-    block('Positions', table('<th class="txt">Pos</th><th class="name">Top scorer</th><th title="Average of the top scorers league-wide">Top avg</th><th title="This league\'s starters">Started</th><th title="What ESPN projected those starters">Proj</th>', positions), 'recapPositions'),
-    block('New injuries', table('<th class="name">Player</th><th class="txt">Owner</th><th class="txt">Status</th><th class="txt">Injury</th><th class="txt">Out</th>', injuries.length ? injuries : none(5, 'None')), 'recapInjuries'),
+    block('Positions', table('<th class="txt">Pos</th><th class="name">Top scorer</th><th title="Average of the top scorers league-wide">Top avg</th><th title="This league\'s starters">Started</th><th title="What ESPN projected those starters">Proj</th>', or(positions, 5, 'No scores for this week.')), 'recapPositions'),
+    block('New injuries', table(INJURY_HEAD, injuries.length ? injuries : none(3, 'Nobody new was hurt.')), 'recapInjuries'),
   ].join('');
 
   const bits = [];
   if (L.demo) { /* the Demo badge already says so */ }
-  else if (inputs.cloud) bits.push('Phone copy: rostered players only.');
-  else if (!inputs.pool) bits.push('League-wide players not read: rostered only.');
+  else if (!inputs.pool) bits.push(inputs.cloud ? 'Phone copy has no free agents for this week: rostered players only.' : 'League-wide players not read: rostered only.');
   if (!L.demo && inputs.savedAt) bits.push(`Injuries as saved ${dayOf(inputs.savedAt)}.`);
   status(bits.join(' '));
   paintNote(s, inputs, L);
@@ -351,7 +439,9 @@ function paintNote(s, inputs, L) {
     'Missed points: <b>Reasonable</b> is the best legal lineup by ESPN\'s projections, scored by what those men scored, minus your score; below zero means your calls beat the projections. <b>Perfect</b> is the best lineup possible from what everyone scored. IR slots are left out. Hover or tap a figure for the swaps.',
     `Booms and busts: points against projection, for rostered men and free agents projected ${5}+ or scoring 15+. A bust was projected 5+.`,
     'Positions: Top avg is the average of the top scorers league-wide — as many as teams at QB, TE, K and D/ST, twice that at RB and WR. Started is this league\'s starters.',
-    'Injuries: ESPN keeps no injury history. The latest finished week\'s statuses are saved on this device and used from then on. A week with no saved copy is rebuilt: a man who played and then missed the next week, with his status unknown. "Out" is ESPN\'s expected return or season-ending flag, or the weeks he actually missed; nothing else is guessed.',
+    'Injuries: ESPN keeps no injury history. The latest finished week’s statuses are saved on this device and used from then on. A week with no saved copy is rebuilt: a man who played and then missed the next week. Hover or tap a name for his owner, status and injury.',
+    '<b>Est. return</b> is the week he played again, ESPN’s season-ending flag, or ESPN’s expected return date placed in the first week his NFL team plays on or after it (the date itself when the NFL schedule is not held). Nothing else is guessed.',
+    '<b>Up while out</b>: teammates at his position (same NFL team) whose ESPN projection for the weeks he is out, up to three, averages at least 0.5 a week above their projection in the week he was hurt. Both are ESPN’s numbers; that the rise is because of him is a reading, not a measurement.',
   ].map((t) => `<p>${t}</p>`).join('');
 }
 

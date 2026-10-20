@@ -313,6 +313,8 @@ export function newInjuries({ played, after = null, before = null, current = nul
       playerId: p.playerId,
       name: p.name,
       position: p.position,
+      proTeamId: p.proTeamId ?? null,
+      proTeam: p.proTeam ?? null,
       owner: p.owner,
       status,                                   // null when reconstructed
       label: status ? injuryLabel(status) : null,
@@ -417,9 +419,11 @@ export function matchupFacts(games, proj, nameOf) {
  * @param {Array} o.teams the week's rosters (js/season.js `fetchWeekRosters().teams` shape)
  * @param {Array|null} o.pool every player ESPN listed for the week, `{playerId, name, position, projected, actual}`; null = rosters only
  * @param {Array} [o.moves] the week's transactions (js/espn.js `parseTransactions`)
+ *   — null when they were not read (the synced copy): pickups come from `prevTeams`
+ * @param {Array|null} [o.prevTeams] the week before's rosters
  * @param {Object} [o.injury] `newInjuries` inputs other than `played`
  */
-export function buildWeekSummary({ week, games, teams, pool = null, moves = [], injury = {} }) {
+export function buildWeekSummary({ week, games, teams, pool = null, moves = [], prevTeams = null, injury = {} }) {
   const nameById = new Map((teams || []).map((t) => [t.id, t.name]));
   const nameOf = (id) => nameById.get(id) || `Team ${id}`;
   const slots = slotsOf(teams);
@@ -457,19 +461,47 @@ export function buildWeekSummary({ week, games, teams, pool = null, moves = [], 
   // The best man left on a bench, and the best pickup of the week who started.
   const benched = rostered.filter((p) => !p.started && p.lineupSlotId !== IR_SLOT && num(p.actual));
   const bench = benched.length ? benched.reduce((a, p) => (p.actual > a.actual ? p : a)) : null;
-  let pickup = null;
-  for (const m of moves || []) {
-    if (!m || !Array.isArray(m.adds)) continue;
-    for (const id of m.adds) {
-      const t = ownerOf.get(String(id));
-      if (!t || t.id !== m.teamId) continue;
-      const p = (t.players || []).find((q) => String(q.playerId) === String(id));
-      if (!p || !p.started || !num(p.actual)) continue;
-      if (!pickup || p.actual > pickup.actual) pickup = { ...p, owner: t.name };
-    }
-  }
+  const { pickup, pickupFrom } = bestPickup(teams, ownerOf, moves, prevTeams);
 
   const injuries = newInjuries({ ...injury, played: rostered });
 
-  return { week, facts, standings, missed, booms, busts, positions, injuries, bench, pickup, slots };
+  return { week, facts, standings, missed, booms, busts, positions, injuries, bench, pickup, pickupFrom, slots };
+}
+
+/**
+ * The best pickup of the week who started, and where that came from.
+ *
+ * `moves` (the week's transactions) decide when they were read. Without them —
+ * the phone's synced copy carries none — the pickups are the started men on NO
+ * roster the week before (`prevTeams`): exact for a free-agent or waiver claim,
+ * and a man who came by trade (on another roster) is not one. Neither known:
+ * `pickupFrom` null, and the page says it cannot tell rather than leaving a blank.
+ */
+function bestPickup(teams, ownerOf, moves, prevTeams) {
+  let adds = null;
+  let from = null;
+  if (Array.isArray(moves)) {
+    adds = [];
+    for (const m of moves) {
+      if (m && Array.isArray(m.adds)) for (const id of m.adds) adds.push({ id: String(id), teamId: m.teamId });
+    }
+    from = 'moves';
+  } else if (Array.isArray(prevTeams) && prevTeams.length) {
+    const before = new Set();
+    for (const t of prevTeams) for (const p of (t && t.players) || []) if (p) before.add(String(p.playerId));
+    adds = [];
+    for (const t of teams || []) {
+      for (const p of t.players || []) if (p && !before.has(String(p.playerId))) adds.push({ id: String(p.playerId), teamId: t.id });
+    }
+    from = 'rosters';
+  }
+  let pickup = null;
+  for (const { id, teamId } of adds || []) {
+    const t = ownerOf.get(id);
+    if (!t || t.id !== teamId) continue;
+    const p = (t.players || []).find((q) => String(q.playerId) === id);
+    if (!p || !p.started || !num(p.actual)) continue;
+    if (!pickup || p.actual > pickup.actual) pickup = { ...p, owner: t.name };
+  }
+  return { pickup, pickupFrom: from };
 }

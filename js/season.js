@@ -2152,7 +2152,9 @@ export async function fetchByeWeeks() {
   entry.promise = (async () => {
     try {
       const down = await cloudDown();
-      if (down && down.byes && Object.keys(down.byes).length) return { ...down.byes };
+      // On the synced copy its byes or none: never ESPN (rule 20). A copy
+      // without them used to fall through here once a week was held locally.
+      if (down) return down.byes && Object.keys(down.byes).length ? { ...down.byes } : {};
       const byes = await espn.fetchByeWeeks();
       return byes && typeof byes === 'object' ? byes : {};
     } catch {
@@ -2896,6 +2898,21 @@ export async function buildCloudPayload({ onProgress } = {}) {
   if (injury || 'injuryDetails' in payload.schedule) {
     const { injuryDetails: oldInjury, ...rest } = payload.schedule;
     payload.schedule = injury ? { ...rest, injuryDetails: injury } : rest;
+  }
+
+  // THE NFL'S KICKOFFS ride the schedule as `proKickoffs` (2026-10-19), so the
+  // phone's injury report and week recap can place ESPN's expected return date
+  // in a week with no request of their own (rule 20). About 6 KB for 32 teams;
+  // the same payload as the byes, so it costs the sync nothing. Never last
+  // sync's: taken off first. Absent when the NFL schedule would not answer.
+  let kick = null;
+  try {
+    const k = await fetchProKickoffs();
+    kick = k && typeof k === 'object' && Object.keys(k).length ? k : null;
+  } catch { /* nothing of it goes up this time */ }
+  if (kick || 'proKickoffs' in payload.schedule) {
+    const { proKickoffs: oldKick, ...rest } = payload.schedule;
+    payload.schedule = kick ? { ...rest, proKickoffs: kick } : rest;
   }
   return payload;
 }

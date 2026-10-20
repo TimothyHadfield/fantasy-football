@@ -721,11 +721,14 @@ if (booted(home, 'home')) {
 
   // -- injuries --
   const inj = (run, who) => (run.injuries.find((r) => r[0].startsWith(who)) || []);
-  ok('INJURIES: a finished starter’s Proj is his pre-game 20.0, not the 22.0 he scored',
-    inj(home.part, 'QB Cobras')[4] === '20.0', inj(home.part, 'QB Cobras'));
-  ok('a starter still playing keeps ESPN’s projection', inj(home.part, 'RB Dingoes')[4] === '15.0', inj(home.part, 'RB Dingoes'));
-  ok('switch off: the same two rows with the same projections, and last week’s bench report',
-    inj(home.plain, 'QB Cobras')[4] === '20.0' && inj(home.plain, 'RB Dingoes')[4] === '15.0' &&
+  // The Proj column went with Tim's new injury columns (2026-10-19): Player |
+  // Est. return | Up while out. A finished starter and one still playing are
+  // both listed, three cells each.
+  ok('INJURIES: a finished starter is still listed, in the three columns',
+    inj(home.part, 'QB Cobras').length === 3, inj(home.part, 'QB Cobras'));
+  ok('a starter still playing is listed too', inj(home.part, 'RB Dingoes').length === 3, inj(home.part, 'RB Dingoes'));
+  ok('switch off: the same two rows, and last week’s bench report',
+    inj(home.plain, 'QB Cobras').length === 3 && inj(home.plain, 'RB Dingoes').length === 3 &&
     home.plain.benchWeek === 1 && home.plain.bench.length === 6, home.plain.injuries);
 }
 

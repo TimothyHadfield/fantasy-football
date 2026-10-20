@@ -89,36 +89,6 @@
   #summaryTable td.name, #summaryTable th.name { max-width: 0; width: 100%; }
 }
 
-/* ------------------------------------------------------- the week recap
-   Small tables side by side (two across on a laptop, one on a phone),
-   each under a small heading. A table wider than its column scrolls sideways
-   inside it, like every wide table on the site. */
-#recapBody {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr));
-  gap: 14px 22px;
-  margin-top: 10px;
-}
-#recapBody > * { min-width: 0; }
-#recapBody .table-scroll { margin: 0; padding: 0; max-height: none; }
-.recap-block h3 {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--dim); font-weight: 600; margin: 0 0 4px;
-}
-.recap-table th, .recap-table td { padding: 4px 7px; }
-.recap-table td.txt, .recap-table th.txt { text-align: left; }
-.recap-table td.name { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
-.recap-table.recap-facts td.txt { white-space: normal; }
-.recap-table .tag {
-  font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--warn, #d9a441); margin-left: 4px;
-}
-.recap-table td.d-up { color: var(--accent); }
-.recap-table td.d-down { color: var(--err); }
-.recap-table td.d-zero { color: var(--dim); }
-.recap-table tr.rebuilt td.name { font-style: italic; }
-#recapStatus:empty { display: none; }
-
 /* ------------------------------------------------------- reading aids
    A note split into short paragraphs is a div of <p>s. */
 div.panel-note > p { margin: 0 0 8px; }
@@ -175,22 +145,6 @@ div.panel-note > p:last-child { margin-bottom: 0; }
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
-  <section class="panel" id="recapPanel">
-    <h2>Week recap</h2>
-    <p class="lede">Finished weeks.</p>
-    <div class="row">
-      <div class="form-select">
-        <label for="recapWeek">Week</label>
-        <select id="recapWeek"></select>
-      </div>
-    </div>
-    <p class="panel-note" id="recapStatus"></p>
-    <div id="recapBody"></div>
-    <details class="explain">
-      <summary>How the recap works</summary>
-      <div class="panel-note" id="recapNote"></div>
-    </details>
-  </section>
 
   <section class="panel">
     <h2>The chart</h2>
@@ -256,7 +210,6 @@ div.panel-note > p:last-child { margin-bottom: 0; }
 </div>
 
 <script type="module" src="js/summary-page.js"></script>
-<script type="module" src="js/week-summary-page.js"></script>
 <script type="module" src="js/connection.js"></script>
 <!-- A title attribute draws nothing on iOS, and this page puts its column
      definitions in them. One tag, no page-module changes: js/touch-titles.js. -->

@@ -499,18 +499,23 @@ if (process.argv[2]) {
       facts.demoBoxLinks = document.querySelectorAll('#matchups a.gbox').length;
       if (facts.demoBoxLinks) problems.push(`demo: ${facts.demoBoxLinks} ESPN box score link(s) on the sample league`);
 
-      // The injury report's "Last" on the page as it boots: the sample league
-      // opens on its final week, and the week before it is in hand (generated),
-      // so the column carries scores without anything being asked for.
+      // The injury report as it boots (Tim, 2026-10-19: "instead of showing the
+      // user last name, slot, proj, status, and act, show the est return week,
+      // and on the right side any players that have their proj increase while
+      // they're gone"): three columns, every row with a return cell.
       {
-        const lastCol = Array.from(document.querySelectorAll('#injuries tbody tr'))
-          .map((r) => (r.children[5]?.textContent || '').trim());
-        facts.demoLast = lastCol.slice(0, 4).join(' ');
-        const lastHead = (document.querySelectorAll('#injuryTable thead th')[5]?.textContent || '').trim();
-        if (lastHead !== 'Last') problems.push(`demo: the injury table's sixth heading is "${lastHead}", expected Last`);
-        if (!lastCol.length) problems.push('demo: no injured starters, so the Last column is not exercised');
-        else if (!lastCol.some((t) => /^\d+\.\d$/.test(t))) {
-          problems.push(`demo: no injured starter shows a score under Last — ${JSON.stringify(lastCol)}`);
+        const heads = Array.from(document.querySelectorAll('#injuryTable thead th')).map((h) => h.textContent.trim());
+        facts.demoInjuryHeads = heads.join('|');
+        if (heads.join('|') !== 'Player|Est. return|Up while out') {
+          problems.push(`demo: the injury table's headings are ${JSON.stringify(heads)}, expected Player | Est. return | Up while out`);
+        }
+        const rows = Array.from(document.querySelectorAll('#injuries tbody tr'));
+        if (!rows.length) problems.push('demo: no injured starters, so the injury columns are not exercised');
+        for (const r of rows) {
+          const ret = (r.children[1]?.textContent || '').trim();
+          if (r.children.length !== 3 || !/^(Season|Wk \d+|~\w{3} \d+|—)$/.test(ret)) {
+            problems.push(`demo: injury row "${(r.children[0]?.textContent || '').trim()}" has ${r.children.length} cells, return "${ret}"`);
+          }
         }
       }
 
@@ -719,7 +724,8 @@ if (process.argv[2]) {
         // calling the page's own helper.
         const short = (name) => name.replace(/^(\S)\S*\s+/, '$1. ');
 
-        // (1) The injury table: the name and the projection, both his.
+        // (1) The injury table: his name is the one link (the Proj column it
+        // shared with went, Tim 2026-10-19).
         const injured = [];
         for (const t of fx.rosters.teams) {
           for (const p of t.starters) if (p.injuryStatus !== 'ACTIVE') injured.push(p);
@@ -727,8 +733,8 @@ if (process.argv[2]) {
 
         const injuryLinks = Array.from(document.querySelectorAll('#injuries a.pref'));
         facts.injuryLinks = injuryLinks.length;
-        if (injuryLinks.length !== injured.length * 2) {
-          problems.push(`pref: ${injuryLinks.length} links in the injury table, expected ${injured.length * 2} (name + Proj on ${injured.length} rows)`);
+        if (injuryLinks.length !== injured.length) {
+          problems.push(`pref: ${injuryLinks.length} links in the injury table, expected ${injured.length} (the name on ${injured.length} rows)`);
         }
         for (const a of injuryLinks) {
           const href = a.getAttribute('href');
@@ -744,22 +750,12 @@ if (process.argv[2]) {
           if (cellText(c[0]) !== `${p.name} ${p.position}`) {
             problems.push(`pref: linking changed the name cell to "${cellText(c[0])}", expected "${p.name} ${p.position}"`);
           }
-          if (stripMark(cellText(c[4])) !== p.projected.toFixed(1)) {
-            problems.push(`pref: linking changed ${p.name}'s Proj cell to "${cellText(c[4])}"`);
-          }
-          if (c[4].getAttribute('data-v') !== String(p.projected)) {
-            problems.push(`pref: ${p.name}'s Proj cell lost its data-v; sortable.js reads that, not the text`);
-          }
+          if (c.length !== 3) problems.push(`pref: ${p.name}'s row has ${c.length} cells, expected Player | Est. return | Up while out`);
 
           const nameA = c[0].querySelector('a.pref');
-          const projA = c[4].querySelector('a.pref');
           if (!nameA) { problems.push(`pref: ${p.name} is not a link`); continue; }
           if (nameA.getAttribute('href') !== hrefOf(p)) {
             problems.push(`pref: ${p.name} links to "${nameA.getAttribute('href')}", expected "${hrefOf(p)}"`);
-          }
-          if (!projA) problems.push(`pref: ${p.name}'s projection is not a link`);
-          else if (projA.getAttribute('href') !== nameA.getAttribute('href')) {
-            problems.push(`pref: ${p.name}'s name and projection point at different players`);
           }
 
           // The name opens the classic player card (Tim, 2026-10-08: "a bad
@@ -771,11 +767,9 @@ if (process.argv[2]) {
           const says = nameA.getAttribute('aria-label') || '';
           if (!says.includes(p.name) || !/Players page/.test(says)) problems.push(`pref: ${p.name}'s link does not say where it goes: "${says}"`);
 
-          // The "Fantasy team" column is a manager, not a player.
-          if (c[2].querySelector('a')) problems.push('pref: the injury table linked a fantasy team name');
           // The two name columns are the ones that give way on a phone.
           if (!/\bwrap\b/.test(clsOf(c[0])) || !/\bwrap\b/.test(clsOf(c[2]))) {
-            problems.push(`fit: ${p.name}'s player and team cells are not the wrapping ones ("${clsOf(c[0])}", "${clsOf(c[2])}")`);
+            problems.push(`fit: ${p.name}'s player and Up while out cells are not the wrapping ones ("${clsOf(c[0])}", "${clsOf(c[2])}")`);
           }
         }
 
@@ -875,42 +869,14 @@ if (process.argv[2]) {
             }
           }
 
-          // (4) THE INJURY COLOURS ARE BY POSITION. The lowest-projected
-          // starting quarterback (18.0) is red though he out-projects every
-          // RB and WR on the page — pooled, he would be the greenest cell in
-          // the column. A ruled-out 0.0 is no projection and stays plain.
+          // (4) The injury report's shaded Proj column went with Tim's new
+          // columns (2026-10-19): nothing on it is shaded now.
           {
             const fx4 = preKickoff();
             fx4.rosters.teams[0].starters[0].injuryStatus = 'QUESTIONABLE';
-            Object.assign(fx4.rosters.teams[4].starters[2], { projected: 0 });
             home.render(home.buildModel(fx4));
-            const cellOf = (name) => rowsOf('#injuries')
-              .find((r) => cellText(r.children[0]).startsWith(name))?.children[4];
-            const qb = cellOf('QB Aardvarks');
-            const top = cellOf('RB Jackals');
-            const low = cellOf('RB Aardvarks');
-            const out = cellOf('WR Egrets');
-            facts.injurySides = [qb, top, low, out].map(heatSide).join(',');
-            if (heatSide(qb) !== 'dn') problems.push(`heat: the lowest starting QB (18.0) is "${heatSide(qb)}" — the injury Proj column is not shaded by position`);
-            if (heatSide(top) !== 'up' || heatSide(low) !== 'dn') {
-              problems.push(`heat: the best and worst starting RBs read "${heatSide(top)}" and "${heatSide(low)}", expected up and dn`);
-            }
-            if (!out || heatSide(out) || stripMark(cellText(out)) !== '0.0') {
-              problems.push(`heat: a ruled-out 0.0 reads "${out && cellText(out)}" with colour "${heatSide(out)}", expected a plain 0.0`);
-            }
-            // The shaded cell's card: his number, the starters' average at his
-            // position, and where he stands among them.
-            const rbs = fx4.rosters.teams.map((t) => t.starters[1].projected);
-            const avg = (rbs.reduce((a, b) => a + b, 0) / rbs.length).toFixed(1);
-            const t = card(top);
-            facts.injuryStanding = t;
-            if (!t.startsWith('RB Jackals · RB · week 1') || !t.includes(`Projected13.8Avg of starting RBs${avg}`) ||
-                !/Highest of 10 starting RBs$/.test(t)) {
-              problems.push(`card: a shaded projection's card reads "${t}"`);
-            }
-            if (goes(top) !== hrefOf(fx4.rosters.teams[9].starters[1])) {
-              problems.push(`card: a shaded projection's card goes to "${goes(top)}"`);
-            }
+            const shaded = rowsOf('#injuries').filter((r) => Array.from(r.children).some((td) => heatSide(td)));
+            if (shaded.length) problems.push(`heat: ${shaded.length} injury rows still carry a shaded cell`);
             home.render(model);
           }
 
@@ -1023,7 +989,7 @@ if (process.argv[2]) {
               return !t || /\n/.test(t) || t.length > 90;
             }).map(cellText);
             facts.headTitles = heads.length - bad.length;
-            if (heads.length !== 11 || bad.length) problems.push(`card: headings without a one-line title: ${JSON.stringify(bad)} of ${heads.length}`);
+            if (heads.length !== 8 || bad.length) problems.push(`card: headings without a one-line title: ${JSON.stringify(bad)} of ${heads.length}`);
             const words = [
               ...seen,
               ...all('[title]').map((el) => el.getAttribute('title')),
@@ -1167,15 +1133,14 @@ if (process.argv[2]) {
         }
 
         facts.noIdInjuryLinks = document.querySelectorAll('#injuries a.pref').length;
-        if (facts.noIdInjuryLinks !== (injured.length - 1) * 2) {
-          problems.push(`pref: ${facts.noIdInjuryLinks} injury links with one id missing, expected ${(injured.length - 1) * 2}`);
+        if (facts.noIdInjuryLinks !== injured.length - 1) {
+          problems.push(`pref: ${facts.noIdInjuryLinks} injury links with one id missing, expected ${injured.length - 1}`);
         }
         const lame = n0.starters[1];
         const lameRow = rowsOf('#injuries').find((r) => cellText(r.children[0]).startsWith(lame.name));
         if (!lameRow) problems.push('pref: the id-less injured starter vanished from the table');
         else {
           if (lameRow.children[0].querySelector('a')) problems.push('pref: linked a player carrying no id');
-          if (lameRow.children[4].querySelector('a')) problems.push('pref: linked the projection of a player carrying no id');
           if (cellText(lameRow.children[0]) !== `${lame.name} ${lame.position}`) {
             problems.push(`pref: an unlinked name cell reads "${cellText(lameRow.children[0])}", expected "${lame.name} ${lame.position}"`);
           }
@@ -1258,58 +1223,60 @@ if (process.argv[2]) {
           }
           const heads = Array.from(document.querySelectorAll('#injuryTable thead th')).map(cellText);
           facts.injuryHeads = heads.join('|');
-          if (heads.join('|') !== 'Player|Status|Fantasy team|Slot|Proj|Last') {
-            problems.push(`last: the injury table's headings are ${JSON.stringify(heads)}`);
+          if (heads.join('|') !== 'Player|Est. return|Up while out') {
+            problems.push(`return: the injury table's headings are ${JSON.stringify(heads)}`);
           }
-
-          const scoreIn1 = new Map();
-          for (const t of lastTeams) for (const p of t.players) scoreIn1.set(p.playerId, p.actual);
-          const lastSeen = {};
+          // Nothing read for the two columns: every row says so with a dash.
           for (const row of rowsOf('#injuries')) {
             const c = Array.from(row.children);
-            const p = injured.find((x) => cellText(c[0]).startsWith(x.name));
-            if (!p || c.length !== 6) { problems.push(`last: unrecognised injury row "${cellText(c[0])}" (${c.length} cells)`); continue; }
-            const want = scoreIn1.get(p.playerId);
-            lastSeen[p.playerId] = stripMark(cellText(c[5]));
-            if (p.playerId === blankId) {
-              if (cellText(c[5]) !== '—' || c[5].hasAttribute('data-v') || c[5].querySelector('a')) {
-                problems.push(`last: a man ESPN gave no score reads "${cellText(c[5])}" (data-v ${c[5].getAttribute('data-v')}), expected a plain dash`);
-              }
-              continue;
+            if (c.length !== 3 || cellText(c[1]) !== '—' || cellText(c[2]) !== '—') {
+              problems.push(`return: with nothing read, "${cellText(c[0])}" reads ${JSON.stringify(c.map(cellText))}`);
             }
-            if (stripMark(cellText(c[5])) !== want.toFixed(1)) {
-              problems.push(`last: ${p.name} reads "${cellText(c[5])}", expected his week 1 score ${want.toFixed(1)}`);
-            }
-            if (c[5].getAttribute('data-v') !== String(want)) {
-              problems.push(`last: ${p.name}'s Last cell has data-v ${c[5].getAttribute('data-v')}, expected ${want}`);
-            }
-            const a = c[5].querySelector('a.pref');
-            if (!a || a.getAttribute('href') !== hrefOf(p)) {
-              problems.push(`last: ${p.name}'s Last is not a link to him ("${a && a.getAttribute('href')}")`);
-            }
-            // Proj is still this week's projection, untouched by the new column.
-            if (stripMark(cellText(c[4])) !== p.projected.toFixed(1)) {
-              problems.push(`last: ${p.name}'s Proj cell now reads "${cellText(c[4])}"`);
-            }
-          }
-          facts.lastCells = Object.keys(lastSeen).length;
-          if (facts.lastCells !== injured.length) {
-            problems.push(`last: ${facts.lastCells} injury rows carried a Last cell, expected ${injured.length}`);
-          }
-          if (lastSeen[movedId] !== '31.4') {
-            problems.push(`last: a man who was on another squad's bench reads "${lastSeen[movedId]}", expected 31.4`);
-          }
-          if (!/Last is what he scored in week 1\b/.test(text('injuryNote'))) {
-            problems.push(`last: the injury note does not say which week Last is: "${text('injuryNote').slice(-140)}"`);
           }
 
-          // No week finished: the column is there and every cell is a dash.
-          home.render(home.buildModel(preKickoff()));
-          const none = rowsOf('#injuries').map((r) => r.children[5]);
-          if (none.length !== injured.length || !none.every((td) => td && cellText(td) === '—' && !td.hasAttribute('data-v'))) {
-            problems.push(`last: with no finished week the column reads ${JSON.stringify(none.map((td) => td && cellText(td)))}`);
+          // (b) EST. RETURN AND UP WHILE OUT (Tim, 2026-10-19). Week 2 on
+          // screen; the Aardvarks' RB is OUT, ESPN says back Oct 25, and his
+          // NFL team (99) plays weeks 2, 3 and then 4 on Oct 25: so week 4,
+          // out weeks 2 and 3. His backup was projected 4.0 in week 1 (the
+          // last week he played) and 10.0 and 12.0 in weeks 2 and 3: +7.0/wk.
+          // Another back on team 99 projected 0 in week 1 is not listed.
+          {
+            const nowB = preKickoff().rosters;
+            const lastB = finishedWeek().rosters.teams.map((t) => ({ ...t, starters: t.starters.slice(), bench: t.bench.slice() }));
+            const hurt = nowB.teams[0].starters[1];
+            Object.assign(hurt, { injuryStatus: 'OUT', projected: 0, proTeamId: 99,
+              injuryDetails: { outForSeason: false, returnDate: '2026-10-25', type: 'Ankle' } });
+            lastB[0].starters[1] = { ...lastB[0].starters[1], proTeamId: 99, injuryStatus: 'ACTIVE' };
+            for (const t of lastB) t.players = [...t.starters, ...t.bench];
+            const at = (m, d) => new Date(2026, m - 1, d, 13).getTime();
+            const bob = (projected) => ({ playerId: 9001, name: 'Backup Bob', position: 'RB', proTeamId: 99, projected });
+            const idle = (projected) => ({ playerId: 9002, name: 'Idle Ike', position: 'RB', proTeamId: 99, projected });
+            const injury = {
+              teams: new Map(), byes: null,
+              kickoffs: { 99: { 1: at(10, 4), 2: at(10, 11), 3: at(10, 18), 4: at(10, 25) } },
+              wires: new Map([[1, [bob(4), idle(0)]], [2, [bob(10), idle(9)]], [3, [bob(12), idle(9)]]]),
+            };
+            home.render(home.buildModel({ ...wk2, rosters: { week: 2, teams: nowB.teams },
+              benchRosters: { week: 1, teams: lastB }, last: { week: 1, teams: lastB }, injury }));
+            const row = rowsOf('#injuries').find((r) => cellText(r.children[0]).startsWith(hurt.name));
+            const got = row ? Array.from(row.children).map(cellText) : null;
+            facts.injuryReturn = got;
+            if (!got || got[1] !== 'Wk 4' || got[2] !== 'Backup Bob +7.0/wk') {
+              problems.push(`return: the OUT back reads ${JSON.stringify(got)}, expected Wk 4 and "Backup Bob +7.0/wk"`);
+            }
+            for (const r of rowsOf('#injuries')) {
+              if (r !== row && cellText(r.children[2]) !== '—') problems.push(`return: "${cellText(r.children[0])}" lists ${cellText(r.children[2])}`);
+            }
+            if (!/Est\. return is ESPN/.test(text('injuryNote')) || !/Up while out/.test(text('injuryNote'))) {
+              problems.push(`return: the injury note does not say what the two columns are: "${text('injuryNote').slice(-200)}"`);
+            }
+            // Out for the season reads "Season", whatever the kickoffs.
+            hurt.injuryDetails = { outForSeason: true, returnDate: null };
+            home.render(home.buildModel({ ...wk2, rosters: { week: 2, teams: nowB.teams },
+              benchRosters: { week: 1, teams: lastB }, last: { week: 1, teams: lastB }, injury }));
+            const row2 = rowsOf('#injuries').find((r) => cellText(r.children[0]).startsWith(hurt.name));
+            if (!row2 || cellText(row2.children[1]) !== 'Season') problems.push(`return: out for the season reads "${row2 && cellText(row2.children[1])}"`);
           }
-          if (/Last is what/.test(text('injuryNote'))) problems.push('last: the note explains Last when no week is finished');
 
           // (c) ESPN's box score, one link a game. The league's id, the
           // game's week twice (matchup and scoring period) and the HOME

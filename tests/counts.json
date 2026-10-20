@@ -376,7 +376,10 @@
       "scenarios": 10
     },
     "test-week-summary.mjs": {
-      "assertions": 55
+      "assertions": 83
+    },
+    "recap-cloud-check.mjs": {
+      "assertions": 68
     }
   }
 }

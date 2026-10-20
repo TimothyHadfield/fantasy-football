@@ -265,5 +265,94 @@ const roster = () => [
   eq(s.pickup && s.pickup.name, 'Cy QB', 'best pickup who started');
 }
 
+// ------------------------------------------------- 5. the phone's synced copy
+// The copy carries every week's rosters and wire but NO transactions (Tim's
+// recap on the phone, 2026-10-19). The week's pickups are then the started men
+// on no roster the week before: exact for a free-agent or waiver pickup; a
+// trade (he was on another roster) is not a pickup.
+{
+  const games = [{ week: 2, homeId: 1, awayId: 2, homeScore: 100, awayScore: 90, played: true }];
+  const qbA = man('Ana QB', 'QB', 0, 18, 20);
+  const wrA = man('Ana WR pickup', 'WR', 4, 9, 24);           // on nobody's week-1 roster
+  const rbA = man('Ana RB traded', 'RB', 2, 12, 30);          // on Bo's week-1 roster
+  const qbB = man('Bo QB', 'QB', 0, 17, 15);
+  const teB = man('Bo TE pickup', 'TE', 6, 7, 11);            // a smaller pickup
+  const benchB = man('Bo bench pickup', 'RB', 20, 6, 40);     // benched: not "who started"
+  const week2 = [team(1, 'Ana', [qbA, wrA, rbA]), team(2, 'Bo', [qbB, teB, benchB])];
+  const week1 = [team(1, 'Ana', [{ ...qbA }]), team(2, 'Bo', [{ ...qbB }, { ...rbA }])];
+
+  const s = ws.buildWeekSummary({ week: 2, games, teams: week2, pool: null, moves: null, prevTeams: week1 });
+  eq(s.pickup && s.pickup.name, 'Ana WR pickup', 'synced copy: best pickup rebuilt from the rosters (no transactions)');
+  eq(s.pickupFrom, 'rosters', 'synced copy: the pickup says it came from the rosters');
+  const none = ws.buildWeekSummary({ week: 2, games, teams: week2, pool: null, moves: null, prevTeams: null });
+  eq(none.pickup, null, 'no transactions and no week before: no pickup is named');
+  eq(none.pickupFrom, null, 'and the summary says it cannot tell (the page prints a line, never a blank)');
+  const tx = ws.buildWeekSummary({ week: 2, games, teams: week2, pool: null, moves: [{ teamId: 2, adds: [teB.playerId] }], prevTeams: week1 });
+  eq(tx.pickup && tx.pickup.name, 'Bo TE pickup', 'transactions, when read, still decide');
+  eq(tx.pickupFrom, 'moves', 'and say so');
+
+  // A rebuilt injury row carries his NFL team, which Up while out needs.
+  const hurt = man('Hurt RB', 'RB', 2, 14, 8, { proTeamId: 21 });
+  const inj = ws.newInjuries({
+    played: [{ ...hurt, owner: 'Ana' }],
+    later: [{ week: 3, players: new Map([[String(hurt.playerId), { ...hurt, projected: 0, actual: 0 }]]) }],
+  });
+  eq(inj.length, 1, 'rebuilt injury found');
+  eq(inj[0] && inj[0].proTeamId, 21, 'the injury row carries his NFL team');
+}
+
+// ------------------------------------------- 6. est. return and up while out
+// Tim, 2026-10-19: "show the est return week, and on the right side any players
+// that have their proj increase while they're gone and by how much".
+{
+  const IG = process.env.IG_MODULE || path.join(REPO, 'js/injury-gains.js');
+  let ig = null;
+  try { ig = await import(pathToFileURL(IG).href); } catch (e) { ok(false, 'js/injury-gains.js loads', e.message); }
+  if (ig) {
+    // Kickoffs: team 21 plays Sundays 1pm local, weeks 6, 7, 9, 10 (bye in 8).
+    const at = (y, m, d, h = 13) => new Date(y, m - 1, d, h).getTime();
+    const kick = { 21: { 6: at(2026, 10, 18), 7: at(2026, 10, 25), 9: at(2026, 11, 8), 10: at(2026, 11, 15) } };
+    eq(ig.returnWeek({ outForSeason: true, returnDate: null }, kick, 21), 'season', 'out for the season');
+    eq(ig.returnWeek({ outForSeason: false, returnDate: '2026-10-25' }, kick, 21), 7, 'back Oct 25 = that Sunday, week 7');
+    eq(ig.returnWeek({ outForSeason: false, returnDate: '2026-10-28' }, kick, 21), 9, 'back Oct 28 = his next game, week 9 (8 is the bye)');
+    eq(ig.returnWeek({ outForSeason: false, returnDate: '2026-10-25' }, null, 21), null, 'no kickoffs: the week is not guessed');
+    eq(ig.returnWeek(null, kick, 21), null, 'ESPN silent: unknown');
+
+    same(ig.outWeeks({ back: 9, from: 6, last: 14, bye: 8, projOf: () => null }), [6, 7], 'out weeks: until he is back, skipping the bye');
+    same(ig.outWeeks({ back: 'season', from: 6, last: 14, projOf: () => null }), [6, 7, 8], 'season: the next three weeks (AVG_WEEKS)');
+    same(ig.outWeeks({ back: null, from: 6, last: 14, projOf: (w) => (w < 8 ? 0 : 12) }), [6, 7], 'ESPN silent: the run ESPN projects him at zero');
+    same(ig.outWeeks({ back: null, from: 6, last: 14, projOf: () => 11 }), [], 'questionable and projected: not out');
+
+    // RB1 hurt after week 5. His backup RB2 projected 4.0 in week 5, then 11.0
+    // and 9.0 in weeks 6-7: +6.0 a week. RB3 4.6 -> 5.0 is under MIN_GAIN. A WR
+    // on his team and an RB on another team never count.
+    const P = (id, name, position, tm, projected) => ({ playerId: id, name, position, proTeamId: tm, projected });
+    const pools = {
+      5: [{ ...P(1, 'RB1', 'RB', 21, 15), actual: 7 }, P(2, 'RB2', 'RB', 21, 4), P(3, 'RB3', 'RB', 21, 4.6), P(4, 'WR1', 'WR', 21, 8), P(5, 'Other RB', 'RB', 9, 3)],
+      6: [P(1, 'RB1', 'RB', 21, 0), P(2, 'RB2', 'RB', 21, 11), P(3, 'RB3', 'RB', 21, 5), P(4, 'WR1', 'WR', 21, 14), P(5, 'Other RB', 'RB', 9, 13)],
+      7: [P(1, 'RB1', 'RB', 21, 0), P(2, 'RB2', 'RB', 21, 9), P(3, 'RB3', 'RB', 21, 5), P(4, 'WR1', 'WR', 21, 14), P(5, 'Other RB', 'RB', 9, 13)],
+    };
+    const poolOf = (w) => pools[w] || [];
+    const g = ig.gainsWhileOut({ hurt: pools[5][0], baseWeek: 5, outWeeks: [6, 7], poolOf });
+    same(g.map((x) => [x.name, x.gain]), [['RB2', 6]], 'up while out: the backup +6.0 a week; noise, other positions and other teams left out');
+    eq(g[0] && g[0].before, 4, 'his before is week 5\'s projection');
+    eq(g[0] && g[0].during, 10, 'his while-out is the average of weeks 6 and 7');
+    same(ig.gainsWhileOut({ hurt: { ...pools[5][0], position: 'K' }, baseWeek: 5, outWeeks: [6], poolOf }), [], 'a kicker has no backup to gain');
+    const backFromOwn = (w) => (w === 5 ? [pools[5][0], P(7, 'RB7 hurt too', 'RB', 21, 0)] : [P(7, 'RB7 hurt too', 'RB', 21, 12)]);
+    same(ig.gainsWhileOut({ hurt: pools[5][0], baseWeek: 5, outWeeks: [6], poolOf: backFromOwn }), [], 'a teammate projected 0 before (out himself) is not a gain from this injury');
+    same(ig.gainsWhileOut({ hurt: pools[5][0], baseWeek: null, outWeeks: [6], poolOf }), [], 'no week he played: nothing compared');
+    eq(ig.baseWeekOf(6, (w) => (w === 5 ? { projected: 15, actual: 7 } : null)), 5, 'base week: the last he played');
+    eq(ig.baseWeekOf(6, (w) => (w === 5 ? { projected: 0, actual: 0 } : w === 4 ? { projected: 14, actual: 20 } : null)), 4, 'a week he sat out is skipped');
+
+    const row = ig.injuryRow({
+      hurt: { ...pools[5][0], injuryDetails: { outForSeason: false, returnDate: '2026-11-08', type: 'Ankle' } },
+      from: 6, last: 14, kickoffs: kick, byes: { 21: 8 }, poolOf,
+    });
+    eq(row.back, 9, 'row: back in week 9');
+    same(row.outWeeks, [6, 7], 'row: out weeks 6-7 (8 is his bye)');
+    same(row.gains.map((x) => x.name), ['RB2'], 'row: RB2 gains');
+  }
+}
+
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

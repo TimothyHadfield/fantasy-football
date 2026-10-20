@@ -27,7 +27,8 @@
 // season.js that lacks `fetchWeeksRosters`, and a missing NAMED import would
 // fail the whole module at link time.
 import * as season from './season.js';
-import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
+import { generateDemoSchedule, generateDemoWeekRosters, generateDemoFreeAgents } from './demo-rosters.js';
+import { injuryRow, returnLabel, gainLabel, RETURN_TITLE, GAINS_TITLE, AVG_WEEKS } from './injury-gains.js';
 import { savedConfig, onConnection } from './connection.js';
 import * as espn from './espn.js';
 import * as prefs from './prefs.js';
@@ -104,6 +105,9 @@ const state = {
   // Every NFL team's bye week, `{ [proTeamId]: week }`, or null: what tells a
   // bye's 0.00 from a ruled-out man's on the player cards. See readByes().
   byes: null,
+  // The injury report's extra reads (readInjuryInputs): `{ week, teams: Map,
+  // wires: Map, kickoffs, byes }`, or null until they are in.
+  injuryInputs: null,
 };
 
 // ------------------------------------------------------------------ formatting
@@ -345,6 +349,10 @@ export function buildModel({
   // read for them. `byes` is `{ [proTeamId]: week }` or null.
   weekTeams = null,
   byes = null,
+  // The injury report's Est. return and Up while out (readInjuryInputs):
+  // `{ teams: Map week -> teams, wires: Map week -> free agents, kickoffs,
+  // byes }`, or null — then every row says "—" and lists nobody.
+  injury = null,
 }) {
   const roster = new Map((rosters?.teams || []).map((t) => [t.id, t]));
   // THE WEEKS HELD, for the player cards: what was handed in, then the week on
@@ -499,7 +507,9 @@ export function buildModel({
     playedThisWeek: games.filter((g) => g.played).length,
     totalGames: schedule.games.length,
     playedOverall: schedule.games.filter((g) => g.played).length,
-    injuries: injuredStarters(rosters, last?.teams ?? null, { week, byes, isDemo }),
+    injuries: withReturns(injuredStarters(rosters, last?.teams ?? null, { week, byes, isDemo }), {
+      week, schedule, held, injury,
+    }),
     lastWeek: last?.week ?? null,
     bench: benchReport(benchFrom, benchGames),
     benchWeek,
@@ -660,6 +670,39 @@ function injuredStarters(rosters, lastTeams = null, { week = null, byes = null, 
   }
   out.sort((a, b) => b.rank - a.rank || (b.projected ?? -1) - (a.projected ?? -1));
   return out;
+}
+
+/**
+ * Each injured starter's Est. return and the teammates at his position whose
+ * projection rose while he is out (js/injury-gains.js `injuryRow`), from the
+ * weeks held and `injury`'s reads. A man whose game is over carries his score
+ * in `projected` (js/season.js): the pool shows the projection he started with.
+ */
+function withReturns(rows, { week, schedule, held, injury }) {
+  if (!rows.length) return rows;
+  const lastWeek = Math.max(...(schedule.weeks || [week]));
+  const teamsOf = (w) => injury?.teams?.get(w) || held.get(w) || [];
+  const memo = new Map();
+  const poolOf = (w) => {
+    if (!memo.has(w)) {
+      const out = [];
+      for (const t of teamsOf(w)) {
+        for (const p of t.players || [...(t.starters || []), ...(t.bench || [])]) {
+          out.push(p.done === true ? { ...p, projected: projOf(p) } : p);
+        }
+      }
+      out.push(...(injury?.wires?.get(w) || []));
+      memo.set(w, out);
+    }
+    return memo.get(w);
+  };
+  return rows.map((r) => ({
+    ...r,
+    est: injuryRow({
+      hurt: r.player, from: week, last: lastWeek,
+      kickoffs: injury?.kickoffs ?? null, byes: injury?.byes ?? null, poolOf,
+    }),
+  }));
 }
 
 /**
@@ -921,6 +964,7 @@ async function loadLiveNow(cfg, wanted) {
     // A new schedule is a new league as far as the odds are concerned.
     state.odds = null;
     state.oddsTeams = new Map();
+    state.injuryInputs = null;
     state.waiverClears = null;
     state.waiverRead = null;
     state.byes = null;
@@ -1138,7 +1182,9 @@ function startOdds() {
   // After the odds, whose own read of the NFL's games (`liveChances`) is the
   // payload the byes come off — so they cost nothing by then.
   const byes = odds.then(() => readByes(token));
-  return Promise.all([odds, waivers, readKickoffs(), byes]).then(() => {});
+  // The injury report's return weeks and teammates, after the byes it skips.
+  const hurt = byes.then(() => readInjuryInputs(token, week));
+  return Promise.all([odds, waivers, readKickoffs(), byes, hurt]).then(() => {});
 }
 
 /**
@@ -1218,6 +1264,86 @@ async function readKickoffs() {
   }
 }
 
+/**
+ * WHAT THE INJURY REPORT'S TWO COLUMNS NEED (js/injury-gains.js), read only
+ * when a starter is hurt: the roster weeks around the week on screen that the
+ * win chance did not read (the last few played, for the "before", and the
+ * next few, for "while he is out"), each of those weeks' wire (teammates on no
+ * roster), the NFL kickoffs (a return DATE to a week) and the byes.
+ *
+ * ON THE SYNCED COPY (rule 20) only the weeks it holds are asked for, which
+ * js/season.js serves from the copy, and the kickoffs and byes are the copy's
+ * own; nothing goes to ESPN. On a laptop the kickoffs reuse the bye read's
+ * payload and each week's wire is one read js/season.js shares. Never throws:
+ * without them a row says "—" and lists nobody.
+ */
+async function readInjuryInputs(token, week) {
+  try {
+    if (state.isDemo || !state.schedule || !week) return;
+    const hurt = (state.rosters?.teams || []).some((t) => (t.starters || []).some((p) => !healthy(p.injuryStatus)));
+    if (!hurt) return;
+    let down = null;
+    if (typeof season.cloudSource === 'function') {
+      try { down = await season.cloudSource(); } catch { down = null; }
+    }
+    const heldIn = (shape) => new Set(((down && down.weeks && down.weeks[shape]) || []).map(Number));
+    const rosterHeld = heldIn('rosters');
+    const wireHeld = heldIn('wire');
+    const last = Math.max(...(state.schedule.weeks || [week]));
+    const span = [];
+    for (let w = Math.max(1, week - 4); w <= Math.min(last, week + AVG_WEEKS); w++) span.push(w);
+    const teams = new Map();
+    const missing = [];
+    for (const w of span) {
+      const have = w === Number(state.rosters?.week) ? state.rosters.teams : state.oddsTeams.get(w);
+      if (have?.length) teams.set(w, have);
+      else if (!down || rosterHeld.has(w)) missing.push(w);
+    }
+    if (missing.length) {
+      for (const [w, t] of await readWeeks(missing)) if (t?.length) teams.set(Number(w), t);
+    }
+    const wires = new Map();
+    if (typeof season.fetchWireWeek === 'function') {
+      await Promise.all(span.filter((w) => w >= week - 1 && (!down || wireHeld.has(w))).map(async (w) => {
+        try {
+          const x = await season.fetchWireWeek(w);
+          if (Array.isArray(x) && x.length) wires.set(w, x);
+        } catch { /* that week's wire is not seen */ }
+      }));
+    }
+    let kickoffs = null;
+    let byes = state.byes;
+    if (down) {
+      const k = down.schedule && down.schedule.proKickoffs;
+      kickoffs = k && typeof k === 'object' && Object.keys(k).length ? k : null;
+      byes = down.byes && Object.keys(down.byes).length ? down.byes : null;
+    } else if (typeof season.fetchProKickoffs === 'function') {
+      const k = state.kickoffs || await season.fetchProKickoffs();
+      kickoffs = k && Object.keys(k).length ? k : null;
+    }
+    if (token === state.oddsToken) state.injuryInputs = { week, teams, wires, kickoffs, byes };
+  } catch {
+    /* the rows say "—" and list nobody */
+  }
+}
+
+/** The sample league's wire, generated once a week: it costs nothing to make. */
+const demoWires = new Map();
+
+/** What `buildModel` takes for the injury report's two columns, from what is held. */
+function injuryInputsNow() {
+  if (state.isDemo) {
+    const wires = new Map();
+    for (const w of state.schedule?.weeks || []) {
+      if (!demoWires.has(w)) demoWires.set(w, generateDemoFreeAgents(w));
+      wires.set(w, demoWires.get(w));
+    }
+    return { teams: new Map(), wires, kickoffs: null, byes: null };
+  }
+  const i = state.injuryInputs;
+  return i && i.week === state.week ? i : null;
+}
+
 /** Paint now if the odds come within the grace period; otherwise paint, then again when they do. */
 async function paintWhenOdds(odds) {
   const token = state.oddsToken;
@@ -1252,6 +1378,7 @@ function draw() {
     last: lastScores(),
     weekTeams: heldWeeks(),
     byes: state.isDemo ? null : state.byes,
+    injury: injuryInputsNow(),
   }));
 }
 
@@ -1791,41 +1918,30 @@ function renderInjuries(m) {
     return;
   }
 
-  // Two references per row, both to the same man: his name, and the projection
-  // that is his. The fantasy team column is a manager, not a player, so it is
-  // left as plain text.
-  // His number: shaded against the starters at his position, with the standing
-  // on a stat card; or plain, and then the link opens his player card.
-  const figure = (p, value, scale, label, week) => numCell(value, {
-    scale,
-    card: (h) => (h ? pop(standingSpec(p.player, { label, value, h, scale, week })) : ''),
-    wrap: (t, h) => pref(p.player, t, { card: !h }),
-  });
+  // Tim, 2026-10-19: "instead of showing the user last name, slot, proj, status,
+  // and act, show the est return week, and on the right side any players that
+  // have their proj increase while they're gone and by how much it's
+  // increasing."
+  const gains = (g) => (g && g.length
+    ? g.map((x) => `${esc(x.name)} <span class="pos">${esc(gainLabel(x))}</span>`).join('<br>')
+    : '<span class="muted">—</span>');
+  // Sorted by when he is back: the season first, then the latest week.
+  const backRank = (e) => (e?.back === 'season' ? 99 : isNum(e?.back) ? e.back : 0);
   const rows = m.injuries
     .map(
       (p) => `<tr${p.teamId === m.teamId ? ' class="me"' : ''}>
           <td class="name wrap">${pref(p.player, `${esc(p.name)} <span class="muted">${esc(p.position)}</span>`)}</td>
-          <td class="left" data-v="${p.rank}"><span class="badge ${injuryClass(p.status)}">${esc(injuryLabel(p.status))}</span></td>
-          <td class="left wrap"${pop(teamSpec(m, p.teamId))}>${esc(p.teamName)}</td>
-          <td>${esc(p.slot)}</td>
-          ${figure(p, p.projected, p.projScale, 'Projected', m.week)}
-          ${figure(p, p.last, p.lastScale, 'Scored', m.lastWeek)}
+          <td class="left" data-v="${backRank(p.est)}">${esc(returnLabel(p.est || {}))}</td>
+          <td class="left wrap gains">${gains(p.est?.gains)}</td>
         </tr>`
     )
     .join('');
 
-  // One line a heading (docs/previews-plan.md): what the column is.
-  const lastHead = m.lastWeek === null
-    ? 'What he scored in the last finished week'
-    : `What he scored in week ${m.lastWeek}, the last finished week`;
   $('injuries').innerHTML = `<div class="table-scroll"><table id="injuryTable">
       <thead><tr>
         <th class="name" data-sort title="A starter with an injury designation">Player</th>
-        <th class="left" data-sort title="ESPN’s injury designation">Status</th>
-        <th class="left wrap" data-sort title="The team starting him">Fantasy team</th>
-        <th data-sort title="The lineup slot he is in">Slot</th>
-        <th data-sort title="ESPN’s projection for week ${m.week}">Proj</th>
-        <th data-sort title="${lastHead}">Last</th>
+        <th class="left" data-sort title="${esc(RETURN_TITLE)}">Est. return</th>
+        <th class="left wrap" title="${esc(GAINS_TITLE)}">Up while out</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
@@ -1836,19 +1952,12 @@ function renderInjuries(m) {
   $('injuryNote').textContent =
     `${plural(m.injuries.length, 'starter')} across the league ` +
     `${m.injuries.length === 1 ? 'carries' : 'carry'} a designation` +
-    `${out ? `, ${out} of them ruled out` : ''}. Bench players are left out on purpose — ` +
-    'these are players someone is currently planning to start. ' +
-    'Every name and projection here links to that player on the Players page, ' +
-    'where his next 13 weeks are.' +
-    (m.lastWeek === null
-      ? ''
-      : ` Last is what he scored in week ${m.lastWeek}, the last finished week; a dash means ` +
-        'ESPN gave no score for him on a roster that week.') +
-    // The colours' basis (rule 7), with the rest of the method.
-    (m.injuries.some((p) => p.projScale || (p.lastScale && isNum(p.last)))
-      ? ' Proj and Last are shaded against the league’s starters at his position that week: ' +
-        'green above their average, red below. A bye or a ruled-out 0.0 is left plain.'
-      : '');
+    `${out ? `, ${out} of them ruled out` : ''}. Bench players are left out on purpose. ` +
+    'Every name links to that player on the Players page. ' +
+    'Est. return is ESPN’s expected return date, as the first week his NFL team plays on or after it; ' +
+    'Season means out for the season, and a dash means ESPN gave no date. ' +
+    'Up while out lists teammates at his position whose ESPN projection for the weeks he is out ' +
+    'is higher than for the last week he played, in points a week.';
 }
 
 function renderBench(m) {
