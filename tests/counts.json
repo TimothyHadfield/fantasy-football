@@ -220,7 +220,7 @@
       "assertions": 18
     },
     "test-outlook-mark.mjs": {
-      "assertions": 92
+      "assertions": 78
     },
     "test-value-measure.mjs": {
       "assertions": 48

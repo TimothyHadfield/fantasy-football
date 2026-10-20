@@ -706,20 +706,6 @@ export function seasonAverageOf(stats, seasonId) {
 }
 
 /**
- * How many games ESPN's season average is of — stat "210" (games played) on
- * the same season line — or null. Measured on 1241838, 2026-10-15: Lamb 5
- * after week 5; Kyler Murray 4 (two of them off any roster here). Read by the
- * 💎/🪙 rule (js/outlook-mark.js), whose gap needed shrinks as games grow.
- */
-export function seasonGamesOf(stats, seasonId) {
-  const line = (stats || []).find(
-    (s) => s && s.statSourceId === 0 && s.statSplitTypeId === 0 && s.seasonId === seasonId
-  );
-  const g = Number(line?.stats?.['210']);
-  return Number.isFinite(g) && g > 0 ? g : null;
-}
-
-/**
  * ESPN's position rank — `ratings['0'].positionalRanking` — or null. It rides on
  * the pool entry (a roster's `playerPoolEntry`, or a free-agent `players[]`
  * element), not on `player`. Hampton: RB #23 on 2026-10-02.
@@ -769,7 +755,6 @@ export function parseFreeAgent(entry, week, byes = null) {
     // ESPN's season average and position rank, for the player card's glance
     // line. Null when ESPN sent none (and on any wire synced before these).
     seasonAvg: seasonAverageOf(p.stats, config.season),
-    seasonGames: seasonGamesOf(p.stats, config.season),
     posRank: positionRankOf(entry),
     // Whether he can be added straight away or has to clear waivers first.
     // Both ride on the ENTRY, not on `player` (verified against league 1241838,
