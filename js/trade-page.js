@@ -3737,20 +3737,18 @@ function appealOfOffer(offer) {
 }
 
 /**
- * TOTAL (Tim, 2026-10-12: "a new "total" collumn that is just the appeal +
- * both user's pts/week diff"): the row's Appeal, its "You" gain a week and its
- * "Him" gain a week, added (js/outlook-mark.js `totalOf`). The custom box hands
- * in the two figures it prints under the names, so the sum there is of the
- * numbers on screen.
+ * TOTAL: the row's Appeal plus its "Him" gain a week (js/outlook-mark.js
+ * `totalOf`). Your own gain is left out (Tim, 2026-10-19: "just the appeal +
+ * change in opp proj/week, and not my own aswell"). The custom box hands in the
+ * figure it prints under his name, so the sum there is of numbers on screen.
  */
 function totalOfOffer(offer, shown = null) {
   const weeks = basis() === 'weeks' ? weeklySpan() : null;
   const his = hisSideOf(offer);
-  const mine = shown ? shown.mine : myPerWeekShown(offer, weeks);
   const theirs = shown ? shown.his
     : !Number.isFinite(his.gain) ? null
     : weeks ? perWeekOf(his.gain, his.weeks) : his.gain;
-  return outlook.totalOf(appealOfOffer(offer), mine, theirs);
+  return outlook.totalOf(appealOfOffer(offer), theirs);
 }
 
 /**
@@ -11045,7 +11043,7 @@ const HEAD_TITLES = [
   [/^Gain\b/, 'Points a week the deal adds to your best lineup, and to his.'],
   [/^Value$/, 'Your change in total Value. His is the same figure with the sign turned.'],
   [/^Appeal$/, 'Projection less season average, the men you get minus the men you send.'],
-  [/^Total$/, 'Appeal plus your gain a week plus his.'],
+  [/^Total$/, 'Appeal plus his gain a week.'],
   [/^You send$/, 'The men you would give up.'],
   [/^You get$/, 'The men you would receive.'],
   [/^Your lineup/, 'Your best lineup a week: now, then with the deal.'],
