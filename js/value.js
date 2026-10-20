@@ -174,6 +174,22 @@ export function valueOf(base, position, avg) {
 }
 
 /**
+ * A MAN'S VALUE — THE ONE FIGURE EVERY PAGE PRINTS FOR HIM. `valueOf` his
+ * `restAvg` over the weeks left: his bye out, any other 0 counted. Not the mean
+ * of his weekly Values (the half-weight band and the floor at 0 bend that), and
+ * not over a page's own span. js/season.js (every rostered man, the card) and
+ * the Players page (a free agent) both come here, so the card, the Players
+ * table and the Trade lists cannot print two Values for one man (Tim,
+ * 2026-10-19: "I'm seeing players in the player section display a different
+ * value than the same players in the trade section").
+ *
+ * @returns {number|null} as `valueOf`
+ */
+export function playerValue(base, position, byWeek, weeks, byeWeek = null) {
+  return valueOf(base, position, restAvg(byWeek, weeks, byeWeek));
+}
+
+/**
  * What the value is made of, for a preview: the average, the two lines, the
  * points between them (at half) and over the starter line (in full).
  * @returns {{avg:number, waiver:number, starter:number, bench:number, over:number, value:number}|null}

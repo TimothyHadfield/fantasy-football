@@ -128,14 +128,15 @@ ok(o.APPEAL_EXPLAIN.includes('💎') && o.APPEAL_EXPLAIN.includes('🪙'), 'the 
 // --- Total: Appeal plus both gains a week --------------------------------------
 // Tim, 2026-10-12: "Ex: appeal=+4, my pts/week dif = +2, opp pts/week dif = -1,
 // total=+5."
-eq(o.totalOf(4, 2, -1), 5, 'his own example: +4, +2 and −1 is +5');
-eq(o.totalOf(4, 2, 1), 7, 'a trade he gains from too is higher');
-eq(o.totalOf(-3.5, 1.2, 0.4), -1.9, 'a clean tenth');
-eq(o.totalOf(5.2, 2.84, -1.14), 6.9, 'each gain goes in as printed (+2.8, −1.1)');
-eq(o.totalOf(1, -3, 2), 0, 'cancelling out is 0');
-ok(Object.is(o.totalOf(1, -3, 2), 0), 'a plain 0, never −0');
-eq(o.totalOf(null, 2, -1), null, 'no Appeal known: no Total');
-eq(o.totalOf(6.6, null, -1), 5.6, 'no figure for you: the rest');
+// Tim, 2026-10-19: Total is Appeal + HIS gain a week only, not yours.
+eq(o.totalOf(4, -1), 3, 'Appeal +4 and his −1 a week is +3 (your own gain left out)');
+eq(o.totalOf(4, 1), 5, 'a trade he gains from is higher');
+eq(o.totalOf(-3.5, 0.4), -3.1, 'a clean tenth');
+eq(o.totalOf(5.2, -1.14), 4.1, 'his gain goes in as printed (−1.1)');
+eq(o.totalOf(2, -2), 0, 'cancelling out is 0');
+ok(Object.is(o.totalOf(2, -2), 0), 'a plain 0, never −0');
+eq(o.totalOf(null, -1), null, 'no Appeal known: no Total');
+eq(o.totalOf(6.6, null), 6.6, 'no figure for him: the Appeal alone');
 eq(o.totalOf(6.6, 2, NaN), 8.6, 'no figure for him: the rest');
 ok(o.totalOf(4, 2, -1) !== o.appealOf([M(14, 10)], []), 'Total is not Appeal: Appeal alone stays +4');
 ok(o.APPEAL_EXPLAIN.includes('Total') && !/plus the other manager’s gain a week\. High/.test(o.APPEAL_EXPLAIN),

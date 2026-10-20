@@ -3737,20 +3737,18 @@ function appealOfOffer(offer) {
 }
 
 /**
- * TOTAL (Tim, 2026-10-12: "a new "total" collumn that is just the appeal +
- * both user's pts/week diff"): the row's Appeal, its "You" gain a week and its
- * "Him" gain a week, added (js/outlook-mark.js `totalOf`). The custom box hands
- * in the two figures it prints under the names, so the sum there is of the
- * numbers on screen.
+ * TOTAL: the row's Appeal plus its "Him" gain a week (js/outlook-mark.js
+ * `totalOf`). Your own gain is left out (Tim, 2026-10-19: "just the appeal +
+ * change in opp proj/week, and not my own aswell"). The custom box hands in the
+ * figure it prints under his name, so the sum there is of numbers on screen.
  */
 function totalOfOffer(offer, shown = null) {
   const weeks = basis() === 'weeks' ? weeklySpan() : null;
   const his = hisSideOf(offer);
-  const mine = shown ? shown.mine : myPerWeekShown(offer, weeks);
   const theirs = shown ? shown.his
     : !Number.isFinite(his.gain) ? null
     : weeks ? perWeekOf(his.gain, his.weeks) : his.gain;
-  return outlook.totalOf(appealOfOffer(offer), mine, theirs);
+  return outlook.totalOf(appealOfOffer(offer), theirs);
 }
 
 /**
@@ -8227,6 +8225,21 @@ function customValue(p) {
 }
 
 /**
+ * THE NUMBER BESIDE HIS NAME, as drawn. On Proj, `customValue`. ON VALUE, HIS
+ * VALUE — js/season.js's, the one on his card, in the Value measure above and
+ * on the Players page (Tim, 2026-10-19: "I'm seeing players in the player
+ * section display a different value than the same players in the trade
+ * section. Why is that?"). It used to be `valueOf` of `customValue`, a mean
+ * over this page's priced span with his zero weeks and the week under way left
+ * out: a third figure for the same man. Null (a dash) when he has none.
+ */
+function customShown(p) {
+  if (!valueOn()) return customValue(p);
+  const v = typeof valueLookup === 'function' ? valueLookup(p.playerId) : null;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/**
  * A squad's whole roster AS A LINEUP: QB, RB1, RB2, WR1…, FLEX, D/ST, K, then
  * the bench.
  *
@@ -8354,7 +8367,7 @@ function customPositionScales(teamIds) {
     for (const p of (team && team.players) || []) {
       if (p.playerId === null || p.playerId === undefined) continue;
       // The colour follows the number SHOWN (Proj | Value).
-      const v = shownAs(p.position, customValue(p));
+      const v = customShown(p);
       if (!Number.isFinite(v)) continue;
       if (!byPos.has(p.position)) byPos.set(p.position, []);
       byPos.get(p.position).push(v);
@@ -8424,7 +8437,7 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
     const lit = on.has(String(p.playerId));
     // Proj | Value: the ORDER above stays the lineup on the page's measure — only
     // the number drawn changes, so nothing moves when the switch is pressed.
-    const v = shownAs(p.position, customValue(p));
+    const v = customShown(p);
     const scale = scales.get(p.position) || null;
     const h = heatOf(v, scale, { what: `a ${p.position} across the league` });
     // The card knows which deal it is inside, so a man on the OTHER squad who
@@ -9514,7 +9527,8 @@ function renderCustomNote() {
     // Rule 7, for the Proj | Value switch — only while there is a switch.
     (state.valueBase
       ? ` <strong>Value</strong> is points a week over the waiver line at his position; points ` +
-        `below the starter line count half. Both lines are fixed for the season.`
+        `below the starter line count half. Both lines are fixed for the season. On Value the figure ` +
+        `beside each man is his Value over every week left, the one on his card and on the Players page.`
       : '') +
     `<br><br>` +
     `<strong>This box has no opinion about whether a deal is good.</strong> The finder above only ` +
@@ -11029,7 +11043,7 @@ const HEAD_TITLES = [
   [/^Gain\b/, 'Points a week the deal adds to your best lineup, and to his.'],
   [/^Value$/, 'Your change in total Value. His is the same figure with the sign turned.'],
   [/^Appeal$/, 'Projection less season average, the men you get minus the men you send.'],
-  [/^Total$/, 'Appeal plus your gain a week plus his.'],
+  [/^Total$/, 'Appeal plus his gain a week.'],
   [/^You send$/, 'The men you would give up.'],
   [/^You get$/, 'The men you would receive.'],
   [/^Your lineup/, 'Your best lineup a week: now, then with the deal.'],

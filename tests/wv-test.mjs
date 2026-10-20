@@ -184,7 +184,8 @@ function valueSnap(document, tableId) {
   const heads = [...table.querySelectorAll('thead th')].map(flat);
   const col = (name) => heads.findIndex((h) => h === name || h.startsWith(`${name} `));
   const posCol = col('Pos');
-  const avgCol = col('Avg');
+  // On Value the Avg column is headed "Value" (his Value, 2026-10-19).
+  const avgCol = col('Avg') >= 0 ? col('Avg') : col('Value');
   const cellOf = (td) => (td ? {
     text: flat(td).replace(/\s*[▲▼]$/, ''),
     v: td.getAttribute('data-v'),
@@ -264,6 +265,14 @@ async function valueProbe({ document, window, waitFor }) {
   out.prefs = globalThis.localStorage.getItem('ff.prefs');
   out.note = flat(document.getElementById('waiverNote'));
   out.takenNote = flat(document.getElementById('takenNote'));
+  out.head = [...document.querySelectorAll('#waiverTable thead th')].map(flat)[out.value.avgCol];
+  // The Value column wants every free agent's own Value: the weeks it needs are
+  // bought after the table (never on the synced copy). Then it is read again.
+  await waitFor();
+  await settle(30);
+  await waitFor();
+  out.valueLater = valueSnap(document, 'waiverTable');
+  out.valueCalls = espn.calls.weeks.slice();
 
   // His row opened: selecting a man shows every week left, so his Value has
   // every week it needs for no request of its own.
@@ -2404,22 +2413,47 @@ async function check(scenario, boot) {
       zeros >= 20 && low && low.weeks[4].text === '0.0' &&
       rows.every((r) => [4, 5, 6].every((wk) => !/^[-−]/.test(r.weeks[wk].text))),
       `${zeros} zeros; ${low && JSON.stringify(low.weeks[4])}`);
-    const avgWant = (r) => {
-      const vs = [4, 5, 6].map((wk) => espn.expected(r.id, wk)).filter((x) => typeof x === 'number' && x > 0)
-        .map((x) => valueOf(VALUE_BASE, r.pos, x));
-      return vs.length ? Math.round((vs.reduce((a, b) => a + b, 0) / vs.length) * 10) / 10 : null;
+    // THE VALUE COLUMN IS HIS VALUE (Tim, 2026-10-19: "I'm seeing players in
+    // the player section display a different value than the same players in
+    // the trade section"): js/value.js `playerValue` over every week left, the
+    // number on his card — not the mean of the three week cells shown.
+    c.ok('VALUE: the Avg column is headed Value', w.head === 'Value', w.head);
+    const later = ((w.valueLater || {}).rows || []).filter((r) => !r.mine);
+    const ownWant = (r) => {
+      const byWeek = {};
+      for (const wk of VALUE_WEEKS) byWeek[wk] = espn.expected(r.id, wk);
+      return valueOf(VALUE_BASE, r.pos, restAvg(byWeek, VALUE_WEEKS, null));
     };
-    const avgBad = rows.filter((r) => {
-      const want = avgWant(r);
-      return want === null ? r.avg.text !== '—' : r.avg.text !== f1(want) || Number(r.avg.v) !== want;
-    });
-    c.ok('VALUE: Avg is the mean of the Values shown', rows.length === 60 && avgBad.length === 0,
-      JSON.stringify(avgBad.slice(0, 2).map((r) => [r.id, r.avg, avgWant(r)])));
-    const order = ordered(rows.map((r) => (r.avg.v === null ? null : Number(r.avg.v))), false);
-    const projOrder = [...projRows.keys()].join();
-    c.ok('VALUE: the table is sorted by the Avg shown, so its order is not the Proj order',
-      order.monotonic && order.nullsLast && rows.map((r) => r.id).join() !== projOrder,
-      JSON.stringify(rows.slice(0, 6).map((r) => r.avg.v)));
+    if (scenario === 'value') {
+      const avgBad = later.filter((r) => {
+        const want = ownWant(r);
+        return want === null ? r.avg.text !== '—' : r.avg.text !== f1(want) || Number(r.avg.v) !== want;
+      });
+      c.ok('VALUE: the Value column is each free agent’s own Value over the weeks left',
+        later.length === 60 && avgBad.length === 0,
+        JSON.stringify(avgBad.slice(0, 2).map((r) => [r.id, r.avg, ownWant(r)])));
+      c.ok('VALUE: not the mean of the three week cells (the two differ for some men)',
+        later.some((r) => {
+          const vs = [4, 5, 6].map((wk) => espn.expected(r.id, wk)).filter((x) => typeof x === 'number' && x > 0)
+            .map((x) => valueOf(VALUE_BASE, r.pos, x));
+          const mean = vs.length ? Math.round((vs.reduce((a, b) => a + b, 0) / vs.length) * 10) / 10 : null;
+          return mean !== null && mean !== ownWant(r);
+        }));
+      c.ok('VALUE: the weeks it needed were bought after the table, once each',
+        JSON.stringify((w.valueCalls || []).slice().sort((a, b) => a - b)) === '[1,2,3,4,5,6,7,8,9,10,11,12,13]',
+        JSON.stringify(w.valueCalls));
+      const order = ordered(later.map((r) => (r.avg.v === null ? null : Number(r.avg.v))), false);
+      const projOrder = [...projRows.keys()].join();
+      c.ok('VALUE: the table is sorted by the Value shown, so its order is not the Proj order',
+        order.monotonic && order.nullsLast && later.map((r) => r.id).join() !== projOrder,
+        JSON.stringify(later.slice(0, 6).map((r) => r.avg.v)));
+    } else {
+      c.ok('ON THE SYNCED COPY: the Value column is a dash, not a guess from three weeks',
+        later.length === 60 && later.every((r) => r.avg.text === '—'),
+        JSON.stringify(later.slice(0, 3).map((r) => r.avg)));
+      c.ok('ON THE SYNCED COPY: and nothing was bought for it',
+        JSON.stringify((w.valueCalls || []).slice().sort((a, b) => a - b)) === '[1,2,3,4,5,6]', JSON.stringify(w.valueCalls));
+    }
     c.ok('VALUE: both tucked notes say what Value is',
       /Points a week over the waiver line at his position/.test(w.note || '') &&
       /Points a week over the waiver line at his position/.test(w.takenNote || ''),
@@ -2477,15 +2511,23 @@ async function check(scenario, boot) {
     for (const m of men) {
       const r = rows.find((x) => x.id === m.playerId);
       const want = f1(valueOf(VALUE_BASE, m.position, m.flat));
-      if (!r || r.avg.text !== want || ![4, 5, 6].every((wk) => r.weeks[wk].text === want)) {
+      if (!r || ![4, 5, 6].every((wk) => r.weeks[wk].text === want)) {
         bad.push([m.name, want, r && r.avg.text, r && r.weeks[4].text]);
       }
     }
-    c.ok('TAKEN: every rostered man’s week cells and Avg are valueOf(lines, his position, his projection)',
+    c.ok('TAKEN: every rostered man’s week cells are valueOf(lines, his position, his projection)',
       men.length === 4 && bad.length === 0, JSON.stringify(bad));
     const stub = rows.find((x) => x.id === 7399);
     c.ok('TAKEN: by hand — a WR at 9.0 with lines 8 / 11 is half of the point over the waiver line, 0.5',
-      stub && stub.weeks[4].text === '0.5' && stub.avg.text === '0.5', JSON.stringify(stub && [stub.weeks[4], stub.avg]));
+      stub && stub.weeks[4].text === '0.5', JSON.stringify(stub && stub.weeks[4]));
+    // THE VALUE COLUMN IS THE CARD'S (2026-10-19): js/season.js holds 0.7 for
+    // 7399, so the column says 0.7 — what his glance line says, and what the
+    // Trade page prints beside him. It used to say 0.5 here and 0.7 on the card.
+    c.ok('TAKEN: the Value column is the Value js/season.js holds for him, the glance line’s',
+      stub && stub.avg.text === '0.7' && /^Value 0\.7 · /.test(w.known || ''), JSON.stringify(stub && stub.avg));
+    const others = men.filter((m) => m.playerId !== 7399).map((m) => rows.find((x) => x.id === m.playerId));
+    c.ok('TAKEN: a rostered man it holds no Value for gets a dash in that column',
+      others.length === 3 && others.every((r) => r && r.avg.text === '—'), JSON.stringify(others.map((r) => r && r.avg)));
     const mine = ((w.wire || {}).rows || []).find((r) => r.mine && r.id === 2985659);
     c.ok('TAKEN: your own row on the wire is on Value too (a K at 11.0 with lines 7 / 9.5: 2.8)',
       mine && mine.weeks[4].text === f1(valueOf(VALUE_BASE, 'K', 11)) && mine.weeks[4].text === '2.8',

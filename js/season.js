@@ -2506,9 +2506,16 @@ export function fetchPlayerValues({ demo = false } = {}) {
 
 function playerValuesOf(base, weeks, weekTeams, byes) {
   const byId = new Map();
-  for (const m of withRestAvg(squadMen(weekTeams, weeks), weeks, byes)) {
+  for (const m of squadMen(weekTeams, weeks).values()) {
+    const bye = byes && m.proTeamId !== null ? Number(byes[m.proTeamId]) : NaN;
+    const b = Number.isFinite(bye) ? bye : null;
     byId.set(m.playerId, {
-      position: m.position, avg: m.avg, projAvg: m.projAvg, value: value.valueOf(base, m.position, m.avg),
+      position: m.position,
+      avg: value.restAvg(m.byWeek, weeks, b),
+      projAvg: value.restProjAvg(m.byWeek, weeks, b),
+      // The site's one Value function (js/value.js `playerValue`), as the
+      // Players page uses for a free agent.
+      value: value.playerValue(base, m.position, m.byWeek, weeks, b),
     });
   }
   const lookup = (id) => {

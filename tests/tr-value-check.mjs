@@ -16,9 +16,10 @@
 //   1. no lines: no switch anywhere, and every number is what it was;
 //   2. lines: the switch is in the custom toolbar and on the season boxes, on
 //      Proj, and the Proj numbers are EXACTLY scenario 1's;
-//   3. Value: every roster number and every slot cell is `valueOf(base, his
-//      position, the Proj number)`, re-derived here from the Proj page; an Avg
-//      is the mean of its row's converted cells; nothing is negative;
+//   3. Value: every roster number is his Value (the card's, 2026-10-19); every
+//      slot cell is `valueOf(base, his position, the Proj number)`, re-derived
+//      here from the Proj page; an Avg is the mean of its row's converted
+//      cells; nothing is negative;
 //   4. the Starting lineup band and the opponent row (team totals) do not move;
 //   5. Difference in Value = Value after − Value before, cell for cell;
 //   6. the choice is remembered (`trade.valueView`), opens the next visit on
@@ -637,13 +638,18 @@ if (!process.argv[2]) {
     ok(`Value, ${side}: nobody moved`, same(p.map((m) => [m.id, m.slot]), v.map((m) => [m.id, m.slot])));
     let bad = '';
     let n = 0;
+    // HIS VALUE, the card's (2026-10-19, Tim: "I'm seeing players in the
+    // player section display a different value than the same players in the
+    // trade section"): not `valueOf` of the Proj number beside him, which is a
+    // mean over this page's span with his zero weeks out.
     p.forEach((m, i) => {
       if (m.id === null) return;
-      const want = valueOf(BASE, POS.get(m.id), Number(m.pv));
+      const own = players[m.id] ? players[m.id].value : null;
+      const want = typeof own === 'number' ? own.toFixed(1) : '—';
       n++;
-      if (v[i].pv !== want.toFixed(1)) bad += ` ${m.id}: ${m.pv} → ${v[i].pv}, want ${want.toFixed(1)}`;
+      if (v[i].pv !== want) bad += ` ${m.id}: ${m.pv} → ${v[i].pv}, want ${want}`;
     });
-    ok(`Value, ${side}: every man's number is valueOf(base, his position, his Proj number)`, n >= 12 && !bad, `${n} men;${bad}`);
+    ok(`Value, ${side}: every man's number is his Value, the one on his card`, n >= 12 && !bad, `${n} men;${bad}`);
     ok(`Value, ${side}: nothing is negative`, v.every((m) => !NEG.test(m.pv)), JSON.stringify(v.map((m) => m.pv)));
   }
   // Named cells, by hand: Ana QB1 swings 19/7 → 13.0 → (13 − 10) / 2 = 1.5;

@@ -84,20 +84,21 @@ export function appealOf(get, send) {
 }
 
 /**
- * TOTAL — Appeal plus what the trade does to BOTH lineups a week.
+ * TOTAL — Appeal plus what the trade does to HIS lineup a week: how the deal
+ * looks to the other manager. Your own gain is not in it.
  *
- * Tim, 2026-10-12: "I want to change the appeal collumn so it doesn't add the
- * opponents pts/week dif like it did before. However, I want to make a new
- * "total" collumn that is just the appeal + both user's pts/week diff. Ex:
- * appeal=+4, my pts/week dif = +2, opp pts/week dif = -1, total=+5."
+ * Tim, 2026-10-19: "in the trade section the "total" considers my own change
+ * in proj/week. Could you make it so that it is just the appeal + change in
+ * opp proj/week, and not my own aswell?" (Before that, 2026-10-12, it was
+ * Appeal + both gains.)
  *
  * Each figure goes in to the tenth, as it is printed in its own column. Not
  * known when the Appeal is not; a gain with no figure adds nothing.
  */
-export function totalOf(appeal, myPerWeek, hisPerWeek) {
+export function totalOf(appeal, hisPerWeek) {
   if (!num(appeal)) return null;
   const part = (v) => (num(v) ? round1(v) : 0);
-  const r = round1(appeal + part(myPerWeek) + part(hisPerWeek));
+  const r = round1(appeal + part(hisPerWeek));
   return r === 0 ? 0 : r;
 }
 
@@ -106,7 +107,7 @@ export const APPEAL_EXPLAIN =
   `<strong>Appeal</strong>: projection for the weeks left minus season average, added up over the men you get, ` +
   `less the same over the men you send. High means you get men due to score more than they have (💎) for men ` +
   `who have scored more than they are due to (🪙). A man with no average yet adds nothing. ` +
-  `<strong>Total</strong>: Appeal plus your gain a week plus the other manager’s.`;
+  `<strong>Total</strong>: Appeal plus the other manager’s gain a week.`;
 
 /** The words a screen reader gets, and the card's heading line. */
 export function outlookWords(o) {
