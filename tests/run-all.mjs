@@ -138,6 +138,7 @@ const SUITES = [
   ['playoffs-live-check.mjs', 'Playoffs player list on a live league: Values asked under the league being read, and a league connected mid-load is read (sweep 2026-10-16 rows 12, 13)'],
   ['done-check.mjs', 'the Players page mid-week: a finished game shows the score, plain, in both tables'],
   ['link-check.mjs', 'the player click-through ACROSS pages — the one seam no single-page suite sees'],
+  ['value-match-check.mjs', 'one man, one Value: Players, Trade and his card print the same figure (Tim, 2026-10-19)'],
   ['an-test.mjs', 'the analysis page'],
   ['opp-outline-check.mjs', 'Analysis Weekly totals: “Opponents of” boxes the picked team’s opponent in each week, schedule and bracket'],
   ['proj-changes-check.mjs', 'Analysis: the Position | Player rows, and Proj changes — a saved week as Total or as now minus then'],

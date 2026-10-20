@@ -153,6 +153,9 @@
     "link-check.mjs": {
       "assertions": 137
     },
+    "value-match-check.mjs": {
+      "assertions": 17
+    },
     "opp-outline-check.mjs": {
       "assertions": 32,
       "scenarios": 4
@@ -179,7 +182,7 @@
       "scenarios": 18
     },
     "wv-test.mjs": {
-      "assertions": 1284,
+      "assertions": 1290,
       "scenarios": 20
     },
     "tr-test.mjs": {

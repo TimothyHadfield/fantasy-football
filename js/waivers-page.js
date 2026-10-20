@@ -1124,7 +1124,7 @@ const asValue = (p, x) => value.valueOf(state.value.base, p.position, x);
  */
 function ensurePlayerValues() {
   if (!state.value.base || state.value.asked) return;
-  if (state.open === null && !state.value.want) return;
+  if (state.open === null && !state.value.want && !valueOn()) return;
   if (typeof season.fetchPlayerValues !== 'function') return;
   state.value.asked = true;
   const token = state.token;
@@ -1154,7 +1154,10 @@ async function ensureValueWeeks(token) {
   if (state.isDemo || token !== state.token) return;
   const got = state.value.players;
   if (!state.value.base || !got) return;
-  if (!state.value.want && (state.open === null || !state.pool.has(state.open))) return;
+  // On Value the Value column wants every free agent's: the weeks are bought
+  // after the table, as for an open row (docs/value-plan.md: "buy those weeks
+  // only when Value is switched on").
+  if (!state.value.want && !valueOn() && (state.open === null || !state.pool.has(state.open))) return;
   if (!got.weeks.some(wantsWire)) return;
   if (await onSyncedCopy()) {
     if (token === state.token && !state.value.synced) {
@@ -1190,6 +1193,14 @@ async function ensureValueWeeks(token) {
  *   null       cannot be said: a week was refused, or will never be read here
  */
 function wireValue(p) {
+  const weeks = wireWeeksOf(p);
+  if (!weeks || typeof weeks !== 'object') return weeks;
+  // The site's one Value function, the one js/season.js gives a rostered man.
+  return value.playerValue(state.value.base, p.position, weeks, state.value.players.weeks, byeWeekOf(p, state.byes));
+}
+
+/** A free agent's projection in each week left (pregame for a finished game): the same three answers. */
+function wireWeeksOf(p) {
   const got = state.value.players;
   if (!state.value.base || !got) return undefined;
   if (!got.weeks.length) return null;
@@ -1204,7 +1215,40 @@ function wireValue(p) {
     const done = doneFor(p.playerId, w, false);
     byWeek[w] = done ? done.pregame : v;
   }
-  return asValue(p, value.restAvg(byWeek, got.weeks, byeWeekOf(p, state.byes)));
+  return byWeek;
+}
+
+/** His Value, read the way his glance line and name card read it: the same three answers. */
+const ownValue = (p, wire) => (wire ? wireValue(p) : takenValue(p));
+
+/** The average his Value is made from (js/value.js `restAvg` over the weeks left), or null. */
+function ownAvg(p, wire) {
+  const got = state.value.players;
+  if (!got) return null;
+  if (!wire) {
+    const hit = got.byId && (got.byId.get(p.playerId) ?? got.byId.get(Number(p.playerId)));
+    return hit && typeof hit.avg === 'number' ? hit.avg : null;
+  }
+  const weeks = wireWeeksOf(p);
+  return weeks && typeof weeks === 'object' ? value.restAvg(weeks, got.weeks, byeWeekOf(p, state.byes)) : null;
+}
+
+/** The Value column's preview: what his Value is made of, over which weeks. */
+function valueCard(row, kind) {
+  const wire = kind === 'wire' && !row.mine;
+  const got = state.value.players;
+  const avg = ownAvg(row.p, wire);
+  const parts = avg === null ? null : valueRows(row.p, avg);
+  const pos = row.p.position;
+  const pool = (kind === 'taken' ? view.takenAll : view.wireAll)
+    .filter((r) => r.p.position === pos && r.shownAvg !== null).map((r) => r.shownAvg);
+  return {
+    title: row.p.name,
+    sub: `${avg === null ? '' : `Avg ${fmt(avg)}, `}${weekRange(got ? got.weeks : [])}`,
+    rows: parts || [],
+    total: { label: 'Value', value: row.shownAvg },
+    foot: standingWords(kind, row.shownAvg, pool, pos),
+  };
 }
 
 /** A rostered man's Value, from js/season.js: the same three answers as `wireValue`. */
@@ -1239,14 +1283,19 @@ function glanceLine(p, wire) {
  * Value, `shown[i]` is week i's projection as a Value — a number, or null when
  * it cannot be said — and `undefined` for a cell that is not a projection and
  * so stays as it is: a Bye, a 0.0, a blank, a week not read, and a game already
- * over (that number is a score). `shownAvg` is then the mean of the Values
- * shown over the weeks Avg always counted (the regular-season weeks projecting
- * above zero), to the tenth. Colour and sorting read these, so both follow the
- * number on screen.
+ * over (that number is a score).
+ *
+ * AND THE AVG COLUMN IS HIS VALUE (2026-10-19). Tim: "I'm seeing players in the
+ * player section display a different value than the same players in the trade
+ * section. Why is that?" It was the mean of the week cells shown (the next 3
+ * weeks by default, zero weeks out), which is neither his card's Value nor the
+ * Trade page's. Now it is `ownValue` — js/value.js `playerValue` over every
+ * week left, the number on his card and beside his name on Trade — whatever
+ * the span; the column's heading says "Value". Null (a dash) while it cannot
+ * be said. Colour and sorting read these, so both follow the number on screen.
  */
-function withShown(rows, weeks) {
+function withShown(rows, weeks, wire = false) {
   const on = valueOn();
-  const use = avgMask(weeks);
   for (const r of rows) {
     if (!on) {
       r.shown = r.values;
@@ -1255,14 +1304,8 @@ function withShown(rows, weeks) {
     }
     r.shown = r.values.map((v, i) =>
       (measurable(v) && !(r.done && r.done[i]) ? asValue(r.p, v) : undefined));
-    let sum = 0;
-    let n = 0;
-    r.shown.forEach((s, i) => {
-      if (!use[i] || typeof s !== 'number' || !(r.values[i] > 0)) return;
-      sum += s;
-      n++;
-    });
-    r.shownAvg = n ? Math.round((sum / n) * 10) / 10 : null;
+    const own = ownValue(r.p, wire && !r.mine);
+    r.shownAvg = typeof own === 'number' ? own : null;
   }
   return rows;
 }
@@ -1280,7 +1323,7 @@ const VALUE_NOTE = () =>
   lead('Value') +
   'Points a week over the waiver line at his position; points below the starter line count ' +
   'half, and both lines are fixed for the season. On Value, each projection is shown that way ' +
-  'and Avg is the mean of them; a score stays a score.';
+  'and the Value column is his Value over every week left, as on his card; a score stays a score.';
 
 /**
  * His rest-of-season per week: the D7 mean over `rosWeeks()`, read from the
@@ -2472,26 +2515,24 @@ function leftOutWord(p, v, week, roster) {
   return zero === 'bye' ? 'bye' : zero === 'out' ? 'ruled out' : 'projected 0.0';
 }
 
-/** Avg: the weeks it is the mean of, and where it stands at his position. */
+/** Avg: the weeks it is the mean of, and where it stands at his position. On Value, his Value. */
 function avgCard(row, kind) {
   if (row.shownAvg === null || row.shownAvg === undefined) return null;
+  if (valueOn()) return valueCard(row, kind);
   const weeks = view.weeks;
   const use = avgMask(weeks);
-  const on = valueOn();
   const rows = [];
   let counted = 0;
   weeks.forEach((w, i) => {
     if (!use[i]) return;          // a playoff week: never in Avg
     const v = row.values[i];
     const over = Boolean(row.done && row.done[i]);
-    // On Value the mean is of the Values shown: a score is not one of them.
-    const inIt = typeof v === 'number' && v > 0 && (!on || typeof row.shown[i] === 'number');
+    const inIt = typeof v === 'number' && v > 0;
     if (inIt) counted++;
     rows.push({
       label: `Week ${w}`,
-      note: inIt ? (over ? 'scored' : '')
-        : `${on && over ? 'scored' : leftOutWord(row.p, v, w, kind !== 'wire')}, left out`,
-      value: inIt ? (on ? row.shown[i] : v) : null,
+      note: inIt ? (over ? 'scored' : '') : `${leftOutWord(row.p, v, w, kind !== 'wire')}, left out`,
+      value: inIt ? v : null,
     });
   });
   const pos = row.p.position;
@@ -2499,7 +2540,7 @@ function avgCard(row, kind) {
     .filter((r) => r.p.position === pos && r.shownAvg !== null).map((r) => r.shownAvg);
   return {
     title: row.p.name,
-    sub: `${on ? 'Value, avg' : 'Avg'}, ${weekRange(weeks)}`,
+    sub: `Avg, ${weekRange(weeks)}`,
     rows,
     total: { label: `Mean of ${plural(counted, 'week')}`, value: row.shownAvg },
     foot: standingWords(kind, row.shownAvg, pool, pos),
@@ -3516,8 +3557,10 @@ const weekTitle = (w) => (valueOn()
   ? `ESPN’s projected points for week ${w}, as a Value: points over the waiver line at his position.`
   : `ESPN’s projected points for week ${w}.`);
 const avgTitle = () => (valueOn()
-  ? 'The mean of the Values shown, over the regular-season weeks that project above zero — ours, not ESPN’s.'
+  ? 'His Value over every week left, the one on his card and on the Trade page — ours, not ESPN’s.'
   : 'The mean of the regular-season weeks shown that project above zero — ours, not ESPN’s.');
+/** The column's heading: Avg, or on Value his Value (`withShown`). */
+const avgHead = () => (valueOn() ? 'Value' : 'Avg');
 
 function renderHead(weeks) {
   // Every column says which it is (`data-col`): the keys the "Who to start"
@@ -3539,7 +3582,7 @@ function renderHead(weeks) {
        <th class="name" data-sort data-col="player" title="A free agent you could claim; click a name for the rest of his season and his actual scores.">Player</th>
        <th class="left" data-sort data-col="pos" title="His position.">Pos</th>
        <th class="left" data-sort data-col="team" title="His NFL team.">Tm</th>
-       <th data-sort data-col="avg" title="${avgTitle()}">Avg</th>
+       <th data-sort data-col="avg" title="${avgTitle()}">${avgHead()}</th>
        <th data-sort data-col="extra" title="${esc(gainTitle())}">Gain</th>
        ${cols}
      </tr>`;
@@ -4156,7 +4199,7 @@ function renderTable(weeks) {
   prepareGain();
   renderHead(weeks);
 
-  const all = withShown(buildRows(weeks), weeks);
+  const all = withShown(buildRows(weeks), weeks, true);
   const available = all.filter((r) => matchesFilter(r) && matchesMark(r.p, true));
   const mineAll = withShown(buildMineRows(weeks), weeks);
   // The green box's judge, from your whole roster: no filter can move a box.
@@ -4286,7 +4329,7 @@ function renderTakenHead(weeks) {
        <th class="left" data-sort title="His position, and his rank at it on his own manager’s roster by Avg — best is 1.">Pos</th>
        <th class="left" data-sort title="His NFL team.">Tm</th>
        <th class="left" data-sort title="The manager whose roster he is on, as of the earliest week shown.">Owner</th>
-       <th data-sort title="${avgTitle()}">Avg</th>
+       <th data-sort title="${avgTitle()}">${avgHead()}</th>
        ${cols}
      </tr>`;
 }
@@ -4658,7 +4701,7 @@ function paragraphs(list) {
 
 function renderStats(weeks) {
   const el = $('waiverStats');
-  const rows = withShown(buildRows(weeks), weeks).filter(matchesFilter);
+  const rows = withShown(buildRows(weeks), weeks, true).filter(matchesFilter);
 
   if (!rows.length) {
     el.innerHTML = '';

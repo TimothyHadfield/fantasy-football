@@ -8227,6 +8227,21 @@ function customValue(p) {
 }
 
 /**
+ * THE NUMBER BESIDE HIS NAME, as drawn. On Proj, `customValue`. ON VALUE, HIS
+ * VALUE — js/season.js's, the one on his card, in the Value measure above and
+ * on the Players page (Tim, 2026-10-19: "I'm seeing players in the player
+ * section display a different value than the same players in the trade
+ * section. Why is that?"). It used to be `valueOf` of `customValue`, a mean
+ * over this page's priced span with his zero weeks and the week under way left
+ * out: a third figure for the same man. Null (a dash) when he has none.
+ */
+function customShown(p) {
+  if (!valueOn()) return customValue(p);
+  const v = typeof valueLookup === 'function' ? valueLookup(p.playerId) : null;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/**
  * A squad's whole roster AS A LINEUP: QB, RB1, RB2, WR1…, FLEX, D/ST, K, then
  * the bench.
  *
@@ -8354,7 +8369,7 @@ function customPositionScales(teamIds) {
     for (const p of (team && team.players) || []) {
       if (p.playerId === null || p.playerId === undefined) continue;
       // The colour follows the number SHOWN (Proj | Value).
-      const v = shownAs(p.position, customValue(p));
+      const v = customShown(p);
       if (!Number.isFinite(v)) continue;
       if (!byPos.has(p.position)) byPos.set(p.position, []);
       byPos.get(p.position).push(v);
@@ -8424,7 +8439,7 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
     const lit = on.has(String(p.playerId));
     // Proj | Value: the ORDER above stays the lineup on the page's measure — only
     // the number drawn changes, so nothing moves when the switch is pressed.
-    const v = shownAs(p.position, customValue(p));
+    const v = customShown(p);
     const scale = scales.get(p.position) || null;
     const h = heatOf(v, scale, { what: `a ${p.position} across the league` });
     // The card knows which deal it is inside, so a man on the OTHER squad who
@@ -9514,7 +9529,8 @@ function renderCustomNote() {
     // Rule 7, for the Proj | Value switch — only while there is a switch.
     (state.valueBase
       ? ` <strong>Value</strong> is points a week over the waiver line at his position; points ` +
-        `below the starter line count half. Both lines are fixed for the season.`
+        `below the starter line count half. Both lines are fixed for the season. On Value the figure ` +
+        `beside each man is his Value over every week left, the one on his card and on the Players page.`
       : '') +
     `<br><br>` +
     `<strong>This box has no opinion about whether a deal is good.</strong> The finder above only ` +
