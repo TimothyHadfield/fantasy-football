@@ -778,8 +778,6 @@ function indexTeams(teams) {
         // ESPN's season average and position rank, for the card's glance line.
         // Absent on a week cached before they were parsed: null, never a crash.
         seasonAvg: typeof p.seasonAvg === 'number' ? p.seasonAvg : null,
-        // How many games that average is of (the 💎/🪙 gap; js/outlook-mark.js).
-        seasonGames: typeof p.seasonGames === 'number' ? p.seasonGames : null,
         posRank: typeof p.posRank === 'number' ? p.posRank : null,
       });
     }
@@ -2546,40 +2544,7 @@ function trendMarkOf(p) {
 function outlookOfMan(p) {
   if (!p || state.isDemo) return null;
   const g = glanceFor(p);
-  const c = markAvgOf(p, g.avg);
-  return outlook.outlookOf(g.proj, c.avg, c.games, c.skipped);
-}
-
-/**
- * THE AVERAGE THE 💎/🪙 AND APPEAL READ (Trade audit Phase 4): ESPN's, less a
- * game cut short by injury, with how many games it is of — js/outlook-mark.js
- * `cleanAvgOf`. His weeks are the ones this page holds: a score only in a week
- * that is over, and ESPN's projection for each week's game as it stood before
- * kickoff (`pregame` once his game in a week under way is done).
- */
-function markAvgOf(p, avg) {
-  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-  let games = null;
-  const now = glanceWeek();
-  const order = [now, ...[...weekly.byWeek.keys()].sort((a, b) => b - a)];
-  for (const w of order) {
-    const e = w === null ? null : weekly.byWeek.get(w)?.get(p.playerId);
-    if (e && num(e.seasonGames) !== null) { games = e.seasonGames; break; }
-  }
-  if (games === null) games = num(p.seasonGames);
-  const played = new Set(state.playedWeeks);
-  const weeks = [];
-  for (const [w, m] of weekly.byWeek) {
-    const e = m.get(p.playerId);
-    if (!e) continue;
-    weeks.push({
-      week: w,
-      actual: played.has(w) ? num(e.actual) : null,
-      proj: num(e.done === true ? e.pregame : e.projected),
-    });
-  }
-  const bye = byeWeekOf(p, state.byes);
-  return outlook.cleanAvgOf({ avg, games, weeks, bye: Number.isFinite(bye) ? Number(bye) : null });
+  return outlook.outlookOf(g.proj, g.avg);
 }
 const outlookMarkOf = (p) => outlook.outlookHtml(outlookOfMan(p));
 
@@ -3767,8 +3732,7 @@ function valueCellHtml(offer) {
  * both, and in the sample league, whose men are invented.
  */
 function appealOfOffer(offer) {
-  // The same average the mark reads: less a game cut short by injury.
-  const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: markAvgOf(p, g.avg).avg }; });
+  const side = (list) => list.map((p) => { const g = glanceFor(p); return { proj: g.proj, avg: g.avg }; });
   return state.isDemo ? null : outlook.appealOf(side(offer.receive), side(offer.send));
 }
 

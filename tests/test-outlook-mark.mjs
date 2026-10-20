@@ -7,6 +7,7 @@
 // symbol by their name."
 
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { REPO } from './repo.mjs';
 
@@ -22,8 +23,8 @@ const eq = (a, b, name) => ok(JSON.stringify(a) === JSON.stringify(b), name, `go
 const kind = (proj, avg) => { const r = o.outlookOf(proj, avg); return r ? r.kind : null; };
 
 // --- which mark -------------------------------------------------------------
-eq(o.outlookOf(14.1, 11.0), { kind: 'diamond', delta: 3.1, avg: 11, proj: 14.1, games: null, skipped: [] }, 'projected 3.1 above his average: a diamond');
-eq(o.outlookOf(9.5, 13.0), { kind: 'coin', delta: -3.5, avg: 13, proj: 9.5, games: null, skipped: [] }, 'projected 3.5 below: a coin');
+eq(o.outlookOf(14.1, 11.0), { kind: 'diamond', delta: 3.1, avg: 11, proj: 14.1 }, 'projected 3.1 above his average: a diamond');
+eq(o.outlookOf(9.5, 13.0), { kind: 'coin', delta: -3.5, avg: 13, proj: 9.5 }, 'projected 3.5 below: a coin');
 eq(kind(13.0, 11.0), 'diamond', 'exactly 2.0 above counts ("2 more")');
 eq(kind(11.0, 13.0), 'coin', 'exactly 2.0 below counts');
 eq(kind(12.9, 11.0), null, '1.9 above is no mark');
@@ -63,72 +64,37 @@ ok(o.OUTLOOK_KEY.split(/\s+/).length <= 20 && o.OUTLOOK_KEY.includes('💎') && 
   'the key is one short sentence naming both symbols', o.OUTLOOK_KEY);
 ok(o.OUTLOOK_EXPLAIN.includes(String(o.THRESHOLD)) && o.THRESHOLD === 2, 'the explanation states the threshold, which is 2');
 
-// --- the gap scales with games played (trade audit finding 9, Phase 4) -------
-// One man's score moves about 6.7 a week, so an average of n games is good to
-// about 6.7/√n: the gap needed is that, never under Tim's 2.
-const kindG = (proj, avg, games) => { const r = o.outlookOf(proj, avg, games); return r ? r.kind : null; };
-eq(kindG(13.5, 11.0, 4), null, 'a 4-game man 2.5 above his average: no mark (needs 3.4)');
-eq(kindG(13.5, 11.0, 12), 'diamond', 'a 12-game man 2.5 above: a diamond (needs 2)');
-eq(kindG(8.5, 11.0, 4), null, 'a 4-game man 2.5 below: no coin');
-eq(kindG(8.5, 11.0, 12), 'coin', 'a 12-game man 2.5 below: a coin');
-eq(kindG(14.0, 11.0, 5), 'diamond', '5 games needs 3.0 (6.7/√5 = 3.0), and exactly 3.0 counts');
-eq(kindG(13.9, 11.0, 5), null, '5 games: 2.9 is not enough');
-eq(kindG(13.0, 11.0, 30), 'diamond', 'never stricter than Tim’s 2, however many games');
-eq(kindG(12.9, 11.0, 30), null, 'and never looser than 2 either');
-eq(kindG(17.0, 11.0, 1), null, 'one game: 6.0 above is still inside 6.7');
-ok(o.outlookOf(14.1, 11.0, 12).games === 12, 'the mark carries the games it was judged on');
-ok(Math.abs(o.neededGap(4) - 3.35) < 0.01 && o.neededGap(12) === 2 && o.neededGap(null) === 2,
-  'neededGap: 3.35 at 4 games, 2 at 12, Tim’s 2 when the count is not known', [o.neededGap(4), o.neededGap(12)]);
-ok(o.SPREAD === 6.7, 'the spread is the measured 6.7 points a week');
-ok(/6\.7/.test(o.OUTLOOK_EXPLAIN) && /games/.test(o.OUTLOOK_EXPLAIN) && /injur|ruled out/.test(o.OUTLOOK_EXPLAIN),
-  'the explanation says the gap shrinks with games and how an injured game is left out', o.OUTLOOK_EXPLAIN);
-ok(!/2 or more/.test(o.OUTLOOK_KEY), 'the key no longer promises a flat 2', o.OUTLOOK_KEY);
+// --- a flat 2, on his plain average (Tim, 2026-10-19) ------------------------
+// "I don't like what you did with changing my formula to remove luck with the
+// coins and diamonds in the trade menu. I use that as a form of appeal from
+// other players and to measure how expensive/valueable they are. Keep it at the
+// +2/-2 mark". Phase 4 (3255389) scaled the gap with games played and left
+// injury-shortened games out of the average; both are gone.
 
-// --- the average leaves out a game cut short by injury ----------------------
-// ESPN has no "left hurt" flag; it keeps each played week's final projection,
-// which is 0 when he was ruled out. A game is left out only when he scored
-// under half his other games' median AND was ruled out of his team's next game.
-const wk = (week, actual, proj) => ({ week, actual, proj });
-// 5 games 20, 18, 22, 2 (hurt), 0-line ruled out in week 5 … ESPN: 62/4 = 15.5.
-const hurt = o.cleanAvgOf({ avg: 15.5, games: 4, weeks: [wk(1, 20, 15), wk(2, 18, 15), wk(3, 22, 15), wk(4, 2, 15), wk(5, 0, 0), wk(6, null, 15)] });
-eq(hurt.skipped, [4], 'the 2 in week 4, then ruled out of week 5: left out');
-ok(Math.abs(hurt.avg - 20) < 1e-9 && hurt.games === 3, 'his average is the other three: 60/3 = 20', JSON.stringify(hurt));
-// Lamb's shape (1241838, 2026-10-15): 12.9, 31.3, 16.7, 32.8, then 1.9 — and
-// ESPN projects him at 14.9 for week 6. Nothing says he was hurt: kept.
-const lamb = o.cleanAvgOf({ avg: 19.12, games: 5, weeks: [wk(1, 12.9, 14.2), wk(2, 31.3, 14.9), wk(3, 16.7, 14), wk(4, 32.8, 13.7), wk(5, 1.9, 15.5), wk(6, null, 14.9)] });
-eq(lamb.skipped, [], 'a bad game he played on from is NOT left out (Lamb, week 5)');
-ok(lamb.avg === 19.12 && lamb.games === 5, 'and ESPN’s average stands', JSON.stringify(lamb));
-// The mark: proj 20.5 against ESPN's 15.5 (5.0 above, 4 games: needs 3.4) would
-// be a diamond; against the cleaned 20.0 it is no mark at all.
-{
-  const before = o.outlookOf(20.5, 15.5, 4);
-  const after = o.outlookOf(20.5, hurt.avg, hurt.games, hurt.skipped);
-  ok(before && before.kind === 'diamond' && after === null,
-    'a man is not marked off an injury-shortened game alone', JSON.stringify([before, after]));
-}
-eq(o.cleanAvgOf({ avg: 15.5, games: 4, weeks: [wk(1, 20, 15), wk(2, 18, 15), wk(3, 22, 15), wk(4, 2, 15), wk(5, 12, 14)] }).skipped, [],
-  'a low game he played the next week after: kept');
-eq(o.cleanAvgOf({ avg: 15.5, games: 4, weeks: [wk(1, 20, 15), wk(2, 18, 15), wk(3, 22, 15), wk(4, 11, 15), wk(5, 0, 0)] }).skipped, [],
-  'ruled out next week but the game was not far below his usual (11 vs median 20): kept');
-eq(o.cleanAvgOf({ avg: 15.5, games: 4, weeks: [wk(1, 20, 15), wk(2, 18, 15), wk(3, 22, 15), wk(4, 2, 15)] }).skipped, [],
-  'the week after not held: nothing says he was out — kept');
-eq(o.cleanAvgOf({ avg: 15.5, games: 4, bye: 5, weeks: [wk(1, 20, 15), wk(2, 18, 15), wk(3, 22, 15), wk(4, 2, 15), wk(5, 0, 0), wk(6, 14, 15)] }).skipped, [],
-  'his bye is not "ruled out of the next game"');
-eq(o.cleanAvgOf({ avg: 15.5, games: 4, bye: 5, weeks: [wk(1, 20, 15), wk(2, 18, 15), wk(3, 22, 15), wk(4, 2, 15), wk(5, 0, 0), wk(6, 0, 0)] }).skipped, [4],
-  'over a bye, his team’s next game is the week after it');
-{
-  const few = o.cleanAvgOf({ avg: 11, games: 2, weeks: [wk(1, 20, 15), wk(2, 2, 15), wk(3, 0, 0)] });
-  eq(few.skipped, [], 'two games are too few to call one of them short');
+eq(kind(13.5, 11.0), 'diamond', '2.5 above is a diamond, however few games he has played');
+eq(o.outlookOf(13.5, 11.0, 4) && o.outlookOf(13.5, 11.0, 4).kind, 'diamond', 'a games count passed in changes nothing (no 3.4 needed after 4 games)');
+eq(o.outlookOf(8.5, 11.0, 4) && o.outlookOf(8.5, 11.0, 4).kind, 'coin', 'and 2.5 below is a coin after 4 games too');
+eq(o.outlookOf(13.0, 11.0, 1) && o.outlookOf(13.0, 11.0, 1).kind, 'diamond', 'exactly 2 after one game still counts');
+eq(o.outlookOf(12.9, 11.0, 30), null, '1.9 is no mark, whatever the games');
+ok(typeof o.neededGap === 'undefined' && typeof o.SPREAD === 'undefined', 'no games-played scaling left');
+ok(typeof o.cleanAvgOf === 'undefined' && typeof o.SHORT_SHARE === 'undefined', 'no injury cleaning of the average left');
+// The plain average: a man whose 2 in a game he left hurt drags ESPN's 15.5
+// down is still read at 15.5 — that game is part of his luck and cost.
+eq(kind(17.5, 15.5), 'diamond', 'his plain average 15.5, projected 17.5: a diamond');
+ok(/2 or more a week above \/ below his average/.test(o.OUTLOOK_KEY), 'the key says 2 or more a week above / below his average', o.OUTLOOK_KEY);
+ok(/2 or more points a week/.test(o.OUTLOOK_EXPLAIN) && !/√|games he has played|injur|ruled out/.test(o.OUTLOOK_EXPLAIN),
+  'the explanation states the flat 2 and nothing about games or injuries', o.OUTLOOK_EXPLAIN);
+ok(!/injur/.test(o.APPEAL_EXPLAIN), 'Appeal reads the plain average, and says nothing of injuries', o.APPEAL_EXPLAIN);
+ok(!/without week/.test(o.outlookWords(o.outlookOf(26, 15.5))), 'the mark’s words name no left-out game');
+// Both pages hand the mark and Appeal the plain average: no cleaning step.
+for (const f of ['js/trade-page.js', 'js/waivers-page.js']) {
+  const src = readFileSync(path.join(REPO, f), 'utf8');
+  ok(!/cleanAvgOf|markAvgOf|seasonGames/.test(src), `${f}: no cleaned average and no games count`);
 }
 {
-  const unk = o.cleanAvgOf({ avg: 15.5, games: null, weeks: [wk(1, 20, 15), wk(2, 18, 15), wk(3, 22, 15), wk(4, 2, 15), wk(5, 0, 0)] });
-  ok(unk.skipped.length === 0 && unk.avg === 15.5 && unk.games === 4,
-    'games not known: nothing left out, the games held are the count', JSON.stringify(unk));
+  const src = readFileSync(path.join(REPO, 'js/trade-page.js'), 'utf8');
+  ok(/function appealOfOffer[\s\S]{0,400}avg: g\.avg/.test(src), 'trade page: Appeal reads each man’s plain average (g.avg)');
 }
-eq(o.cleanAvgOf({ avg: null, games: 3, weeks: [] }), { avg: null, games: 3, skipped: [] }, 'no average: nothing to clean');
-ok(/without week 4, cut short by injury/.test(o.outlookWords(o.outlookOf(26, hurt.avg, hurt.games, hurt.skipped))),
-  'the mark’s words say which game was left out', o.outlookWords(o.outlookOf(26, hurt.avg, hurt.games, hurt.skipped)));
-ok(/injury/.test(o.APPEAL_EXPLAIN), 'Appeal says it reads the same cleaned average', o.APPEAL_EXPLAIN);
 
 // --- Appeal ------------------------------------------------------------------
 // Tim, 2026-10-12: "high appeal correlates with their players having a diamond
