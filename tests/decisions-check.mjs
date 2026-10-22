@@ -2436,10 +2436,11 @@ ok('no console errors', !none.boot && none.errors.length === 0, none.errors);
         num(last(c.standings[k].card)[1]) === num(c.standings[k].t)),
       Object.entries(c.standings).map(([k, v]) => [k, v && v.t, v && v.card && v.card.foot]));
     ok('the chart: LUCK opens its parts (and goes to Stats), Title % and Loser % the seasons counted (and go to the simulation), a name its team card',
-      c.chart.LUCK.card && c.chart.LUCK.card.body.length >= 3 && c.chart.LUCK.card.went === 'stats.html?team=10' &&
+      // The first row's team: since 2026-10-22 the order is title % minus loser %.
+      c.chart.LUCK.card && c.chart.LUCK.card.body.length >= 3 && /^stats\.html\?team=\d+$/.test(c.chart.LUCK.card.went) &&
       ['Title %', 'Loser %'].every((k) => c.chart[k].card && /^[\d,]+ of [\d,]+$/.test(c.chart[k].card.body[0][1]) &&
         c.chart[k].card.body[0][0] === 'Seasons' && c.chart[k].card.went === 'schedule.html#simPanel') &&
-      c.chart.team.card && c.chart.team.card.went === 'analysis.html?team=10#rosterDetail',
+      c.chart.team.card && c.chart.team.card.went === `analysis.html?team=${c.chart.LUCK.card.went.split('=')[1]}#rosterDetail`,
       [c.chart.LUCK.card, c.chart['Title %'].card, c.chart.team.card && c.chart.team.card.went]);
     ok('a move’s row opens the player card of the man added, in place of a title that repeated the row; a lineup row keeps its title',
       c.rows.move.title === null && c.rows.move.tip && c.rows.move.card && c.rows.move.who.startsWith('Free Agent WR') &&

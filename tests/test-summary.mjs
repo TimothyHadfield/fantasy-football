@@ -896,6 +896,12 @@ if (!fresh.boot) {
     fresh.rows.some((r) => Math.abs(r.title - r.last) > 0.01),
     JSON.stringify(fresh.rows.map((r) => [r.name, r.title, r.last])));
 
+  // Tim, 2026-10-22: 12% title / 1% loser goes above 13% / 4%. The rows come
+  // out in title % minus loser % order, highest first.
+  ok('rows are ordered by title % minus loser %',
+    fresh.rows.every((r, i, a) => i === 0 || (a[i - 1].title - a[i - 1].last) >= (r.title - r.last) - 1e-9),
+    JSON.stringify(fresh.rows.map((r) => [r.name, r.title, r.last])));
+
   // ---- THE SHARED RED/GREEN SCALE, on the table ---------------------------
   //
   // The demo boots at week 8, so LUCK is past its hold-back and all three
