@@ -1135,12 +1135,18 @@ function render() {
     // exactly the kind this bar was built to stop: these numbers are a copy,
     // they are as old as the last time he opened the site on his computer, and
     // nothing on any page will say so if this does not.
+    // On a computer the copy is only shown because the bridge did not answer
+    // (turned off, or the browser switched it off with Developer mode), so the
+    // sentence says that instead of talking about a phone (Tim, 2026-10-21:
+    // "I'm on my computer so idk why it's talking about the iphone").
+    const fixBridge = 'Turn on the Fantasy Football Bridge in this browser’s Extensions page ' +
+      '(Developer mode on), then reload.';
     const lead = stale
       ? `<strong>Out of date.</strong> These numbers were sent from your computer ` +
         `${esc((state.cloudAges.rosters || {}).described || 'a long time ago')} and nothing on this page is current. ` +
-        `Open the site on your computer to refresh them.`
+        (coarsePointer() ? `Open the site on your computer to refresh them.` : `The bridge extension is not answering on your computer. ${fixBridge}`)
       : `<strong>Synced copy</strong> of ${leagueNameHtml('span')}, sent from your computer. ` +
-        `Not live &mdash; a phone cannot read a private league.`;
+        (coarsePointer() ? `Not live &mdash; a phone cannot read a private league.` : `Not live &mdash; the bridge extension is not answering in this browser. ${fixBridge}`);
     body = `
       <span class="conn-dot"></span>
       <span class="conn-main">${lead}</span>

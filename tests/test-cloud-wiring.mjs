@@ -682,6 +682,9 @@ SCENARIOS['page-synced'] = async () => {
   ok('the connection bar rendered', text.length > 10, text);
   ok('IT SAYS THE NUMBERS ARE A COPY, in words', /synced copy/i.test(text), text);
   ok('and that they are not live', /not live/i.test(text), text);
+  // This harness has no touch screen, so it is the computer (Tim, 2026-10-21).
+  ok('ON A COMPUTER it blames the extension, not a phone',
+    !/phone/i.test(text.split(/squads/i)[0]) && /extension is not answering/i.test(text), text);
   ok('it names the league that was synced', text.includes(CLOUD.name), text);
   ok('and how old the squads are', /squads 3 days ago/i.test(text), text);
   ok('THE WIRE IS CALLED OUT SEPARATELY, being stale at the same age',
