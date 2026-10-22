@@ -1187,15 +1187,15 @@ const review = {
 const isPre = () => review.compare === 'pre';
 const boxOwn = () => review.box === 'own';
 /** The perfect draft is on show (and there is one: a snake with picks). */
-const boxPerfect = () => review.box === 'perfect' && Boolean(review.world && review.world.perfect);
+const boxPerfect = () => review.box === 'perfect' && Boolean(review.world && review.world.perfectFor);
 /** The box the switch shows lit. */
 const boxOn = () => (boxPerfect() ? 'perfect' : boxOwn() ? 'own' : 'drafted');
 /**
- * The world as the board and the team's panel draw it: on Perfect draft its
- * picks, board, scales and totals are the perfect draft's; everything about
- * the men themselves (cards, Value, owners) is the same world's.
+ * The world as the board and the team's panel draw it: on Perfect draft the
+ * picked team's perfect draft — its board, rows (every man's numbers as they
+ * are) and team totals; everything else is the same world's.
  */
-const shown = () => (boxPerfect() ? { ...review.world, ...review.world.perfect } : review.world);
+const shown = () => (boxPerfect() ? { ...review.world, ...review.world.perfectFor(review.teamId) } : review.world);
 // "VS WORTH NOW" ON VALUE (Tim, 2026-10-09: "Instead of basing the "vs worth
 // now" on position in the draft, base it off of their current value - their
 // expected value based on their rank in the draft."). Only when the league's
@@ -1397,31 +1397,32 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
   const ownRows = [...rv.rows, ...extra].filter((r) => ownerNow.has(r.playerId))
     .map((r) => ({ ...r, teamId: ownerNow.get(r.playerId) }));
 
-  // THE PERFECT DRAFT (Tim, 2026-10-22; js/draft-review.js `perfectOrder`): each
-  // team at each pick takes the man worth most today from that pick to its
-  // next — his Value now when the lines are known, else his worth over the bar
-  // (`value`, what "Now" ranks on). A snake only: an auction's picks are the
+  // THE PERFECT DRAFT (Tim, 2026-10-22; js/draft-review.js `perfectOrder`): the
+  // SELECTED team alone, at each of its picks, takes the man worth most today
+  // from that pick to its next — his Value now when the lines are known, else
+  // his worth over the bar (`value`, what "Now" ranks on); the men in between
+  // slide one pick later. No man's numbers change, so the scales are the
+  // world's own; only the board and the team totals are new. Made for a team
+  // when it is first shown, then kept. A snake only: an auction's picks are the
   // order men were put up, not an order anybody chose from.
-  let perfect = null;
+  let perfectFor = null;
   if (draft.type !== 'auction' && rv.rows.length) {
     const worthNow = new Map(rv.rows.map((r) => [r.playerId, valued ? r.valueNow : r.value]));
-    const order = draftReview.perfectOrder(draft.picks, (id) => worthNow.get(id));
-    const rows = draftReview.perfectRows(rv, order);
-    const perKey = {};
-    for (const key of ['valueDiff', 'expected', 'valueNow', 'valuePre']) {
-      const m = valued ? draftReview.teamValues(rows, key) : new Map();
-      perKey[key] = { map: m, scale: heatScale([...m.values()]) };
-    }
-    perfect = {
-      rv: { ...rv, rows },
-      board: draftReview.boardOf({ ...draft, picks: rows }),
-      scale: heatScale(rows.map((r) => r.diff)),
-      preScale: heatScale(rows.map((r) => r.preDiff)),
-      valueScale: heatScale(rows.map((r) => r.valueDiff)),
-      expScale: heatScale(rows.map((r) => r.expected)),
-      nowScale: heatScale(rows.map((r) => r.valueNow)),
+    const made = new Map();
+    perfectFor = (teamId) => {
+      const key = String(teamId);
+      if (made.has(key)) return made.get(key);
+      const order = draftReview.perfectOrder(draft.picks, (id) => worthNow.get(id), teamId);
+      const rows = draftReview.perfectRows(rv, order);
+      const perKey = {};
+      for (const k of ['valueDiff', 'expected', 'valueNow', 'valuePre']) {
+        const m = valued ? draftReview.teamValues(rows, k) : new Map();
+        perKey[k] = { map: m, scale: heatScale([...m.values()]) };
+      }
       // (The box is never Own now here: these are the 'drafted' totals.)
-      totals: { drafted: perKey, own: perKey },
+      const p = { rv: { ...rv, rows }, board: draftReview.boardOf({ ...draft, picks: rows }), totals: { drafted: perKey, own: perKey } };
+      made.set(key, p);
+      return p;
     };
   }
 
@@ -1462,7 +1463,7 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
     // "Expected value" and "Value now": each figure against every pick's.
     expScale: heatScale(rv.rows.map((r) => r.expected)),
     nowScale: heatScale(rv.rows.map((r) => r.valueNow)),
-    ownerNow, extra, ownRows, perfect,
+    ownerNow, extra, ownRows, perfectFor,
   };
 }
 
@@ -1702,7 +1703,7 @@ function renderReview() {
   for (const b of $('boxToggle').querySelectorAll('button')) {
     b.classList.toggle('on', b.dataset.box === boxOn());
     // An auction has no pick order to re-draft.
-    if (b.dataset.box === 'perfect') b.hidden = !w.perfect;
+    if (b.dataset.box === 'perfect') b.hidden = !w.perfectFor;
   }
   $('drMain').hidden = !any;
   $('drExplain').hidden = !any;
@@ -1729,8 +1730,9 @@ function renderReview() {
   const nobody = '<p>Players nobody drafted are listed under the last round' +
     (w.valued && !isPre() ? ', with an expected value of 0' : '') + '.</p>';
   const counts = own ? nobody : perf
-    ? '<p><strong>Perfect draft</strong>: at each pick, in order, the team takes the player with the highest ' +
-      `${w.valued ? 'Value now' : 'worth now'} from that pick up to its next one; the players in between each move one pick later.</p>`
+    ? '<p><strong>Perfect draft</strong>: at each of its picks, the selected team takes the player with the highest ' +
+      `${w.valued ? 'Value now' : 'worth now'} from that pick up to its next one; the players in between each move one pick later. ` +
+      'No other team changes its picks, and every player keeps his numbers.</p>'
     : '<p>A player counts for the team that drafted him, wherever he is now.</p>';
   $('drNote').innerHTML = (isPre()
     ? '<p><strong>Pre</strong> is where ESPN ranked a player before the season, counted among the players drafted: ' +
@@ -1945,8 +1947,9 @@ function pickTeam(id) {
   // The team's own panel is about to be redrawn, and a card open on one of its
   // numbers with it. One open on a heading of the board stays: that is not redrawn.
   const on = typeof popCard.popOpenOn === 'function' ? popCard.popOpenOn() : null;
-  if (!(on && on.classList && on.classList.contains('dr-pick-team'))) closePop();
-  // Only the team's own panel is redrawn; the board keeps its cells.
+  // On Perfect draft the board is the picked team's own, so it is drawn again
+  // (and any card on it closed); otherwise it keeps its cells.
+  if (boxPerfect()) { closePop(); drawBoard(); } else if (!(on && on.classList && on.classList.contains('dr-pick-team'))) closePop();
   drawTeam();
 }
 
@@ -1967,12 +1970,12 @@ function whySpec(pid) {
   if (!r) return null;
   const auction = w.draft.type === 'auction';
   // On Perfect draft: his pick there, and where he really went when that differs.
-  const perfectAt = r.from !== undefined && r.from !== null && r.from !== r.at;
+  const perfectAt = r.from !== undefined && r.from !== null && r.from !== r.overall;
   const went = r.undrafted ? [{ label: 'Drafted', value: 'No' }] : [
     ...(auction
       ? [{ label: 'Paid', value: `$${r.bid}` }, { label: 'Price rank', value: String(r.at) }]
       : perfectAt
-        ? [{ label: 'Perfect draft', value: `Pick ${r.at}` }, { label: 'Drafted', value: `Pick ${r.from}` }]
+        ? [{ label: 'Perfect draft', value: `Pick ${r.overall}` }, { label: 'Drafted', value: `Pick ${r.from}` }]
         : [{ label: 'Drafted', value: `Pick ${r.at}` }]),
     ...(r.keeper ? [{ label: 'Keeper', value: 'Yes' }] : []),
   ];
