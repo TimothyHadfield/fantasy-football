@@ -38,7 +38,8 @@ export const BASE = {
 };
 export const WEEKS = FX.weeks.filter((w) => !FX.finished.includes(w));
 
-const avgOf = (p) => V.restAvg(Object.fromEntries(WEEKS.map((w) => [w, (p.weeks[w] || [null])[0]])), WEEKS, null);
+// 2026-10-22: a 0 week to come counts as his position's waiver line (js/value.js `fillOf`).
+const avgOf = (p) => V.restAvg(Object.fromEntries(WEEKS.map((w) => [w, (p.weeks[w] || [null])[0]])), WEEKS, null, V.fillOf(BASE, p.position));
 
 /** A drafted man's Value today (0 when ESPN projects him nothing); null for a man not in the fixtures. */
 export function nowOf(id) {

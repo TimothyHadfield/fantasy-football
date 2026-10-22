@@ -60,11 +60,13 @@ import * as espn from './espn.js';
 import { slotRows, fillSlots } from './lineup-slots.js';
 import { bestFill, identified, slotsFromTeamLists } from './lineup-avg.js';
 import { LIVE_TAG } from './actual-season-table.js';
+import { fillOf, filledWeek, valueOf } from './value.js';
 
 // What the page handed over. See the block at the top of this file.
 let state = null;
 let valueOn = () => false;
 let asValue = () => null;
+let valueBase = () => null;
 let historyMode = () => 'actual';
 let sourceKey = () => '';
 let glanceFor = () => null;
@@ -104,6 +106,7 @@ export function configure(page) {
   state = page.state;
   valueOn = page.valueOn;
   asValue = page.asValue;
+  valueBase = typeof page.valueBase === 'function' ? page.valueBase : () => null;
   historyMode = page.historyMode;
   sourceKey = page.sourceKey;
   glanceFor = page.glanceFor;
@@ -879,7 +882,44 @@ export function playerHistoryValue(p, week, mode, plain = false) {
   return valueOn() && mode === 'proj' && !plain ? asValue(p, round1(v)) : round1(v);
 }
 
-export const PLAYER_AVG_HEAD = 'The mean of the regular-season numbers shown; a bye is left out.';
+/**
+ * A MAN'S AVG OVER THE RUN (2026-10-22). Tim: "I do want to count the 0
+ * everywhere, but not as a pure 0. Make the number the base of that position
+ * … this is also the case for BYE weeks." The mean, over the regular weeks,
+ * of his numbers IN POINTS — a history week as its cell has it (on Proj his
+ * projection before kickoff, else his score; on Value only the projection),
+ * a week to come at his projection with a 0 or his bye counted as his
+ * position's waiver line (js/value.js `filledWeek`). On Value it is then ONE
+ * Value, `valueOf` of that mean — not the mean of the weekly Values. Without
+ * the lines: the old mean (a bye left out, a 0 counted as 0).
+ *
+ * `ahead[i]` is the raw projection of a week to come (anything not a number
+ * counts for nothing); `index` is the season index (`seasonStatus`).
+ */
+export function manAvg(p, weeks, hist, ahead, index) {
+  const mode = historyMode();
+  const val = valueOn();
+  const fill = fillOf(valueBase(), p.position);
+  const bye = byeWeekOf(p, state.byes);
+  const xs = weeks.map((w, i) => {
+    if (hist.has(w)) {
+      if (val && mode !== 'proj') return null;
+      return playerHistoryValue(p, w, mode, true);
+    }
+    const v = ahead[i];
+    if (typeof v !== 'number') return (bye !== null && Number(bye) === Number(w) && fill !== null) ? fill : null;
+    const isBye = (bye !== null && Number(bye) === Number(w)) ||
+      (v === 0 && zeroOf(v, w, p, seasonStatus(index, w, p)) === 'bye');
+    const x = filledWeek(round1(v), isBye, fill);
+    return x === null ? null : round1(x);
+  });
+  const mean = regularAvg(xs, weeks);
+  if (!val || mean === null) return mean;
+  const v = valueOf(valueBase(), p.position, mean);
+  return v === null ? null : v;
+}
+
+export const PLAYER_AVG_HEAD = 'The mean of the regular-season numbers shown; a bye or a 0.0 week to come counts as the waiver line at his position.';
 
 /**
  * The week headers of a table whose rows are MEN — the Player view here and
@@ -1126,7 +1166,7 @@ export function starterRows(team, weeks, index, starters, hist = new Set()) {
         counted,
         startsIn,
         held: onRosterNow.has(p.playerId),
-        avg: regularAvg(counted, weeks),
+        avg: manAvg(p, weeks, hist, values, index),
         // Out of the weeks actually READ, never out of all of them: a squad
         // half-loaded would otherwise look like a squad half-benched. The
         // playoff weeks count here: Starts is the number of marked cells on

@@ -222,5 +222,43 @@ eq(v.valueOf(base, 'K', 8), null, 'K: no line, so no value');
   eq(v.valueOf(kept, 'QB', 22), 6.5, 'his projection rises 2 above the starter line: his value rises 2');
 }
 
+// ================================================ A 0 COUNTS AS THE BASE (2026-10-22)
+// Tim: "I do want to count the 0 everywhere, but not as a pure 0. Make the
+// number the base of that position. For example if a 0 value equals 13 pts proj
+// for a WR, then replace the 0 with 13 when counting for future proj. this is
+// also the case for BYE weeks." The base is the position's waiver line (the
+// average where Value is 0). His example worked on paper: (18, 17, 19, 0, 18)
+// is 72 / 5 = 14.4 as a pure 0; with the 0 counted as 13 it is 85 / 5 = 17.0.
+{
+  const wr13 = { v: v.BASE_VERSION, setAt: 1, week: 8, lines: { WR: { waiver: 13, starter: 15, agents: 3, starters: 20 } } };
+  const tim = { 8: 18, 9: 17, 10: 19, 11: 0, 12: 18 };
+  const W = [8, 9, 10, 11, 12];
+  eq(v.fillOf(wr13, 'WR'), 13, 'fillOf: the base is the waiver line');
+  eq(v.fillOf(wr13, 'QB'), null, 'fillOf: no line, no base');
+  eq(v.restAvg(tim, W, null, 13), 17, "Tim's example: (18+17+19+13+18)/5 = 17.0");
+  eq(v.restProjAvg(tim, W, null, 13), 17, "…and the card's Proj is the same 17.0 (Proj and Value's average match)");
+  eq(v.rawAvg(tim, W, null), 14.4, 'the raw average (the lines are made from this) still counts the pure 0: 14.4');
+  // A bye week counts the same way, and so does a D/ST projected a few points in its bye.
+  eq(v.restAvg({ 8: 18, 9: 17, 10: 0, 11: 19, 12: 18 }, W, 10, 13), 17, 'his bye counts as 13 too: 85 / 5');
+  eq(v.restAvg({ 8: 18, 9: 17, 10: 4, 11: 19, 12: 18 }, W, 10, 13), 17, 'a number in his bye week (a D/ST) still counts as the base');
+  eq(v.restAvg({ 8: 18, 9: 17, 10: null, 11: 19, 12: 18 }, W, 10, 13), 17, 'his bye counts as the base even with no number read for it');
+  // An unread week stays out.
+  eq(v.restAvg({ 8: 18, 9: null, 10: 19, 11: 0 }, [8, 9, 10, 11], null, 13), (18 + 19 + 13) / 3, 'a null week is skipped, not filled');
+  // A low but real projection is his.
+  eq(v.restAvg({ 8: 5, 9: 0 }, [8, 9], null, 13), 9, 'a positive projection under the line stays as it is: (5 + 13) / 2');
+  eq(v.restAvg({ 8: 0, 9: 0 }, [8, 9], null, 13), 13, 'out for every week left: he averages the base');
+  eq(v.restAvg({}, [8, 9], null, 13), null, 'nothing read at all: no average, not the base');
+  // No base known: the old behaviour.
+  eq(v.restAvg(tim, W, null, null), 14.4, 'lines unknown: restAvg falls back to counting the 0');
+  eq(v.restProjAvg(tim, W, null, null), 18, 'lines unknown: restProjAvg falls back to leaving the 0 out');
+  // Value is made from the filled average.
+  eq(v.playerValue(wr13, 'WR', tim, W, null), v.valueOf(wr13, 'WR', 17), 'playerValue = valueOf(the filled average)');
+  eq(v.playerValue(wr13, 'WR', tim, W, null), 3, 'WR 17 over lines 13/15: 2 at half + 2 in full = 3.0');
+  eq(v.playerValue(wr13, 'WR', { 8: 0, 9: 0 }, [8, 9], null), 0, 'a man out for good is worth exactly 0, the waiver line');
+  // The lines are made from the RAW average, so they do not depend on themselves.
+  const fa = [{ position: 'WR', avg: v.rawAvg({ 8: 12, 9: 0 }, [8, 9]) }, { position: 'WR', avg: 6 }, { position: 'WR', avg: 6 }];
+  eq(v.buildBase({ rostered: [], freeAgents: fa, slots: [4], teams: 1 }).lines.WR.waiver, 6, 'lines: built from raw averages (6, 6, 6)');
+}
+
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);
 process.exit(fail ? 1 : 0);

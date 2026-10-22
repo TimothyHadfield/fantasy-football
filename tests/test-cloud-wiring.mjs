@@ -1634,7 +1634,10 @@ SCENARIOS['value-sync'] = async () => {
   ok('with the same lines', same(vals.base, base));
   eq(vals.byId.size, 60, 'everybody on a squad has an entry');
   eq(vals.byId.get(111).value, 5.7, 'a starting QB at the starter line: half of 21.4 − 10');
-  eq(vals.byId.get(100).value, 0.2, 'the backup QB (bye week 4 left out of his average): half of 10.4 − 10');
+  // 2026-10-22 (Tim: a bye counts as the base): his bye week 4 counts as the
+  // QB waiver line 10, so (10.4 + 10 + 10.4) / 3 = 10.27, half of 0.27 = 0.1.
+  // (Before: the bye left out, half of 10.4 − 10 = 0.2.)
+  eq(vals.byId.get(100).value, 0.1, 'the backup QB (bye week 4 counted as the waiver line 10): half of 10.27 − 10');
   eq(vals.byId.get(114).value, 12.7, 'the best RB: half of 16.4 − 7, plus all of 24.4 − 16.4');
   eq(vals.byId.get(114).position, 'RB', 'with his position');
   near(vals.byId.get(114).avg, 24.4, 'and his average over the weeks left', 1e-9);

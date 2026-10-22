@@ -826,9 +826,29 @@ function avgMask(weeks) {
   return regular.some(Boolean) ? regular : weeks.map(() => true);
 }
 
-function avgOf(values, weeks) {
+function avgOf(values, weeks, p = null, done = null) {
   const use = avgMask(weeks);
-  return meanOf(values.filter((_, i) => use[i]));
+  // A 0 AND A BYE COUNT AS HIS POSITION'S BASE (Tim, 2026-10-22: "I do want to
+  // count the 0 everywhere, but not as a pure 0. Make the number the base of
+  // that position … this is also the case for BYE weeks"): the waiver line, in
+  // points a week (js/value.js `filledWeek`). Only a projection is filled — a
+  // game already over is a score and stays as it is. Without the lines: the
+  // old mean (above 0 only).
+  const fill = p ? value.fillOf(state.value.base, p.position) : null;
+  if (fill === null) return meanOf(values.filter((_, i) => use[i]));
+  const bye = p ? byeWeekOf(p, state.byes) : null;
+  let sum = 0;
+  let n = 0;
+  values.forEach((v, i) => {
+    if (!use[i]) return;
+    const x = done && done[i]
+      ? (typeof v === 'number' && v > 0 ? v : null)
+      : value.filledWeek(v, bye !== null && Number(bye) === Number(weeks[i]), fill);
+    if (x === null) return;
+    sum += x;
+    n += 1;
+  });
+  return n > 0 ? Math.round((sum / n) * 10) / 10 : null;
 }
 
 /** The first playoff week among these columns — the one the line goes before. */
@@ -1185,8 +1205,8 @@ async function ensureValueWeeks(token) {
 }
 
 /**
- * A FREE AGENT'S OWN VALUE: `valueOf` his average over the weeks left, his bye
- * left out (js/value.js `restAvg`). In a week under way a man who has played
+ * A FREE AGENT'S OWN VALUE: `valueOf` his average over the weeks left, a 0 and
+ * his bye counted as his position's waiver line (js/value.js `playerValue`). In a week under way a man who has played
  * counts at what ESPN projected, not what he scored — the site's one rule, so
  * his Value does not jump at kickoff.
  *
@@ -1232,7 +1252,9 @@ function ownAvg(p, wire) {
     return hit && typeof hit.avg === 'number' ? hit.avg : null;
   }
   const weeks = wireWeeksOf(p);
-  return weeks && typeof weeks === 'object' ? value.restAvg(weeks, got.weeks, byeWeekOf(p, state.byes)) : null;
+  return weeks && typeof weeks === 'object'
+    ? value.restAvg(weeks, got.weeks, byeWeekOf(p, state.byes), value.fillOf(state.value.base, p.position))
+    : null;
 }
 
 /** The Value column's preview: what his Value is made of, over which weeks. */
@@ -1802,8 +1824,8 @@ function glanceFor(p, wire) {
 
 /**
  * "Proj" AS THE REST OF HIS SEASON (Tim, 2026-10-11): the average of the weeks
- * left he is projected to play, bye and ruled-out weeks left out
- * (js/value.js `restProjAvg`). null until those weeks are known — the line
+ * left, a 0 and his bye counted as his position's waiver line (2026-10-22;
+ * js/value.js `restProjAvg`). null until those weeks are known — the line
  * then keeps this week's projection.
  */
 function restProj(p, wire) {
@@ -1820,7 +1842,7 @@ function restProj(p, wire) {
     const done = doneFor(p.playerId, w, false);
     byWeek[w] = done ? done.pregame : v;
   }
-  return value.restProjAvg(byWeek, got.weeks, byeWeekOf(p, state.byes));
+  return value.restProjAvg(byWeek, got.weeks, byeWeekOf(p, state.byes), value.fillOf(state.value.base, p.position));
 }
 
 function glanceNow(p, wire) {
@@ -1907,7 +1929,8 @@ function buildRows(weeks) {
   for (const p of state.pool.values()) {
     const values = weeks.map((w) => valueFor(p.playerId, w));
     const real = values.filter((v) => typeof v === 'number');
-    rows.push({ p, values, done: doneRun(p, weeks, false), avg: avgOf(values, weeks), counted: real.length });
+    const done = doneRun(p, weeks, false);
+    rows.push({ p, values, done, avg: avgOf(values, weeks, p, done), counted: real.length });
   }
   return rows;
 }
@@ -2064,7 +2087,8 @@ function buildMineRows(weeks) {
     if (!POS_ORDER.has(p.position)) continue;   // an unknown slot is not a position
     const values = weeks.map((w) => rosterValueFor(p.playerId, w));
     if (!held.has(p.position)) held.set(p.position, []);
-    held.get(p.position).push({ p, values, done: doneRun(p, weeks, true), avg: avgOf(values, weeks), mine: true });
+    const done = doneRun(p, weeks, true);
+    held.get(p.position).push({ p, values, done, avg: avgOf(values, weeks, p, done), mine: true });
   }
 
   const rows = [];
@@ -2873,7 +2897,8 @@ function buildTakenRows(weeks) {
     const byPosition = new Map();
     for (const p of players) {
       const values = weeks.map((w) => rosterValueFor(p.playerId, w));
-      const row = { p, values, done: doneRun(p, weeks, true), avg: avgOf(values, weeks), owner, ownerId, rank: null };
+      const done = doneRun(p, weeks, true);
+      const row = { p, values, done, avg: avgOf(values, weeks, p, done), owner, ownerId, rank: null };
       rows.push(row);
       if (!byPosition.has(p.position)) byPosition.set(p.position, []);
       byPosition.get(p.position).push(row);
@@ -3169,6 +3194,7 @@ starters.configure({
   state: startView,
   valueOn,
   asValue,
+  valueBase: () => state.value.base,
   historyMode: startHistory,
   sourceKey: () => `players:${state.token}:${startRev}`,
   glanceFor: (p) => glanceFor(p, false),
@@ -4557,6 +4583,17 @@ function renderTakenStats(weeks) {
  * whom, that a Bye cell and a blank cell are different facts, and why nothing
  * is coloured.
  */
+/**
+ * How the Avg treats a 0, a bye and a blank week (2026-10-22): with the
+ * league's lines known a bye or a 0 counts as the waiver line; without them
+ * the old rule still holds, and the words say so.
+ */
+function AVG_ZERO_WORDS() {
+  return state.value && state.value.base
+    ? 'a bye or a 0.0 week counts as the waiver line at his position, and a week with no number is left out'
+    : 'only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are all left out';
+}
+
 function renderTakenNote(weeks) {
   // Two outputs: `status` is the short, always-visible line under the stat
   // tiles (demo notice, errors, progress); `parts` is the full explanation,
@@ -4589,8 +4626,7 @@ function renderTakenNote(weeks) {
 
   parts.push(
     lead('Avg') +
-    'Avg is the mean of the weeks shown and is ours, not ESPN’s: only weeks projecting above ' +
-    'zero count, so a bye, a man ruled out and a week with no number at all are all left out — ' +
+    'Avg is the mean of the weeks shown and is ours, not ESPN’s: ' + AVG_ZERO_WORDS() + ' — ' +
     'the same rule as the Trade page’s per-week figure. ' + PLAYOFF_NOTE + ' It is ' +
     'worked out exactly the way the Avg in the table above is, so the two can be read against each other.'
   );
@@ -4864,8 +4900,7 @@ function renderNote(weeks) {
 
   parts.push(
     lead('Avg, Bye and blank') +
-    'Avg is the mean of the weeks shown and is ours, not ESPN’s: only weeks projecting above ' +
-    'zero count, so a bye, a man ruled out and a week with no number at all are all left out — ' +
+    'Avg is the mean of the weeks shown and is ours, not ESPN’s: ' + AVG_ZERO_WORDS() + ' — ' +
     'the same rule as the Trade page’s per-week figure. ' + PLAYOFF_NOTE + ' ' +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
     'a blank cell means that week’s list carried no number for him at all. Those are not the ' +

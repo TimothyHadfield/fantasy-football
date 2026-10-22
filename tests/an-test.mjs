@@ -368,7 +368,9 @@ const VALUE_BASE = {
 const VALUE_STUB = {
   base: VALUE_BASE,
   weeks: [8, 9, 10, 11, 12, 13, 14, 15, 16],
-  players: { 400: { position: 'QB', avg: 23.2, value: 9.9 } },
+  // 401 (T4 Player 01, an RB): his own rest-of-season Value, which Roster
+  // detail's Avg/wk shows on Value since 2026-10-22 (one Value per man).
+  players: { 400: { position: 'QB', avg: 23.2, value: 9.9 }, 401: { position: 'RB', avg: 17.1, value: 7.3 } },
 };
 const SHOW_IDS = ['overviewShow', 'seasonShow', 'startersShow', 'rosterShow'];
 
@@ -2824,9 +2826,12 @@ async function checkValue(c, scenario) {
       Boolean(was && him) && num(him[iProj]) === valueOf(VALUE_BASE, 'RB', Number(num(was[iProj]))).toFixed(1) &&
         num(him[iProj]) !== num(was[iProj]),
       JSON.stringify(was && him && [was[iProj], him[iProj]]));
-    c.ok('VALUE: and Avg/wk is valueOf(his position, the Avg/wk it showed)',
-      Boolean(was && him) && /^\d/.test(was[iAvg].text) &&
-        num(him[iAvg]) === valueOf(VALUE_BASE, 'RB', Number(num(was[iAvg]))).toFixed(1),
+    // 2026-10-22 (brief: "Analysis season/17 Avg/wk on Value must use the
+    // rest-of-season Value"): on Value it is HIS Value, the one on his card
+    // (VALUE_STUB 401 = 7.3), not valueOf of the Avg/wk it showed.
+    c.ok('VALUE: and Avg/wk is his own Value, the one on his card',
+      Boolean(was && him) && /^\d/.test(was[iAvg].text) && num(him[iAvg]) === '7.3' &&
+        valueOf(VALUE_BASE, 'RB', Number(num(was[iAvg]))).toFixed(1) !== '7.3',
       JSON.stringify(was && him && [was[iAvg], him[iAvg]]));
     c.ok('VALUE: Actual and Season total stay points',
       Boolean(was && him) && him[iAct].text === was[iAct].text && him[iSeason].text === was[iSeason].text,

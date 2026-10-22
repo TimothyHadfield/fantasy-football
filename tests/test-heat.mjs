@@ -560,6 +560,33 @@ const futNote = fut.notes.find((n) => /Colour on the Proj row/.test(n));
 ok(/average of 14\.0 over the 3 weeks still to come/.test(futNote) && /already played/.test(futNote),
   'THE KEY LINE SAYS THE CENTRE IS HIS WEEKS TO COME, and that played weeks use it too', futNote);
 
+// ---- A 0 AND A BYE COUNT AS HIS BASE (Tim, 2026-10-22) -------------------
+// "I do want to count the 0 everywhere, but not as a pure 0. Make the number
+// the base of that position … this is also the case for BYE weeks." With his
+// base (the waiver line) at 10: weeks 5–9 count 12, 14, 10, 16, 10 = 62 / 5.
+{
+  const filled = weekRun({ ...FUT, fill: 10 });
+  close(filled.scale.mean, 12.4, 1e-9, 'WITH A BASE: the 0.0 and the bye count as 10 — (12+14+10+16+10)/5');
+  eq(filled.scale.n, 5, 'over all five weeks to come');
+  close(restProjAvg(futMap, [5, 6, 7, 8, 9], 9, 10), filled.scale.mean, 1e-9,
+    'THE SAME NUMBER AS THE CARD’S “Proj” with the base (value.js restProjAvg)');
+  const fNote = filled.notes.find((n) => /Colour on the Proj row/.test(n));
+  ok(/average of 12\.4 over the 5 weeks still to come \(a bye or 0\.0 week counted as 10\.0/.test(fNote),
+    'the key line says the 0 and the bye count as the base', fNote);
+  // The card being opened gets the base from the page's value source.
+  const { setValueSource, centredRun } = await import('../js/player-card.js');
+  const src = () => null;
+  src.fill = (id) => (id === 7 ? 10 : null);
+  setValueSource(src);
+  close(centredRun(fut, 7).scale.mean, 12.4, 1e-9, 'centredRun: a card opened with a known base re-centres on it');
+  eq(centredRun(fut, 8), fut, 'centredRun: no base known for him, the run untouched');
+  setValueSource(null);
+  eq(centredRun(fut, 7), fut, 'centredRun: no value source, the run untouched');
+  const out = weekRun({ weeks: [1, 2, 3, 4, 5, 6], projections: [15, 15, 20, 25, 25, 0], actuals: [], splitAfter: 5,
+    injuryStatus: [null, null, null, null, null, 'OUT'], byeWeek: 12, fill: 8 });
+  close(out.scale.mean, 8, 1e-9, 'out for every week left: centred on his base');
+}
+
 // No split: the card's own builder passes currentWeek only — that week and on are to come.
 const byNow = weekRun({ weeks: [1, 2, 3, 4, 5, 6], projections: [30, 30, 30, 10, 12, 14], actuals: [], currentWeek: 4 });
 close(byNow.scale.mean, 12, 1e-9, 'WITH NO SPLIT, currentWeek decides: weeks 4–6 average 12');

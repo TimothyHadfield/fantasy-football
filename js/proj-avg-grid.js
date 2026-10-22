@@ -21,6 +21,7 @@
 //       floors      () => the page's positional floors (js/floor.js), or null
 //       valueOn     () => true while the page shows Value instead of Proj
 //       asValue     (p, v) => that projection as a Value
+//       valueBase   () => the league's Value lines (js/value.js), for an Avg on Value
 //       sheetWords  true on the Analysis page only: the sentences that point
 //                   at its "Season by week" panel, which the Trade page has not
 //
@@ -36,6 +37,7 @@ import {
   spanWeeks, round1, fmt, esc, plural, cardAttr, withCard, placeOf, valueWords,
 } from './who-to-start.js';
 import { assessSlot, lineupTotal } from './lineup-avg.js';
+import { runValue } from './value.js';
 import { heatScale, heatOf, heatMarkHtml } from './heat.js';
 import { teamWeekSpec } from './pop.js';
 import { teamHref } from './links.js';
@@ -43,6 +45,7 @@ import { teamHref } from './links.js';
 let floors = () => null;
 let valueOn = () => false;
 let asValue = () => null;
+let valueBase = () => null;
 let sheetWords = false;
 
 /** Point the grid at a page. Call it once, before anything here is drawn. */
@@ -50,6 +53,7 @@ export function configure(page) {
   floors = page.floors || (() => null);
   valueOn = page.valueOn || (() => false);
   asValue = page.asValue || (() => null);
+  valueBase = page.valueBase || (() => null);
   sheetWords = page.sheetWords === true;
 }
 
@@ -305,11 +309,12 @@ let slotValueAvgs = { key: null, byTeam: new Map() };
 
 /**
  * `teamSlotAverages` AS THE GRID DRAWS IT. On Proj that is the thing itself.
- * On Value every slot's average is the mean of its weeks' VALUES — each week's
- * man at his own position's lines — over the same regular-season weeks, and
- * nothing is floored: a man under the waiver line is simply worth 0. A week
- * nobody fills the slot has no man to value and is not counted. The Total is
- * the projection it always was.
+ * On Value every slot's average is ONE Value (2026-10-22, js/value.js
+ * `runValue`): `valueOf` of the average projection of the men filling it over
+ * the same regular-season weeks, a 0 or a bye counted as that man's waiver
+ * line — not the mean of weekly Values, so a slot held by one man all season
+ * shows his Value. Nothing is floored. A week nobody fills the slot is not
+ * counted. The Total is the projection it always was.
  */
 export function drawnSlotAverages(rows, slots, weeks) {
   const plain = teamSlotAverages(rows, slots, weeks);
@@ -323,17 +328,19 @@ export function drawnSlotAverages(rows, slots, weeks) {
   for (const [id, got] of plain) {
     const cells = new Map();
     for (const row of rows) {
-      const values = weeks.map((w) => {
+      const entries = weeks.map((w) => {
+        if (isPlayoff(w)) return null;
         const perTeam = byWeek.get(w);
         const fill = perTeam ? perTeam.get(id) : null;
         const e = fill ? fill.get(row.key) : null;
-        return e && typeof e.v === 'number' ? asValue(e.p, e.v) : null;
+        return e && e.p && typeof e.v === 'number' ? { position: e.p.position, v: e.v } : null;
       });
-      const avg = regularAvg(values, weeks);
+      const use = entries;
+      const avg = valueBase() ? runValue(valueBase(), use) : null;
       cells.set(row.key, {
         ...got.slots.get(row.key),
         avg: avg === null ? null : round1(avg),
-        n: regularCount(values, weeks),
+        n: use.filter(Boolean).length,
         assumed: 0,
         value: true,
       });

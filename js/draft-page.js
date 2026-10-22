@@ -33,7 +33,7 @@ import {
 } from './player-card.js';
 // Player Value (docs/value-plan.md): the arithmetic, and ESPN's preseason
 // projection re-scored under the league's rules.
-import { valueOf, restAvg, lineOf, valueText } from './value.js';
+import { valueOf, restAvg, lineOf, valueText, fillOf } from './value.js';
 import { loadBaseline, baselineOf, scoringForSeason } from './proj-trend.js';
 import { shortName } from './actual-season-table.js';
 import { scope } from './prefs.js';
@@ -1337,7 +1337,8 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
 
   // HIS VALUE TODAY (docs/value-plan.md). A man on a squad: the league's own
   // figure. A man nobody holds: the same arithmetic on his own weeks left, which
-  // this page has already read; 0 when ESPN projects him nothing.
+  // this page has already read (a 0 and his bye at his position's waiver line,
+  // 2026-10-22). Unknown stays unknown: no entry, a dash, and nothing in a sum.
   const base = values && values.base ? values.base : null;
   const valueNow = new Map();
   const held = (id) => Boolean(values && values.byId && (values.byId.has(id) || values.byId.has(Number(id))));
@@ -1346,8 +1347,10 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
       if (!m.position || !lineOf(base, m.position)) continue;
       const proj = {};
       for (const wk of values.weeks || []) proj[wk] = m.byWeek[wk] ? m.byWeek[wk].proj : null;
-      const own = () => valueOf(base, m.position, restAvg(proj, values.weeks || [], byeWeekOf(m, byes)));
-      valueNow.set(id, (held(id) ? values.lookup(id) : null) ?? own() ?? 0);
+      const own = () => valueOf(base, m.position,
+        restAvg(proj, values.weeks || [], byeWeekOf(m, byes), fillOf(base, m.position)));
+      const v = (held(id) ? values.lookup(id) : null) ?? own();
+      if (typeof v === 'number' && Number.isFinite(v)) valueNow.set(id, v);
     }
   }
   const worth = base && preOf ? { base, now: valueNow, pre: preOf } : null;

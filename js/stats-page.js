@@ -337,7 +337,10 @@ function wireValue(demo) {
   let asked;
   try { asked = season.fetchPlayerValues({ demo: Boolean(demo) }); } catch { return; }
   Promise.resolve(asked).then((v) => {
-    if (valueFor === key && v && typeof v.lookup === 'function') setValueSource(v.lookup);
+    if (valueFor !== key || !v || typeof v.lookup !== 'function') return;
+    // Free agents too, once the pre-vs-now table has read them (`ensurePreNowFree`).
+    const free = pvn.free && pvn.free.valueKey === key && pvn.free.values ? pvn.free.values.lookup : null;
+    setValueSource(free || v.lookup);
   }).catch(() => {});
 }
 
@@ -2651,6 +2654,8 @@ const pvn = {
   focus: null,          // the position chip pressed under the graph
   wire: null,           // { key, week, players, said } - the answer, kept
   wirePending: null,    // `${key}:${week}` of a read in flight
+  free: null,           // { key, valueKey, values } - every man's Value, free agents too
+  freePending: null,
   baselineAsked: false,
   cards: new Map(),     // playerId -> run key
   cardsFor: '',
@@ -2691,6 +2696,28 @@ function ensurePreNowRest(key) {
       if (pvn.rest.values) renderPreNow();
     })
     .catch(() => { if (pvn.restPending === key) { pvn.restPending = null; pvn.rest = { key, values: null }; } });
+}
+
+/**
+ * A FREE AGENT'S VALUE AND REST (2026-10-22): the Players page's rule
+ * (js/season.js `fetchWireValues`, the wire of each week left), asked only
+ * once free agents are on the table. None on the synced copy.
+ */
+function ensurePreNowFree(key) {
+  if ((pvn.free && pvn.free.key === key) || pvn.freePending === key) return;
+  if (typeof season.fetchWireValues !== 'function') return;
+  pvn.freePending = key;
+  const valueKey = valueFor;
+  Promise.resolve()
+    .then(() => season.fetchWireValues())
+    .then((got) => {
+      if (pvn.freePending !== key) return;
+      pvn.freePending = null;
+      pvn.free = { key, valueKey, values: got && typeof got.lookup === 'function' ? got : null };
+      if (pvn.free.values && valueFor === valueKey) setValueSource(got.lookup);
+      if (pvn.free.values) renderPreNow();
+    })
+    .catch(() => { if (pvn.freePending === key) { pvn.freePending = null; pvn.free = { key, valueKey, values: null }; } });
 }
 
 async function ensurePreNowWire(key, week) {
@@ -2823,14 +2850,17 @@ function renderPreNow() {
     wire: wire ? wire.players : [],
     preOf: (id) => { const b = trend.baselineOf(id, scoring); return b ? b.perWeek : null; },
     avgOf: (id) => preNow.seasonAvgOf(id, held, week),
-    // REST = his projected average over the weeks left, bye and ruled-out
-    // weeks left out — the Proj on his card (js/season.js `fetchPlayerValues`).
-    // Known for men on a squad; a free agent's would take every remaining
-    // week's wire, so his cell is a dash.
+    // REST = his projected average over the weeks left, a 0 and his bye at
+    // his position's waiver line — the Proj on his card (js/season.js
+    // `fetchPlayerValues`). A free agent's, once every week's wire is read
+    // (`ensurePreNowFree`), by the same rule.
     restOf: (id) => {
       const got = pvn.rest && pvn.rest.key === key ? pvn.rest.values : null;
       const hit = got ? got.byId.get(id) ?? got.byId.get(Number(id)) : null;
-      return hit && isNum(hit.projAvg) ? hit.projAvg : null;
+      if (hit && isNum(hit.projAvg)) return hit.projAvg;
+      const free = pvn.free && pvn.free.key === key && pvn.free.values ? pvn.free.values.lookup : null;
+      const v = free && typeof free.proj === 'function' ? free.proj(id) : null;
+      return isNum(v) ? v : null;
     },
   });
   const counts = preNow.countRows(rows);
@@ -2841,6 +2871,7 @@ function renderPreNow() {
   const wantWire = preNow.needsWire(pvn.filters);
   if (wantWire && !wire) ensurePreNowWire(key, week);
   ensurePreNowRest(key);
+  if (wantWire && wire) ensurePreNowFree(key);
   const reading = wantWire && !wire;
   paintPreNowControls();
 

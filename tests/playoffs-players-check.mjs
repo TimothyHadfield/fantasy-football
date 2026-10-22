@@ -193,6 +193,9 @@ for (const id of poZeroMen) {
 }
 
 // Future: the regular-season weeks left, a 0 week LEFT OUT (Tim, 2026-10-16).
+// Since 2026-10-22 that is only the rule BEFORE the league's Value lines are
+// known (as here, at first paint); with them a 0 counts as the waiver line —
+// checked under Proj | Value below.
 const futZeroMen = [...rostered].filter((id) => {
   const r = runOf(id, FUTURE);
   return r.all && r.zeros > 0 && r.zeros < FUTURE.length && r1(r.withZeros) !== r1(r.skipZeros);
@@ -375,15 +378,19 @@ for (const id of sample) {
     eq(txt, vOf(pos, v).toFixed(1), `Value: man ${id} week ${w} = valueOf(${pos}, ${v})`);
     if (vOf(pos, v).toFixed(1) !== v.toFixed(1)) differs++;
   });
-  // Playoff: the mean of the weeks' Values, every week counted (a 0 week is 0).
-  const poV = r1(r.vals.reduce((a, v) => a + (v === 0 ? 0 : vOf(pos, v)), 0) / r.vals.length);
-  eq(strip(cellText(tr, col('Playoff'))), poV.toFixed(1), `Value: man ${id} Playoff = mean of his weeks' Values`);
-  // Future: the mean of the Values of his non-zero regular weeks left.
+  // Tim, 2026-10-22: "I do want to count the 0 everywhere, but not as a pure
+  // 0. Make the number the base of that position." A 0 week counts as his
+  // position's waiver line, and the cell is ONE Value: valueOf of that mean in
+  // points (not a mean of weekly Values). Before: a mean of weekly Values,
+  // Future leaving its 0 weeks out.
+  const fill = BASE.lines[pos].waiver;
+  const filledMean = (vals) => vals.reduce((a, v) => a + (v > 0 ? v : fill), 0) / vals.length;
+  const poV = vOf(pos, filledMean(r.vals));
+  eq(strip(cellText(tr, col('Playoff'))), poV.toFixed(1), `Value: man ${id} Playoff = valueOf of his mean, a 0 week at the waiver line ${fill}`);
   const fr = runOf(id, FUTURE);
   if (fr.all) {
-    const kept = fr.vals.filter((v) => v > 0);
-    const futV = kept.length ? r1(kept.reduce((a, v) => a + vOf(pos, v), 0) / kept.length) : null;
-    eq(strip(cellText(tr, col('Future'))), futV === null ? '—' : futV.toFixed(1), `Value: man ${id} Future = mean of his non-zero weeks' Values`);
+    const futV = fr.vals.length ? vOf(pos, filledMean(fr.vals)) : null;
+    eq(strip(cellText(tr, col('Future'))), futV === null ? '—' : futV.toFixed(1), `Value: man ${id} Future = valueOf of his mean, a 0 week at the waiver line ${fill}`);
     if (futV !== null) eq(cellText(tr, col('PO − Fut')), sign(r1(poV - futV)), `Value: man ${id} PO − Fut of the printed Values`);
   }
   // Avg: ESPN's season average as a Value.

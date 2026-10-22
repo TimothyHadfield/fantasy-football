@@ -122,12 +122,26 @@ const weekRange = (weeks) => {
  *   count 0 projections for playoff zeros, not regular season zeros. This
  *   means if a player has a bye week 9, don't count it against his future proj
  *   avg."): every 0 week — bye or ruled out — leaves the divisor.
+ * @param {number|null} [opts.fill] TIM, 2026-10-22 — BOTH SPANS: "I do want to
+ *   count the 0 everywhere, but not as a pure 0. Make the number the base of
+ *   that position … this is also the case for BYE weeks." With his position's
+ *   waiver line known, a 0 week and his bye (a blank in it too) count as that,
+ *   in Future and Playoff alike, and `skipZeros` / `map` are not used: a Value
+ *   is then `valueOf` of this mean (one Value, not a mean of weekly Values).
  * @returns {{mean:number|null, n:number}} mean unrounded; null when no week has a number
  */
-export function spanMean(values, byeBlank = [], { skipZeros = false, map = null } = {}) {
+export function spanMean(values, byeBlank = [], { skipZeros = false, map = null, fill = null } = {}) {
   let sum = 0;
   let n = 0;
   let unsaid = false;
+  if (typeof fill === 'number' && Number.isFinite(fill)) {
+    values.forEach((v, i) => {
+      const x = value.filledWeek(v, Boolean(byeBlank[i]), fill);
+      if (x === null) return;
+      sum += x; n++;
+    });
+    return { mean: n ? sum / n : null, n };
+  }
   values.forEach((v, i) => {
     if (typeof v === 'number' && Number.isFinite(v)) {
       if (skipZeros && v === 0) return;  // Future: a 0 week is left out
@@ -362,8 +376,26 @@ async function mount(host, opts = {}) {
     let asked;
     try { asked = season.fetchPlayerValues({ demo: Boolean(demo) }); } catch { return; }
     Promise.resolve(asked).then((v) => {
-      if (valueFor === key && v && typeof v.lookup === 'function') setValueSource(v.lookup);
+      // A FREE AGENT'S CARD TOO (2026-10-22): the Players page's rule, off the
+      // weeks this page already holds for him — no request.
+      if (valueFor === key && v && typeof v.lookup === 'function') setValueSource(value.withFreeAgents(v, freeMan(v.weeks)));
     }).catch(() => {});
+  }
+
+  /** A free agent's weeks as js/value.js `withFreeAgents` takes them; null until every week is read. */
+  function freeMan(weeks) {
+    return (id) => {
+      const man = state.men.get(id) ?? state.men.get(Number(id));
+      if (!man || man.ownerId !== null || !Array.isArray(weeks) || !weeks.length) return null;
+      const byWeek = {};
+      for (const w of weeks) {
+        const v = projOf(man.p.playerId, w);
+        if (v === undefined) return null;
+        byWeek[w] = v;
+      }
+      const bye = byeWeekOf(man.p, state.byes);
+      return { position: man.p.position, byWeek, bye: bye ?? null };
+    };
   }
 
   async function loadDemo() {
@@ -521,6 +553,9 @@ async function mount(host, opts = {}) {
   /** Is a week with no number his known bye (then it is a 0 week)? */
   const byeBlank = (p, week, v) => v === null &&
     zeroKind(v, { week, byeWeek: byeWeekOf(p, state.byes), demo: state.isDemo }) === 'bye';
+  /** Is this week his bye, whatever ESPN carried for it? (Not read: not judged.) */
+  const byeWeekIs = (p, week, v) => v !== undefined &&
+    zeroKind(v === null ? null : 0, { week, byeWeek: byeWeekOf(p, state.byes), demo: state.isDemo }) === 'bye';
 
   function myTeamId() {
     const picked = playersPrefs.get('team', null);
@@ -539,9 +574,20 @@ async function mount(host, opts = {}) {
       const po = state.poWeeks.map((w) => projOf(id, w));
       // On Value each week counts as its projection's Value; which weeks count
       // is unchanged (Future leaves its 0 weeks out, Playoff counts them as 0).
+      // Since 2026-10-22, with his position's waiver line known (`fill`), a 0
+      // and his bye count as that line in both spans, and on Value each mean is
+      // then ONE Value (`valueOf` of the mean in points).
+      const fill = value.fillOf(state.base, p.position);
       const map = on ? (v) => asValue(p, v) : null;
-      const f = spanMean(future, state.futureWeeks.map((w, i) => byeBlank(p, w, future[i])), { skipZeros: true, map });
-      const pl = spanMean(po, state.poWeeks.map((w, i) => byeBlank(p, w, po[i])), { map });
+      const byesF = state.futureWeeks.map((w, i) => byeWeekIs(p, w, future[i]));
+      const byesP = state.poWeeks.map((w, i) => byeWeekIs(p, w, po[i]));
+      const fPts = fill !== null ? spanMean(future, byesF, { fill }) : null;
+      const pPts = fill !== null ? spanMean(po, byesP, { fill }) : null;
+      const asOne = (m) => (m.mean === null || !on ? m : { ...m, mean: asValue(p, m.mean) });
+      const f = fPts ? asOne(fPts)
+        : spanMean(future, state.futureWeeks.map((w, i) => byeBlank(p, w, future[i])), { skipZeros: true, map });
+      const pl = pPts ? asOne(pPts)
+        : spanMean(po, state.poWeeks.map((w, i) => byeBlank(p, w, po[i])), { map });
       const espnAvg = num(man.seasonAvg);
       const avg = on && espnAvg !== null ? asValue(p, espnAvg) : espnAvg;
       // Week i as drawn: on Value a number projected above 0 is its Value (null
@@ -560,7 +606,10 @@ async function mount(host, opts = {}) {
         // Tim, 2026-10-16: "make another derived column for these playoff
         // players that is playoff avg - future proj avg."
         diffFut: diffOf(poShown, futShown),
-        futureValues: future, poValues: po, poShown: poShownWeeks, espnAvg,
+        futureValues: future, poValues: po, poShown: poShownWeeks, espnAvg, fill,
+        // The means in points, for the cards on Value (the rows are points).
+        futurePts: fPts && fPts.mean !== null ? round1(fPts.mean) : null,
+        playoffPts: pPts && pPts.mean !== null ? round1(pPts.mean) : null,
       });
     }
     return rows;
@@ -684,10 +733,12 @@ async function mount(host, opts = {}) {
   function headHtml(weeks) {
     const on = valueOn();
     const asV = on ? ', as Values: points over the waiver line at his position' : '';
+    // 2026-10-22: with the lines known, a 0 and a bye count as the waiver line.
+    const zeroWords = state.base ? ' A bye or a 0 week counts as the waiver line at his position.' : null;
     const futTitle = state.futureWeeks.length
-      ? `His average projection over ${weekRange(state.futureWeeks)}, the regular season left${asV}. A 0 week — bye or ruled out — is left out.`
+      ? `His average projection over ${weekRange(state.futureWeeks)}, the regular season left${asV}.${zeroWords ?? ' A 0 week — bye or ruled out — is left out.'}`
       : 'The regular season is over: no weeks left to average.';
-    const poTitle = `His average projection over the playoff weeks (${weekRange(weeks)})${asV}. Every week counts — a bye or a ruled-out 0 included.`;
+    const poTitle = `His average projection over the playoff weeks (${weekRange(weeks)})${asV}.${zeroWords ?? ' Every week counts — a bye or a ruled-out 0 included.'}`;
     const avgTitle = on
       ? 'His season average so far — ESPN’s figure — as a Value: points over the waiver line at his position.'
       : 'His season average so far — ESPN’s figure.';
@@ -824,6 +875,29 @@ async function mount(host, opts = {}) {
 
   /** Where a mean comes from: each week of its span, and the mean of them. */
   function spanCard(r, weeks, values, mean, n, what) {
+    // 2026-10-22: with his waiver line known, a 0 and his bye count as it, and
+    // the rows are points; on Value the total is the Value of their mean.
+    if (r.fill !== null && r.fill !== undefined) {
+      const f = r.fill;
+      const rows = weeks.map((w, i) => {
+        const v = values[i];
+        if (v === undefined) return { label: `Week ${w}`, note: 'not read, left out', value: null };
+        const zero = zeroKind(v, { week: w, byeWeek: byeWeekOf(r.p, state.byes), injuryStatus: statusFor(r.p, w), demo: state.isDemo });
+        if (zero === 'bye' || byeWeekIs(r.p, w, v)) return { label: `Week ${w}`, note: `bye, counts ${fmt(f)}`, value: f };
+        if (v === null) return { label: `Week ${w}`, note: 'no projection, left out', value: null };
+        if (!(v > 0)) return { label: `Week ${w}`, note: `${zero === 'out' ? 'ruled out' : '0'}, counts ${fmt(f)}`, value: f };
+        return { label: `Week ${w}`, value: v };
+      });
+      const pts = what === 'Future' ? r.futurePts : r.playoffPts;
+      return {
+        title: r.p.name,
+        sub: `${what}, ${weekRange(weeks)}`,
+        rows,
+        total: valueOn()
+          ? { label: `Value of the ${fmt(pts)} mean`, value: mean }
+          : { label: `Mean of ${plural(n, 'week')}`, value: mean },
+      };
+    }
     const skip = what === 'Future';   // its 0 weeks are left out (spanMean)
     const rows = weeks.map((w, i) => {
       const v = values[i];

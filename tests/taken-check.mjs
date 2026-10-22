@@ -1369,8 +1369,17 @@ async function check(scenario, boot) {
     /Avg is the mean of the weeks shown and is ours, not ESPN’s/.test(note), note);
   // D7 (2026-09-20): only weeks projecting above zero count — a bye, a man
   // ruled out and a blank week all leave the average, as on the Trade page.
-  c.ok('the note says byes, ruled-out weeks and blank weeks are all left out',
-    /only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are all left out/.test(note),
+  // Replaced 2026-10-22 (Tim: "count the 0 everywhere, but not as a pure 0 …
+  // this is also the case for BYE weeks"): a bye or a 0 counts as the waiver
+  // line; only a week with no number leaves the average.
+  // The demo league has lines; this live stub has none, so the old rule (and
+  // its words) still holds there.
+  c.ok(scenario === 'demo'
+    ? 'the note says a bye or 0 counts as the waiver line and a blank week is left out'
+    : 'no lines: the note says byes, ruled-out weeks and blank weeks are all left out',
+    (scenario === 'demo'
+      ? /a bye or a 0\.0 week counts as the waiver line at his position, and a week with no number is left out/
+      : /only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are all left out/).test(note),
     note);
   c.ok('the note says what the rank means',
     /where he ranks on his own manager’s roster/.test(note) &&

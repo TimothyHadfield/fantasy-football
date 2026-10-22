@@ -120,3 +120,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** `js/trade-outcome.js`, season.js `trackSent`, notify.js `endedNotes` + every offer at level `pending` with "Sent to you/by you", notify-load `forgetEnded` + demo offers, notifications-page Follow up / Dismiss + always-present Pending with an empty line, app.css `.nt-acts` + wrapping trade details. See PROGRESS Status "Ended trades".
 - **Verified how:** test-trade-outcome 51, test-notify 95, notify-check 147, cloud-wiring trade-outcome 15; new tests run against the old code in a separate checkout and failed. WebKit 393 + desktop screenshots (demo; 1241838 with a seeded ended record).
 - **Open:** no real ESPN trade-history record seen; dismissals per browser.
+
+## 2026-10-22 · A 0 or bye counts as the base (builder)
+- **Asked:** "review the value system accross the entire cite and make sure that value is actually consistent everywhere, and also makes sense." Then "I do want to count the 0 everywhere, but not as a pure 0. Make the number the base of that position … this is also the case for BYE weeks." Manager picked the waiver line as the base.
+- **Built:** see PROGRESS Status "Zero = base" and `docs/zero-base-plan.md`. value.js fill rule; season.js Values + `fetchWireValues`; card heat re-centred; one-Value Avgs on Analysis, who-to-start, proj-avg grid, Playoffs, Players, Trade; Trade forced-cut Value; free-agent Values; Draft "Value now" dash.
+- **Verified how:** test-value 125 and test-heat 218 (new blocks failed on the old code), test-cloud-wiring 394 (backup-QB expectation 0.2 → 0.1: his bye now counts as the line), full run-all; headless card-vs-row checks on demo + 1241838; WebKit 393 + desktop screenshots.
+- **Open:** Tim's 14.6/17.2 are 14.4/17.0 by hand; lineup trade engine and Proj slot grids keep the floor; wording of Draft "Value" row and Trade "Value on" picker left for Tim.

@@ -2246,9 +2246,13 @@ export async function fetchProGames() {
 // so it is tried again on the next load — lines frozen for a season are not
 // made from half a read.
 //
-// A MAN'S AVERAGE is ESPN's projection over the weeks left with his bye left
-// out (`value.restAvg`). In the week in play a man who has finished counts at
-// his `pregame` projection, not his score, so nobody's Value jumps at kickoff.
+// A MAN'S AVERAGE is ESPN's projection over the weeks left, a 0 and his bye
+// counted as his position's waiver line (`value.restAvg` with `value.fillOf`,
+// Tim 2026-10-22). THE LINES THEMSELVES are made from the raw average
+// (`value.rawAvg`: bye out, a 0 as 0), so they never depend on themselves, and
+// lines already kept are never made again. In the week in play a man who has
+// finished counts at his `pregame` projection, not his score, so nobody's
+// Value jumps at kickoff.
 //
 // THE SLOTS are the league's lineup counted off the lineups in use
 // (`slotCountsFromLineups` + `slotsFromCounts`, pooled over every week left —
@@ -2325,7 +2329,7 @@ function menOf(weekLists, weeks) {
       if (!p || p.playerId === null || p.playerId === undefined) continue;
       let m = men.get(p.playerId);
       if (!m) {
-        m = { playerId: p.playerId, position: null, proTeamId: null, byWeek: {} };
+        m = { playerId: p.playerId, position: null, proTeamId: null, name: p.name || '', proTeam: p.proTeam || '', byWeek: {} };
         men.set(p.playerId, m);
       }
       if (!m.position && p.position && p.position !== 'UNK') m.position = p.position;
@@ -2343,15 +2347,18 @@ function squadMen(weekTeams, weeks) {
   ])), weeks);
 }
 
-/** Each man with his average over `weeks`, his bye left out. */
+/**
+ * Each man with his RAW average over `weeks` (his bye left out, a 0 as 0) —
+ * what the lines are made from. Not the filled average: that is made FROM the
+ * lines (2026-10-22).
+ */
 function withRestAvg(men, weeks, byes) {
   return [...men.values()].map((m) => {
     const bye = byes && m.proTeamId !== null ? Number(byes[m.proTeamId]) : NaN;
     return {
       playerId: m.playerId,
       position: m.position,
-      avg: value.restAvg(m.byWeek, weeks, Number.isFinite(bye) ? bye : null),
-      projAvg: value.restProjAvg(m.byWeek, weeks, Number.isFinite(bye) ? bye : null),
+      avg: value.rawAvg(m.byWeek, weeks, Number.isFinite(bye) ? bye : null),
     };
   });
 }
@@ -2398,9 +2405,12 @@ let valueBaseMemo = null;     // { key, promise }
 let playerValuesMemo = null;  // { key, promise }
 let demoValueMemo = null;     // the sample league's weeks, squads and lines
 
+let wireValuesMemo = null;    // { key, promise }
+
 function forgetValueMemos() {
   valueBaseMemo = null;
   playerValuesMemo = null;
+  wireValuesMemo = null;
 }
 
 const valueMemoKey = (demo) => {
@@ -2510,10 +2520,13 @@ function playerValuesOf(base, weeks, weekTeams, byes) {
   for (const m of squadMen(weekTeams, weeks).values()) {
     const bye = byes && m.proTeamId !== null ? Number(byes[m.proTeamId]) : NaN;
     const b = Number.isFinite(bye) ? bye : null;
+    // A 0 and his bye count as his position's waiver line (Tim, 2026-10-22), so
+    // his card's Proj and the average his Value is made from are one number.
+    const fill = value.fillOf(base, m.position);
     byId.set(m.playerId, {
       position: m.position,
-      avg: value.restAvg(m.byWeek, weeks, b),
-      projAvg: value.restProjAvg(m.byWeek, weeks, b),
+      avg: value.restAvg(m.byWeek, weeks, b, fill),
+      projAvg: value.restProjAvg(m.byWeek, weeks, b, fill),
       // The site's one Value function (js/value.js `playerValue`), as the
       // Players page uses for a free agent.
       value: value.playerValue(base, m.position, m.byWeek, weeks, b),
@@ -2529,7 +2542,69 @@ function playerValuesOf(base, weeks, weekTeams, byes) {
     const hit = byId.get(id) ?? byId.get(Number(id));
     return hit && typeof hit.projAvg === 'number' ? hit.projAvg : null;
   };
+  // The base a 0 or a bye of his counts as (his position's waiver line), for
+  // the card's colour centre; null when it is not known.
+  lookup.fill = (id) => {
+    const hit = byId.get(id) ?? byId.get(Number(id));
+    return hit ? value.fillOf(base, hit.position) : null;
+  };
   return { base, weeks, byId, lookup };
+}
+
+/**
+ * EVERY MAN'S VALUE, FREE AGENTS TOO (2026-10-22): `fetchPlayerValues`, plus a
+ * Value for every free agent on the wire of every week left — the Players
+ * page's free-agent rule (`value.playerValue` off his wire weeks), so a free
+ * agent's card says the same Value wherever it opens. Costs the wire of each
+ * week left (one request a week, three at a time), once per page load; asked
+ * only by a page about to show a free agent. ON THE PHONE'S SYNCED COPY it
+ * reads nothing more (rule 20): free agents have no Value there, as on Players.
+ * NEVER THROWS.
+ *
+ * @returns {Promise<{ base, weeks, byId, free:Map<number,{name,position,proTeam,value}>, lookup }>}
+ *   `lookup` answers for both (with `.proj` and `.fill`)
+ */
+export function fetchWireValues({ demo = false } = {}) {
+  const key = valueMemoKey(demo);
+  if (!wireValuesMemo || wireValuesMemo.key !== key) {
+    wireValuesMemo = { key, promise: wireValuesNow(demo).catch(() => null).then((got) => got || { ...playerValuesOf(null, [], new Map(), {}), free: new Map() }) };
+  }
+  return wireValuesMemo.promise;
+}
+
+async function wireValuesNow(demo) {
+  const got = await fetchPlayerValues({ demo });
+  const none = { ...got, free: new Map() };
+  if (!got || !got.base || !got.weeks.length) return none;
+  const weeks = got.weeks;
+  const weekWire = new Map();
+  let byes = {};
+  if (demo || !storable()) {
+    const mod = await import('./demo-rosters.js');
+    for (const w of weeks) weekWire.set(w, mod.generateDemoFreeAgents(w));
+  } else {
+    if (pastSeason() || await cloudDown()) return none;
+    byes = await fetchByeWeeks();
+    await inBatches(weeks, 3, async (w) => {
+      try { weekWire.set(w, await fetchWireWeek(w)); } catch { /* a refused week: his weeks there are unknown */ }
+    });
+    // A week the wire refused leaves every free agent's average short: none.
+    if (weeks.some((w) => !weekWire.has(w))) return none;
+  }
+  const free = new Map();
+  const held = new Map();
+  for (const m of menOf(weekWire, weeks).values()) {
+    if (got.byId.has(m.playerId)) continue;
+    const bye = byes && m.proTeamId !== null ? Number(byes[m.proTeamId]) : NaN;
+    const b = Number.isFinite(bye) ? bye : null;
+    held.set(m.playerId, { position: m.position, byWeek: m.byWeek, bye: b });
+    free.set(m.playerId, {
+      name: m.name, position: m.position, proTeam: m.proTeam,
+      value: value.playerValue(got.base, m.position, m.byWeek, weeks, b),
+    });
+  }
+  const lookup = value.withFreeAgents(got, (id) => held.get(id) ?? held.get(Number(id)) ?? null);
+  return { ...got, free, lookup };
 }
 
 async function playerValuesNow(demo) {
@@ -2546,10 +2621,9 @@ async function playerValuesNow(demo) {
   // The REAL squads: a man's Value is his, whoever an assumed trade puts him with
   // (and a man it cuts keeps his).
   const weekTeams = await fetchWeeksRosters(weeks, { assumed: false });
-  // On the synced copy the byes are the synced ones or none: `fetchByeWeeks`
-  // would go on to ask ESPN when the sync carried none, and this may not.
-  const down = await cloudDown();
-  const byes = down ? (down.byes || {}) : await fetchByeWeeks();
+  // The same byes on the synced copy as on the computer: `fetchByeWeeks`
+  // reads the synced ones there and never asks ESPN (rule 20).
+  const byes = await fetchByeWeeks();
   return playerValuesOf(base, weeks, weekTeams, byes);
 }
 

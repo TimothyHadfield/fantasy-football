@@ -560,6 +560,12 @@ export function weekRun({
   // numbers or no visible spread, so OFF is for the cases arithmetic cannot
   // see.
   heat = true,
+  // THE BASE A 0 OR HIS BYE COUNTS AS in the colour centre (Tim, 2026-10-22:
+  // "count the 0 everywhere, but not as a pure 0. Make the number the base of
+  // that position"): his position's waiver line, in points. null = not known,
+  // and the centre is the old one (future weeks above 0). A card being opened
+  // gets it from the page's value source (`centredRun`).
+  fill = null,
 } = {}) {
   if (!weeks.length) return null;
 
@@ -624,9 +630,25 @@ export function weekRun({
       ? (w, i) => Number(w) >= Number(currentWeek) && !scored(i)
       : () => true;
   const values = tokens.map((t, i) => (t.kind === 'num' ? Number(projections[i]) : null));
+  const byeAt = (w) => byeWeek !== null && byeWeek !== undefined && Number(byeWeek) === Number(w);
+  // With a base: every week to come, a 0 / ruled-out week and his bye counted
+  // as the base (js/value.js `filledWeek`), a week with no number left out.
+  const hasFill = typeof fill === 'number' && Number.isFinite(fill);
+  let subbed = false;
+  const filled = hasFill
+    ? weeks.map((w, i) => {
+      if (!futureAt(w, i)) return null;
+      const t = tokens[i];
+      const x = Number(projections[i]);
+      if (byeAt(w) || t.kind === 'bye' || t.kind === 'out' || (t.kind === 'num' && !(x > 0))) {
+        subbed = true;
+        return fill;
+      }
+      return t.kind === 'num' ? x : null;
+    })
+    : null;
   const scale = heat
-    ? futureScale(values, weeks.map((w, i) => futureAt(w, i) && !(byeWeek !== null && byeWeek !== undefined &&
-        Number(byeWeek) === Number(w))))
+    ? futureScale(values, weeks.map((w, i) => futureAt(w, i) && !byeAt(w)), filled, subbed ? fill : null)
     : null;
   // The words on every cell name the group, because this group is not the one
   // the rest of the site's cells are measured against — see the long note above.
@@ -701,7 +723,7 @@ export function weekRun({
   // than on it: the run's own fields are an API, and tests compare them.
   RUN_ARGS.set(out, {
     heading, weeks, projections, actuals, currentWeek, demo, byeWeek, injuryStatus,
-    playoffWeeks, starts, splitAfter, startsNote, vsWeeks, vsName, deadlineWeek, heat,
+    playoffWeeks, starts, splitAfter, startsNote, vsWeeks, vsName, deadlineWeek, heat, fill,
   });
   return out;
 }
@@ -830,8 +852,12 @@ function heatLine(scale) {
   const at = (v) => (Math.round(v * 10) / 10).toFixed(1);
   const s = scale.n === 1 ? '' : 's';
   const base = scale.base === 'future'
-    ? `${at(scale.mean)} over the ${scale.n} week${s} still to come that he is projected to play ` +
-      '(bye and 0.0 weeks left out); weeks already played are coloured against that same average.'
+    ? (scale.filled
+      ? `${at(scale.mean)} over the ${scale.n} week${s} still to come (a bye or 0.0 week counted ` +
+        `as ${at(scale.filled)}, the waiver line at his position); weeks already played are coloured ` +
+        'against that same average.'
+      : `${at(scale.mean)} over the ${scale.n} week${s} still to come that he is projected to play ` +
+        '(bye and 0.0 weeks left out); weeks already played are coloured against that same average.')
     : `${at(scale.mean)} over the ${scale.n} week${s} with a number.`;
   return 'Colour on the Proj row compares each week with HIS OWN other weeks — green is a good ' +
     'week for him, red a poor one. It is never a comparison with another player or another ' +
@@ -846,8 +872,9 @@ function heatLine(scale) {
  *
  * `values` is every week's number (null where there is none); `future[i]` says
  * whether week i is still to come and not his bye. The centre is the average of
- * the future weeks projected above 0 — the same rule as the card's "Proj"
- * (js/value.js `restProjAvg`). The spread is those same weeks' when there are
+ * the future weeks projected above 0 — or, with `filled` (2026-10-22), every
+ * week to come with a 0 and his bye counted as his position's base `fill` —
+ * the same rule as the card's "Proj" (js/value.js `restProjAvg`). The spread is those same weeks' when there are
  * two or more with a visible spread, else every numbered week's, so a man with
  * one week left is still coloured. With no future week above 0 (season over,
  * out for the year) it is the old scale over every numbered week. Every
@@ -857,15 +884,42 @@ function heatLine(scale) {
  * @returns {Object|null} a heatScale object (`base: 'future'` when centred on
  *   the weeks to come; `n` is then how many weeks the centre averages)
  */
-export function futureScale(values, future) {
+export function futureScale(values, future, filled = null, fill = null) {
   const all = heatScale(values);
-  const ahead = values.filter((v, i) => future[i] && typeof v === 'number' && Number.isFinite(v) && v > 0);
+  const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+  // `filled` (2026-10-22): each week to come as Tim's rule counts it — a 0 and
+  // his bye at his position's base — null for a week not counted. Then the
+  // centre and the spread are those numbers; a man whose every week left is
+  // the base is centred on the base.
+  const withBase = Array.isArray(filled) && filled.some(isNum);
+  const ahead = withBase
+    ? filled.filter(isNum)
+    : values.filter((v, i) => future[i] && isNum(v) && v > 0);
   if (!ahead.length) return all;
   const own = ahead.length >= 2 ? heatScale(ahead) : null;
   const spread = own || all;
   if (!spread) return null;
   const mean = ahead.reduce((a, b) => a + b, 0) / ahead.length;
-  return { ...(all || spread), mean, sd: spread.sd, n: ahead.length, base: 'future' };
+  const out = { ...(all || spread), mean, sd: spread.sd, n: ahead.length, base: 'future' };
+  // The base, when a week was counted at it (for the words under the chart).
+  if (withBase && isNum(fill)) out.filled = fill;
+  return out;
+}
+
+/**
+ * The run as a card being opened draws it: centred with his base when the
+ * page's value source knows it (`lookup.fill`, js/season.js) and the run was
+ * built without one. Otherwise the run untouched.
+ */
+export function centredRun(run, playerId) {
+  const args = run ? RUN_ARGS.get(run) : null;
+  if (!args || !args.heat || (typeof args.fill === 'number' && Number.isFinite(args.fill))) return run;
+  if (!valueSource || typeof valueSource.fill !== 'function') return run;
+  if (playerId === null || playerId === undefined) return run;
+  let fill = null;
+  try { fill = valueSource.fill(playerId); } catch { fill = null; }
+  if (typeof fill !== 'number' || !Number.isFinite(fill)) return run;
+  return weekRun({ ...args, fill });
 }
 
 // --------------------------------------------------- registering and wiring
@@ -1519,9 +1573,9 @@ export function showCard(key, cell, { sheet = false } = {}) {
   openKey = key;
   // His weeks on no roster, filled in (see `filledRun`); when some are still
   // being read the card draws itself again once they land, if still open.
-  const run = filledRun(data.run, data.playerId, () => {
+  const run = centredRun(filledRun(data.run, data.playerId, () => {
     if (openKey === key && cardEl && !cardEl.hidden) showCard(key, cell, { sheet: asSheet });
-  });
+  }), data.playerId);
   el.innerHTML = cardHtml(run === data.run ? data : { ...data, run }, sheet);
   el.classList.toggle('sheet', sheet);
   // A hover card is a tooltip; a thing you opened, can read and must dismiss is

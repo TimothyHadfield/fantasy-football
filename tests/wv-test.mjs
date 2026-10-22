@@ -2366,7 +2366,7 @@ async function check(scenario, boot) {
   if (scenario === 'value' || scenario === 'value-cloud') {
     const w = globalThis.__wvValue || {};
     const espn = await import('./wv-stub-espn.mjs');
-    const { valueOf, restAvg } = await import(pathToFileURL(path.join(REPO, 'js/value.js')).href);
+    const { valueOf, restAvg, fillOf } = await import(pathToFileURL(path.join(REPO, 'js/value.js')).href);
     const f1 = (n) => n.toFixed(1);
     const projRows = new Map(((w.proj || {}).rows || []).map((r) => [r.id, r]));
     const rows = ((w.value || {}).rows || []).filter((r) => !r.mine);
@@ -2422,7 +2422,8 @@ async function check(scenario, boot) {
     const ownWant = (r) => {
       const byWeek = {};
       for (const wk of VALUE_WEEKS) byWeek[wk] = espn.expected(r.id, wk);
-      return valueOf(VALUE_BASE, r.pos, restAvg(byWeek, VALUE_WEEKS, null));
+      // 2026-10-22: a 0 or bye week to come counts as his waiver line.
+      return valueOf(VALUE_BASE, r.pos, restAvg(byWeek, VALUE_WEEKS, null, fillOf(VALUE_BASE, r.pos)));
     };
     if (scenario === 'value') {
       const avgBad = later.filter((r) => {
@@ -2462,7 +2463,7 @@ async function check(scenario, boot) {
     // A free agent's own Value: his average over the weeks left, as a Value.
     const byWeek = {};
     for (const wk of VALUE_WEEKS) byWeek[wk] = espn.expected(VALUE_MAN, wk);
-    const own = valueOf(VALUE_BASE, 'QB', restAvg(byWeek, VALUE_WEEKS, null));
+    const own = valueOf(VALUE_BASE, 'QB', restAvg(byWeek, VALUE_WEEKS, null, fillOf(VALUE_BASE, 'QB')));
     c.ok('GLANCE: a free agent’s open row leads with his Value over the weeks left',
       own > 0 && new RegExp(`^Value ${f1(own).replace('.', '\\.')} · Avg `).test(w.glance || ''),
       `${w.glance} want Value ${f1(own)}`);

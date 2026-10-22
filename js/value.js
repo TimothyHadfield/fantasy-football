@@ -14,11 +14,23 @@
 // THE NUMBER (his four picks, 2026-10-09)
 //
 //   his average    ESPN's projection averaged over the weeks he has left,
-//                  HIS BYE LEFT OUT (so a bye going by does not move him). A
-//                  week he is projected 0 for any other reason — hurt,
-//                  suspended — counts as the 0 it is.
+//                  A 0 AND A BYE COUNTED AS HIS POSITION'S WAIVER LINE (Tim,
+//                  2026-10-22: "I do want to count the 0 everywhere, but not as
+//                  a pure 0. Make the number the base of that position. For
+//                  example if a 0 value equals 13 pts proj for a WR, then
+//                  replace the 0 with 13 when counting for future proj. this is
+//                  also the case for BYE weeks."). The base is the waiver line:
+//                  the average where Value is 0 — what you could plug in from
+//                  the wire while he is out. A week ESPN said nothing about is
+//                  still skipped; a low real projection is still his. Until the
+//                  lines are known it is the old rule (bye out, 0 counted).
+//                  The card's Proj is this same average (`restProjAvg`).
+//                  (Before 2026-10-22 his bye was left out and a 0 counted as
+//                  0 — Tim, 2026-10-09.)
 //   waiver line    at his position, the average of the top 3 free agents by
-//                  that same average.
+//                  the RAW average (`rawAvg`: bye out, a 0 counted as 0) — the
+//                  lines are never made from the filled average, which would
+//                  make them depend on themselves.
 //   starter line   at his position, the worst man the league starts: every
 //                  starting slot of every team filled with the best men
 //                  rostered (`optimalLineup`, the league's own slots, once per
@@ -50,8 +62,14 @@ export const BASE_VERSION = 1;
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
+const isBye = (byeWeek, w) => byeWeek !== null && byeWeek !== undefined && Number(byeWeek) === Number(w);
+const reader = (byWeek) => (w) => (byWeek instanceof Map ? byWeek.get(w) : byWeek ? byWeek[w] : null);
+
 /**
- * A man's average over the weeks he has left, his bye left out.
+ * THE RAW AVERAGE: the weeks he has left, his bye left out, a 0 counted as 0
+ * (the rule before 2026-10-22). Only the LINES are made from this
+ * (js/season.js `withRestAvg` -> `buildBase`), so they never depend on
+ * themselves, and it is what `restAvg` falls back to while no line is known.
  *
  * @param {Object<number, number|null>|Map<number, number|null>} byWeek week ->
  *   ESPN's projection for him that week (null or absent: ESPN said nothing,
@@ -60,12 +78,12 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
  * @param {number|null} [byeWeek] his team's bye, when known
  * @returns {number|null} null when no week counts
  */
-export function restAvg(byWeek, weeks, byeWeek = null) {
-  const get = (w) => (byWeek instanceof Map ? byWeek.get(w) : byWeek ? byWeek[w] : null);
+export function rawAvg(byWeek, weeks, byeWeek = null) {
+  const get = reader(byWeek);
   let sum = 0;
   let n = 0;
   for (const w of weeks || []) {
-    if (byeWeek !== null && byeWeek !== undefined && Number(byeWeek) === Number(w)) continue;
+    if (isBye(byeWeek, w)) continue;
     const v = num(get(w));
     if (v === null) continue;
     sum += v;
@@ -75,21 +93,70 @@ export function restAvg(byWeek, weeks, byeWeek = null) {
 }
 
 /**
- * THE PREVIEW'S "Proj" (Tim, 2026-10-11: "make the proj stat in a players
- * preview reflect their rest-of-season proj avg (not including bye or injury)
- * instead of just the proj for that week"): his average over the weeks left
- * that ESPN projects him to PLAY — the bye left out, and so is any week
- * projected at nothing (a man ruled out). Not `restAvg`: a Value counts the
- * weeks a man misses, this says what he scores when he plays.
+ * THE BASE A 0 OR A BYE COUNTS AS (Tim, 2026-10-22): his position's waiver
+ * line, in points a week — the average where his Value is 0. null with no
+ * lines or no line at his position (then nothing is filled).
+ */
+export function fillOf(base, position) {
+  const line = lineOf(base, position);
+  return line ? line.waiver : null;
+}
+
+/**
+ * Tim's 2026-10-22 rule over a list of weeks: a week projected 0 (or less) and
+ * his bye week count as `fill`; a week with no number is skipped; a positive
+ * projection is his. `fill` must be a number.
+ */
+function filledAvg(byWeek, weeks, byeWeek, fill) {
+  const get = reader(byWeek);
+  let sum = 0;
+  let n = 0;
+  let read = 0;
+  for (const w of weeks || []) {
+    const v = num(get(w));
+    if (v !== null) read += 1;
+    if (isBye(byeWeek, w)) { sum += fill; n += 1; continue; }
+    if (v === null) continue;
+    sum += v > 0 ? v : fill;
+    n += 1;
+  }
+  // A man nothing at all was read for has no average, not the base.
+  return n && read ? sum / n : null;
+}
+
+/**
+ * A MAN'S AVERAGE over the weeks he has left — what his Value is made from.
  *
+ * With `fill` (his position's waiver line, `fillOf`): a 0 and his bye count as
+ * that (Tim, 2026-10-22, see the top). Without it (no lines yet): `rawAvg`,
+ * the old rule.
+ *
+ * @param {number|null} [fill] the base a 0 / bye counts as
  * @returns {number|null} null when no week counts
  */
-export function restProjAvg(byWeek, weeks, byeWeek = null) {
-  const get = (w) => (byWeek instanceof Map ? byWeek.get(w) : byWeek ? byWeek[w] : null);
+export function restAvg(byWeek, weeks, byeWeek = null, fill = null) {
+  return num(fill) !== null ? filledAvg(byWeek, weeks, byeWeek, fill) : rawAvg(byWeek, weeks, byeWeek);
+}
+
+/**
+ * THE PREVIEW'S "Proj" (Tim, 2026-10-11: "make the proj stat in a players
+ * preview reflect their rest-of-season proj avg … instead of just the proj for
+ * that week"). Since 2026-10-22 it is THE SAME average as `restAvg` whenever
+ * the base is known — a 0 and the bye counted as his position's waiver line —
+ * so the card's Proj and the average behind his Value are one number. Without
+ * a base it is the old rule: the bye and every week projected at nothing left
+ * out.
+ *
+ * @param {number|null} [fill] the base a 0 / bye counts as
+ * @returns {number|null} null when no week counts
+ */
+export function restProjAvg(byWeek, weeks, byeWeek = null, fill = null) {
+  if (num(fill) !== null) return filledAvg(byWeek, weeks, byeWeek, fill);
+  const get = reader(byWeek);
   let sum = 0;
   let n = 0;
   for (const w of weeks || []) {
-    if (byeWeek !== null && byeWeek !== undefined && Number(byeWeek) === Number(w)) continue;
+    if (isBye(byeWeek, w)) continue;
     const v = num(get(w));
     if (v === null || v <= 0) continue;
     sum += v;
@@ -99,11 +166,26 @@ export function restProjAvg(byWeek, weeks, byeWeek = null) {
 }
 
 /**
+ * One week as a FUTURE average counts it (Tim, 2026-10-22), for a page that
+ * holds a row of numbers rather than a week map: his bye or a 0 (or less) ->
+ * `fill`; no number -> null (not counted); else the number. With no `fill`
+ * it returns null for a bye and the number otherwise — callers keep their own
+ * old rule then.
+ */
+export function filledWeek(v, bye, fill) {
+  const x = num(v);
+  if (num(fill) === null) return bye ? null : x;
+  if (bye) return fill;
+  if (x === null) return null;
+  return x > 0 ? x : fill;
+}
+
+/**
  * The two lines at every position, from the league as it stands — run once a
  * season and kept (see the top).
  *
  * @param {Object} o
- * @param {Array<{position:string, avg:number|null}>} o.rostered every man on a squad, with `restAvg`
+ * @param {Array<{position:string, avg:number|null}>} o.rostered every man on a squad, with `rawAvg`
  * @param {Array<{position:string, avg:number|null}>} o.freeAgents every free agent read, the same
  * @param {number[]} o.slots ONE team's starting lineup, as lineupSlotIds
  * @param {number} o.teams how many teams fill it
@@ -159,7 +241,7 @@ export function lineOf(base, position) {
  *
  * @param {object|null} base what `buildBase` returned
  * @param {string} position
- * @param {number|null} avg his `restAvg`
+ * @param {number|null} avg his `restAvg` (with the base filled in)
  * @returns {number|null} to the tenth; null when it cannot be said (no
  *   baseline, no line at his position, no average)
  */
@@ -175,7 +257,8 @@ export function valueOf(base, position, avg) {
 
 /**
  * A MAN'S VALUE — THE ONE FIGURE EVERY PAGE PRINTS FOR HIM. `valueOf` his
- * `restAvg` over the weeks left: his bye out, any other 0 counted. Not the mean
+ * `restAvg` over the weeks left, a 0 and his bye counted as his position's
+ * waiver line (2026-10-22). Not the mean
  * of his weekly Values (the half-weight band and the floor at 0 bend that), and
  * not over a page's own span. js/season.js (every rostered man, the card) and
  * the Players page (a free agent) both come here, so the card, the Players
@@ -186,7 +269,65 @@ export function valueOf(base, position, avg) {
  * @returns {number|null} as `valueOf`
  */
 export function playerValue(base, position, byWeek, weeks, byeWeek = null) {
-  return valueOf(base, position, restAvg(byWeek, weeks, byeWeek));
+  return valueOf(base, position, restAvg(byWeek, weeks, byeWeek, fillOf(base, position)));
+}
+
+/**
+ * A RUN OF WEEKS AS ONE VALUE (2026-10-22): an "Avg" on a Value switch is
+ * `valueOf` of the run's average, never the mean of weekly Values (the half
+ * band and the floor at 0 bend that). `weeks` is one entry a week:
+ * `{ position, v, bye }` (v = the projection in points; bye = his bye week) or
+ * null for a week not counted. A week to come at 0 or his bye counts as that
+ * man's base (`filledWeek`); `past: true` marks a week whose number is kept
+ * as it is. The Value is measured at the position that fills most of the
+ * weeks (a FLEX). null when nothing counts or there is no line.
+ */
+export function runValue(base, weeks) {
+  let sum = 0;
+  let n = 0;
+  const seen = new Map();
+  for (const e of weeks || []) {
+    if (!e || !e.position) continue;
+    const x = e.past ? num(e.v) : filledWeek(e.v, Boolean(e.bye), fillOf(base, e.position));
+    if (x === null) continue;
+    sum += x;
+    n += 1;
+    seen.set(e.position, (seen.get(e.position) || 0) + 1);
+  }
+  if (!n) return null;
+  const pos = [...seen].sort((a, b) => b[1] - a[1])[0][0];
+  return valueOf(base, pos, sum / n);
+}
+
+/**
+ * A VALUE LOOKUP THAT ALSO ANSWERS FOR FREE AGENTS (2026-10-22): the rostered
+ * men's `lookup` (js/season.js `fetchPlayerValues`), and for a man it has no
+ * number for, `playerValue` off the weeks a page holds for him — the Players
+ * page's free-agent rule, so a free agent's card says the same Value on every
+ * page. `wireOf(playerId)` -> `{ position, byWeek, bye }` or null (not held).
+ * The returned function carries `.proj` and `.fill` like the lookup does.
+ */
+export function withFreeAgents(got, wireOf) {
+  const own = got && typeof got.lookup === 'function' ? got.lookup : () => null;
+  const base = got ? got.base : null;
+  const weeks = got && Array.isArray(got.weeks) ? got.weeks : [];
+  const man = (id) => {
+    try { return typeof wireOf === 'function' ? wireOf(id) : null; } catch { return null; }
+  };
+  const first = (a, b) => (num(a) !== null ? a : b());
+  const fn = (id) => first(own(id), () => {
+    const m = man(id);
+    return m && weeks.length ? playerValue(base, m.position, m.byWeek, weeks, m.bye ?? null) : null;
+  });
+  fn.proj = (id) => first(typeof own.proj === 'function' ? own.proj(id) : null, () => {
+    const m = man(id);
+    return m && weeks.length ? restProjAvg(m.byWeek, weeks, m.bye ?? null, fillOf(base, m.position)) : null;
+  });
+  fn.fill = (id) => first(typeof own.fill === 'function' ? own.fill(id) : null, () => {
+    const m = man(id);
+    return m ? fillOf(base, m.position) : null;
+  });
+  return fn;
 }
 
 /**

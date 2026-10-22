@@ -145,7 +145,7 @@ import {
 import './loose-weeks.js';
 // A player's VALUE (Tim, 2026-10-09; docs/value-plan.md): the arithmetic. The
 // frozen lines it needs come from js/season.js (`readValue` below).
-import { valueOf, isBase as isValueBase } from './value.js';
+import { valueOf, isBase as isValueBase, fillOf, restProjAvg, runValue } from './value.js';
 import { searchPlayers, measure as measureValues } from './value-measure.js';
 // Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
 import { healthy, injuryLabel, injuryClass, outForSeasonRule } from './injury.js';
@@ -1848,7 +1848,27 @@ const vm = { a: [], b: [], hit: { a: 0, b: 0 } };
 const VM_SIDES = ['a', 'b'];
 const vmEl = (name, side) => $(`vm${name}${side.toUpperCase()}`);
 
-/** Every rostered man once, with his Value (null when he has none). */
+/**
+ * FREE AGENTS IN THE MEASUREMENT TOO (2026-10-22): a man on no squad gets the
+ * Value the Players page gives him (js/season.js `fetchWireValues`), read the
+ * first time a box here is used — it costs the wire of each week left, so a
+ * page that never measures never buys it. None on the synced copy.
+ */
+let vmWire = { key: null, free: null };
+function ensureMeasureWire() {
+  const key = sourceKey();
+  if (vmWire.key === key) return;
+  vmWire = { key, free: null };
+  if (typeof season.fetchWireValues !== 'function') return;
+  const demo = state.isDemo;
+  Promise.resolve().then(() => season.fetchWireValues({ demo })).then((got) => {
+    if (vmWire.key !== key || sourceKey() !== key) return;
+    vmWire.free = got && got.free instanceof Map ? got.free : null;
+    renderMeasure();
+  }).catch(() => { /* no wire: rostered men only */ });
+}
+
+/** Every rostered man once, with his Value (null when he has none), then the free agents read. */
 function measurePlayers() {
   const seen = new Map();
   for (const t of (state.data ? state.data.teams : [])) {
@@ -1858,6 +1878,15 @@ function measurePlayers() {
         playerId: String(p.playerId), name: p.name, position: p.position,
         team: p.proTeam || espn.PRO_TEAMS[proTeamOf(p)] || '',
         value: valueLookup ? valueLookup(p.playerId) : null,
+      });
+    }
+  }
+  if (vmWire.free && vmWire.key === sourceKey()) {
+    for (const [id, m] of vmWire.free) {
+      if (seen.has(String(id))) continue;
+      seen.set(String(id), {
+        playerId: String(id), name: m.name, position: m.position, team: m.proTeam || '',
+        value: typeof m.value === 'number' ? m.value : null,
       });
     }
   }
@@ -1931,7 +1960,7 @@ function wireMeasure() {
     const input = vmEl('Find', side);
     const list = vmEl('List', side);
     input.addEventListener('input', () => { vm.hit[side] = 0; renderMeasureList(side); });
-    input.addEventListener('focus', () => renderMeasureList(side));
+    input.addEventListener('focus', () => { ensureMeasureWire(); renderMeasureList(side); });
     input.addEventListener('blur', () => { list.hidden = true; });
     input.addEventListener('keydown', (e) => {
       const found = vmFound(side) || [];
@@ -2000,15 +2029,20 @@ let valueLookup = null;
  * `fetchPlayerValues`). A man with no Value counts 0. Null with no lines, and
  * then nothing is drawn. It follows no switch: it is always a Value.
  */
-function customValueChange(sendA, sendB) {
+function customValueChange(sendA, sendB, cutA = []) {
   if (!state.valueBase || typeof valueLookup !== 'function') return null;
   const sum = (ids) => ids.reduce((t, id) => {
     const v = valueLookup(id);
     return t + (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   }, 0);
   const r1 = (n) => { const r = Math.round(n * 10) / 10; return r === 0 ? 0 : r; };
-  const a = r1(sum(sendB) - sum(sendA));
-  return { a, b: a === 0 ? 0 : -a };
+  // THE MAN YOU ARE FORCED TO CUT goes too (2026-10-22, as `benchGainOf`
+  // counts him): a 2-for-1 that costs you a bench man costs you his Value.
+  const cut = (cutA || []).map((p) => String(p && typeof p === 'object' ? p.playerId : p));
+  const raw = sum(sendB) - sum(sendA);
+  const a = r1(raw - sum(cut));
+  const b = r1(-raw);
+  return { a, b };
 }
 
 /**
@@ -2249,27 +2283,24 @@ function glanceFor(p) {
 }
 
 /**
- * His average projection over the weeks left that he is projected to PLAY: his
- * bye is left out, and so is any week projected at nothing (ruled out). The
- * same rule as js/value.js `restProjAvg`, off this page's own weeks. In a week
- * under way a finished man counts at what ESPN projected (`pregame`), not at
- * his score. Null when no week counts.
+ * His average projection over the weeks left. The same rule as js/value.js
+ * `restProjAvg`, off this page's own weeks: with the lines known, a 0 and his
+ * bye count as his position's waiver line (Tim, 2026-10-22); without them his
+ * bye and any week projected at nothing are left out. In a week under way a
+ * finished man counts at what ESPN projected (`pregame`), not at his score.
+ * Null when no week counts.
  */
 function restProjOf(p) {
   if (!p || p.playerId === null || p.playerId === undefined) return null;
   const bye = byeWeekOf(p, state.byes);
-  let sum = 0;
-  let n = 0;
-  for (const w of spanFor('title')) {
-    if (Number.isFinite(bye) && Number(bye) === Number(w)) continue;
+  const byWeek = {};
+  const weeks = spanFor('title');
+  for (const w of weeks) {
     const e = weekly.byWeek.get(w)?.get(p.playerId);
     if (!e) continue;
-    const v = e.done === true ? e.pregame : e.projected;
-    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) continue;
-    sum += v;
-    n += 1;
+    byWeek[w] = e.done === true ? e.pregame : e.projected;
   }
-  return n ? sum / n : null;
+  return restProjAvg(byWeek, weeks, Number.isFinite(bye) ? bye : null, fillOf(state.valueBase, p.position));
 }
 
 /**
@@ -3765,7 +3796,7 @@ const dataVOf = (html) => (String(html).match(/ data-v="([^"]*)"/) || [null, '']
  */
 function valueCellHtml(offer) {
   const ids = (list) => list.map((p) => String(p.playerId));
-  const v = customValueChange(ids(offer.send), ids(offer.receive));
+  const v = customValueChange(ids(offer.send), ids(offer.receive), offer.myCut || []);
   // ONE FIGURE, YOURS (Tim, 2026-10-12: "because value is the same for both
   // users … make it so it's not a split-collumn thing anymore … just make it
   // the value dif for me, and it's assumed the other player has the opposite").
@@ -4914,7 +4945,7 @@ const MAX_VALUE_GAP = 5;
 function valueGapOk(offer) {
   if (!offer || !Array.isArray(offer.send) || !Array.isArray(offer.receive)) return true;
   const ids = (list) => list.map((p) => String(p.playerId));
-  const v = customValueChange(ids(offer.send), ids(offer.receive));
+  const v = customValueChange(ids(offer.send), ids(offer.receive), offer.myCut || []);
   return !v || !Number.isFinite(v.a) || Math.abs(v.a) <= MAX_VALUE_GAP;
 }
 
@@ -8725,6 +8756,8 @@ function customOffer(entry, priced) {
     // The send week it was priced under (null = now); everything that reads
     // this offer later reads it under the same week (`withOfferCut`).
     sendAfter: sendCut,
+    // Your men its forced cut drops (ids), as a finder offer carries them.
+    myCut: ((priced.forA && priced.forA.cut) || []).map((p) => String(p.playerId)),
     myGain: priced.forA.delta,
     theirGain: priced.forB.delta,
     myBefore: priced.forA.before.total,
@@ -8908,7 +8941,8 @@ const CU_BLANK = '<span class="cu-num flat">—</span>';
 function customBoxFigures(entry, priced) {
   const cuOffer = customOffer(entry, priced);
   const f = dealFigures(rowTwinOf(entry) || cuOffer);
-  const val = customValueChange(entry.sendA.map(String), entry.sendB.map(String));
+  const val = customValueChange(entry.sendA.map(String), entry.sendB.map(String),
+    (priced && priced.forA && priced.forA.cut) || []);
   // The box always prices week by week; on another measure the row's Total is
   // of one-week figures, so the box adds the two it prints instead.
   const total = basis() === 'weeks' ? f.total : totalOfOffer(cuOffer, { mine: f.myWeek, his: f.hisWeek });
@@ -10094,6 +10128,7 @@ function cuSeasonScales(rows, weeks, regular) {
     if (!weeks.length) break;
     const fill = seasonLineupValue(team.players, state.slots, weeks, projFor, state.floors);
     const perSlot = new Map(rows.map((r) => [r.key, []]));
+    const perMen = new Map(rows.map((r) => [r.key, []]));
     const totals = [];
     fill.byWeek.forEach((wk) => {
       const slots = fillSlots(wk.starters, rows);
@@ -10106,13 +10141,14 @@ function cuSeasonScales(rows, weeks, regular) {
         if (regular.has(wk.week)) {
           const a = cuSeasonShown(e, row);
           if (a.value !== null) perSlot.get(row.key).push(a.value);
+          perMen.get(row.key).push(e);
         }
       }
       bandVals.get(wk.week).push(wk.total);
       if (regular.has(wk.week)) totals.push(wk.total);
     });
     for (const row of rows) {
-      const m = mean(perSlot.get(row.key));
+      const m = cuSlotAvg(perMen.get(row.key), perSlot.get(row.key), mean);
       if (m !== null) teamAvgs.get(row.key).push(m);
     }
     const t = mean(totals);
@@ -10142,10 +10178,25 @@ function cuSeasonValue(entry, row) {
  * The same, as DRAWN (Proj | Value). As Value the slot's number becomes the
  * Value of the man filling it, at HIS position; a slot nobody fills has none.
  */
+/**
+ * A season box's slot Avg. On Proj the mean of the cells; ON VALUE one Value
+ * (2026-10-22, js/value.js `runValue`): `valueOf` of the average projection of
+ * the men filling the slot, a 0 or a bye at that man's waiver line — as the
+ * Analysis season sheet, and not the mean of the weekly Values. `men` is the
+ * counted weeks' entries (null for an empty slot), `vals` the cells.
+ */
+function cuSlotAvg(men, vals, avgOf) {
+  if (!valueOn()) return avgOf(vals);
+  const v = runValue(state.valueBase, men.map((e) => (e && e.p && typeof e.v === 'number'
+    ? { position: e.p.position, v: e.v } : null)));
+  return v === null ? null : Math.round(v * 10) / 10;
+}
+
 function cuSeasonShown(entry, row) {
-  const a = cuSeasonValue(entry, row);
-  if (!valueOn()) return a;
-  return { value: entry ? asValue(entry.p.position, a.value) : null, assumed: a.assumed };
+  if (!valueOn()) return cuSeasonValue(entry, row);
+  // On Value nothing is floored first (as Analysis's season sheet): a man
+  // under the waiver line is worth 0, which is the floor said another way.
+  return { value: entry && typeof entry.v === 'number' ? asValue(entry.p.position, entry.v) : null, assumed: false };
 }
 
 /** One season box: slot rows, Avg, a column a week, the Starting lineup band (and the opponent row). */
@@ -10177,10 +10228,12 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
   // Difference; played weeks stay grey.
   const body = diff ? cuSeasonDiffBody(cols, rows, fills, cardKey, colCls, avgOf, counted) : rows.map((row) => {
     const vals = [];
+    const men = [];
     const cells = cols.map((c, i) => {
       const e = fills[i].get(row.key) || null;
       const a = cuSeasonShown(e, row);
       if (counted(c) && a.value !== null) vals.push(a.value);
+      if (counted(c)) men.push(e);
       const h = c.played ? null : heatOf(a.value, scales.cells.get(row.key), { what: `a ${row.key} across the league` });
       const zero = e && e.p.projected === 0 && !a.assumed
         ? zeroKind(0, { week: c.week, byeWeek: byeWeekOf(e.p, state.byes), injuryStatus: e.p.injuryStatus, demo: state.isDemo })
@@ -10196,7 +10249,7 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
       return `<td class="${cls}" data-v="${a.value}" data-pid="${esc(e.p.playerId ?? '')}">` +
         `<span class="sbw-man"${tipAttr(cardKey(e.p))}>${playerRef(e.p, inner)}</span></td>`;
     });
-    const avg = avgOf(vals);
+    const avg = cuSlotAvg(men, vals, avgOf);
     const ah = heatOf(avg, scales.avg.get(row.key), { what: `the other squads’ ${row.key}` });
     return `<tr data-slot="${esc(row.key)}"><td class="name"><span class="slot-tag">${esc(row.key)}</span></td>` +
       `<td class="avg grouped${ah ? ` ${ah.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}"`}>` +
@@ -10251,11 +10304,14 @@ function cuSeasonDiffBody(cols, rows, afterFills, cardKey, colCls, avgOf, counte
   return rows.map((row) => {
     const aVals = [];
     const bVals = [];
+    const aMen = [];
+    const bMen = [];
     const cells = cols.map((c, i) => {
       const e = afterFills[i].get(row.key) || null;
       const a = cuSeasonShown(e, row).value;
       const b = cuSeasonShown(beforeFills[i].get(row.key) || null, row).value;
       if (counted(c) && a !== null && b !== null) { aVals.push(a); bVals.push(b); }
+      if (counted(c)) { aMen.push(e); bMen.push(beforeFills[i].get(row.key) || null); }
       const d = a === null || b === null ? null : cuRound1(cuRound1(a) - cuRound1(b));
       const cls = cuDiffCls(c, d, colCls, 'wk');
       if (d === null) return `<td class="${cls} muted">—</td>`;
@@ -10264,8 +10320,8 @@ function cuSeasonDiffBody(cols, rows, afterFills, cardKey, colCls, avgOf, counte
       return `<td class="${cls}" data-v="${d}" data-pid="${esc(e.p.playerId ?? '')}">` +
         `<span class="sbw-man"${tipAttr(cardKey(e.p))}>${playerRef(e.p, inner)}</span></td>`;
     });
-    const aAvg = avgOf(aVals);
-    const bAvg = avgOf(bVals);
+    const aAvg = cuSlotAvg(aMen, aVals, avgOf);
+    const bAvg = cuSlotAvg(bMen, bVals, avgOf);
     const dAvg = aAvg === null || bAvg === null ? null : cuRound1(aAvg - bAvg);
     const avgCls = dAvg === null ? '' : dAvg > 0.05 ? ' d-up' : dAvg < -0.05 ? ' d-down' : ' d-zero';
     return `<tr data-slot="${esc(row.key)}"><td class="name"><span class="slot-tag">${esc(row.key)}</span></td>` +

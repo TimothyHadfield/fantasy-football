@@ -330,6 +330,9 @@ async function expectedBox(d, { weeks, pos, valueBase = null, history = 'actual'
     state,
     valueOn: () => valueBase !== null,
     asValue: (p, x) => value.valueOf(valueBase, p.position, x),
+    // 2026-10-22: a man's Avg on Value is ONE Value of his filled mean (a 0 or
+    // bye week at the waiver line), so the renderer needs the lines too.
+    valueBase: () => valueBase,
     historyMode: () => history,
     sourceKey: () => `check:${pos}:${weeks.join(',')}:${valueBase ? 'v' : 'p'}:${history}`,
     glanceFor: () => null,

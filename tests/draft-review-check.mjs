@@ -814,8 +814,13 @@ function checkAvg(page, name, figure, said, rounds) {
     eq(f.cells.slice(0, 10).map((c) => c.went.split(' ')[0]), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], 'demo: round one runs 1-10');
     eq(f.cells.slice(10, 20).map((c) => c.went.split(' ')[0]), ['20', '19', '18', '17', '16', '15', '14', '13', '12', '11'], 'demo: round two snakes back');
     // (The sample league's Value is made in memory, so its "vs worth now" is on Value.)
-    ok(f.cells.every((c) => c.card && c.name && /^[+−]?\d+\.\d$/.test(c.d)), 'demo: every pick has a name with a card and a difference in Value', f.cells.slice(0, 5).map((c) => c.d).join(' '));
-    ok(new Set(f.cells.map((c) => c.heat)).size >= 5 && f.cells.every((c) => c.heat), 'demo: the board is on the heat scale, in several steps');
+    // 2026-10-22 (brief: Draft "Value now" unknown shows "—", not 0.0, and adds
+    // nothing): a sample man with no number in any week left is a dash, no
+    // colour. Every other pick has its difference, on the heat scale.
+    const known = (c) => c.d !== '—';
+    ok(f.cells.every((c) => c.card && c.name && (/^[+−]?\d+\.\d$/.test(c.d) || c.d === '—')) && f.cells.filter(known).length >= f.cells.length * 0.75,
+      'demo: every pick has a name with a card and a difference in Value (a dash only when his Value is unknown)', `${f.cells.length} cells, ${f.cells.filter(known).length} with a number`);
+    ok(new Set(f.cells.map((c) => c.heat)).size >= 5 && f.cells.filter(known).every((c) => c.heat), 'demo: the board is on the heat scale, in several steps');
     const tot = f.totalRow;
     eq(tot && [tot.index, tot.label, tot.cells.map((c) => c.team)], [0, 'Value', f.teams.map((t) => t[0])], 'demo: the row of team totals is the first under the headings, a number a team');
     ok(tot && tot.cells.every((c) => /^[+−]?\d+\.\d$/.test(c.v)), 'demo: each a Value difference, signed', tot && tot.cells.map((c) => c.v).join(' '));
@@ -826,12 +831,13 @@ function checkAvg(page, name, figure, said, rounds) {
     eq([r.picked.avg, r.byBoard.avg], [f.avg, f.avg], 'demo: picking a team leaves the Avg column as it was');
     eq(f.tableHeads, ['Player', 'Pick', 'Now', '+/−'], 'demo: a snake has no Paid column');
     eq([f.table.length, f.sorted], [16, ['+/−']], 'demo: the team’s sixteen picks, sorted by the difference');
-    const diffs = f.table.map((t) => Number(t.cells[3].replace('−', '-')));
+    const knownRows = f.table.filter((t) => t.cells[3] !== '—');
+    const diffs = knownRows.map((t) => Number(t.cells[3].replace('−', '-')));
     ok(diffs.every((d, i) => i === 0 || diffs[i - 1] >= d), 'demo: biggest steal first, biggest miss last', diffs.join(','));
-    ok(f.table.every((t) => t.why && t.card), 'demo: every row has a preview and a card');
+    ok(f.table.every((t) => t.card) && knownRows.every((t) => t.why), 'demo: every row has a card, and every row with a number a preview');
     eq(f.tiles.map((t) => [t.k, t.v]), [['Best steal', sv(diffs[0])], ['Biggest miss', sv(diffs[diffs.length - 1])]], 'demo: the two tiles are the table’s ends');
-    ok(f.table.every((t) => /^\d+\.\d$/.test(t.cells[2])), 'demo: Now is his Value today', f.table.slice(0, 4).map((t) => t.cells[2]).join(' '));
-    eq(f.tiles.map((t) => t.pid), [f.table[0].pid, f.table[f.table.length - 1].pid], 'demo: and name those two men');
+    ok(f.table.every((t) => /^\d+\.\d$/.test(t.cells[2]) || (t.cells[2] === '—' && t.cells[3] === '—')), 'demo: Now is his Value today (a dash when unknown)', f.table.slice(0, 4).map((t) => t.cells[2]).join(' '));
+    eq(f.tiles.map((t) => t.pid), [knownRows[0].pid, knownRows[knownRows.length - 1].pid], 'demo: and name those two men');
     ok(f.table.every((t) => f.cells.find((c) => c.pid === t.pid && c.team === f.team && c.d === t.cells[3])), 'demo: the table and the board agree on every pick');
     eq(f.titles, 0, 'demo: no `title` on a cell (a phone would open it over the preview)');
     ok(/smoothed line/.test(f.note) && /read at his pick/.test(f.note) && !/Rank/.test(f.note) && !/drafted again today/.test(f.note),
@@ -1199,7 +1205,10 @@ function checkAvg(page, name, figure, said, rounds) {
     const preSorted = [...preTotals.entries()].sort((a, b) => b[1] - a[1]);
     const preHeat = (id) => pt.cells.find((c) => c.team === String(id)).heat;
     ok(pt && /^heat-up/.test(preHeat(preSorted[0][0])) && /^heat-dn/.test(preHeat(preSorted[9][0])), 'value, pre: coloured on the totals shown — the best preseason total green, the worst red', pt && pt.cells.map((c) => c.heat).join(' '));
-    ok(preSorted[0][0] !== sorted[0][0] || preSorted[9][0] !== sorted[9][0], 'value, pre: (the two rankings of teams are not the same one)');
+    // (Since 2026-10-22 the fill moved today's totals so the two share their
+    // first and last team; the check is that the ORDERS differ somewhere.)
+    ok(preSorted.some(([id], i) => id !== sorted[i][0]), 'value, pre: (the two rankings of teams are not the same one)',
+      `${preSorted.map((x) => x[0]).join(',')} v ${sorted.map((x) => x[0]).join(',')}`);
     ok(/Value on the board adds up each drafted player’s preseason Value\./.test(r.pre.note), 'value, pre: how it works says what the row adds up', r.pre.note);
     ok(run.plainPreNote && !/preseason Value/.test(run.plainPreNote), 'value, pre: and says nothing of it for a league with no lines');
     const ptop = byId.get(r.prePopPid);

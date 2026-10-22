@@ -50,7 +50,7 @@ import {
 import './loose-weeks.js';
 // A PLAYER'S VALUE (Tim, 2026-10-09): pure arithmetic; the frozen lines come
 // from js/season.js. See the "Proj | Value" block below.
-import { valueOf } from './value.js';
+import { valueOf, runValue } from './value.js';
 import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
@@ -109,7 +109,7 @@ import {
   withFut, playerScales, withHeat, aheadShown, avgCounted, playerHistoryValue, playerWeekHeads,
   playerHistoryCell, leagueSlots, weeklyStarters, unidentifiedCount, fmt, esc,
   round1, plural, OPENS, GO_ATTR, ROSTER_LINK, placeOf, regularCount, isPlayoff, WEEK_HEAD_ATTR,
-  withPlayerCard, avgOf, partScores, posLabel, PLAYER_AVG_HEAD, playerHistorySays,
+  withPlayerCard, avgOf, partScores, posLabel, PLAYER_AVG_HEAD, playerHistorySays, manAvg,
   STARTER_POSITIONS, FLEX_ELIGIBLE, FLEX_SLOTS, valueWords,
 } from './who-to-start.js';
 // THE ALL-TEAMS PROJ AVG GRID (moved 2026-10-18): one copy, because the Trade
@@ -234,15 +234,17 @@ const state = {
   // were read for.
   valueBase: null,
   valueKey: null,
+  valueLookup: null,  // playerId -> his Value (js/season.js), or null
 };
 
 // "Who to start" and the week cells under it are js/who-to-start.js's, drawn
 // from THIS page's state and choices: it reads `state` live, on every call.
 configureStarters({
   state, valueOn, asValue, historyMode, sourceKey, glanceFor,
+  valueBase: () => state.valueBase,
   nowSays: 'the week picked above',
 });
-configureProjAvg({ floors: () => state.floors, valueOn, asValue, sheetWords: true });
+configureProjAvg({ floors: () => state.floors, valueOn, asValue, valueBase: () => state.valueBase, sheetWords: true });
 
 // Cache per week so flipping back to a week already loaded is instant.
 const cache = new Map(); // `${source}:${week}` -> {week, teams}
@@ -289,6 +291,13 @@ function asValue(p, x) {
   return valueOf(state.valueBase, p ? p.position : null, x);
 }
 
+/** His Value as his card prints it (js/season.js `fetchPlayerValues`), or null. */
+function ownValue(p) {
+  if (!p || typeof state.valueLookup !== 'function') return null;
+  const v = state.valueLookup(p.playerId);
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
 /** The tucked note's line (rule 7): what Value is. Empty while there are no lines. */
 function valueNote(history = false) {
   if (!state.valueBase) return '';
@@ -330,6 +339,7 @@ async function loadValue() {
   if (state.valueKey !== key) {
     state.valueKey = key;
     state.valueBase = null;
+    state.valueLookup = null;
     syncShow();
   }
   if (typeof season.fetchPlayerValues !== 'function') return;
@@ -342,6 +352,7 @@ async function loadValue() {
   if (sourceKey() !== key) return;   // the reader changed league meanwhile
   const base = got && got.base ? got.base : null;
   if (got && typeof got.lookup === 'function') setValueSource(got.lookup);
+  state.valueLookup = got && typeof got.lookup === 'function' ? got.lookup : null;
   const changed = base !== state.valueBase;
   state.valueBase = base;
   syncShow();
@@ -2528,7 +2539,10 @@ function renderRoster() {
     const projShown = val
       ? (typeof line.proj === 'number' ? asValue(p, round1(line.proj)) : null)
       : line.proj;
-    const avgShown = val ? asValue(p, avg) : avg;
+    // On Value, Avg/wk is HIS Value (2026-10-22): the one on his card, from his
+    // average over every week left with a 0 and his bye at his position's
+    // waiver line — not ESPN's season ÷ 17 turned into a Value.
+    const avgShown = val ? ownValue(p) : avg;
     const own = typeof p.percentOwned === 'number' ? `${p.percentOwned.toFixed(0)}%` : '—';
     const tier = injuryTier(p.injuryStatus);
     const cls = [
@@ -2650,7 +2664,8 @@ function rosterScales() {
     // scale (the grids above leave those out for the same reason).
     proj: scaleOf((p) => shownAs(p, num1(weekLine(p).proj) || null)),
     actual: final ? scaleOf((p) => (p.done === false ? null : num1(weekLine(p).actual))) : none,
-    avg: scaleOf((p) => shownAs(p, avgWeek(p) || null)),
+    // On Value the column holds his own Value (`ownValue`), so it is scaled on that.
+    avg: scaleOf((p) => (val ? ownValue(p) : avgWeek(p) || null)),
     season: scaleOf((p) => (typeof p.seasonProjected === 'number' && p.seasonProjected > 0
       ? p.seasonProjected : null), (n) => Number(n).toFixed(0)),
   };
@@ -3273,19 +3288,39 @@ function shownAverages(rows, slots, weeks) {
   for (const t of teams) {
     const cells = new Map();
     for (const row of rows) {
+      // ON VALUE the Avg is ONE Value (2026-10-22, js/value.js `runValue`):
+      // `valueOf` of the average projection over the regular weeks — a
+      // history week at its projection before kickoff (a score is no Value),
+      // a week to come at its man's projection with a 0 or a bye counted as
+      // his position's waiver line — not the mean of the weekly Values.
+      if (val) {
+        const run = weeks.map((w) => {
+          if (isPlayoff(w)) return null;
+          if (hist.has(w)) {
+            if (mode !== 'proj') return null;
+            const got = (real.get(w) || new Map()).get(t.id);
+            const e = got ? got.fill.get(row.key) : null;
+            const x = e && e.p ? historyValue(e.p, 'proj') : null;
+            return typeof x === 'number' ? { position: e.p.position, v: x, past: true } : null;
+          }
+          const fill = (fills.get(w) || new Map()).get(t.id);
+          const e = fill ? fill.get(row.key) : null;
+          return e && e.p && typeof e.v === 'number' ? { position: e.p.position, v: e.v } : null;
+        });
+        const v = runValue(state.valueBase, run);
+        cells.set(row.key, v === null ? null : round1(v));
+        continue;
+      }
       const shown = weeks.map((w) => {
         if (hist.has(w)) {
           const got = (real.get(w) || new Map()).get(t.id);
           const e = got ? got.fill.get(row.key) : null;
-          if (val) return slotValueAt(e, true, mode);
           return e ? tenth(historyValue(e.p, mode)) : null;
         }
         const fill = (fills.get(w) || new Map()).get(t.id);
-        if (val) return slotValueAt(fill ? fill.get(row.key) : null, false, mode);
         return fill ? tenth(assessed(fill.get(row.key) || null, row).value) : null;
       });
-      const mean = regularAvg(shown, weeks);
-      cells.set(row.key, val && mean !== null ? round1(mean) : mean);
+      cells.set(row.key, regularAvg(shown, weeks));
     }
     byTeam.set(t.id, {
       slots: cells,
@@ -4170,7 +4205,7 @@ function playerRows(team, weeks, index, hist) {
       ? playerHistoryValue(p, w, mode)
       : aheadShown(p, ahead[i], w, index)));
     const counted = avgCounted(shown, weeks, hist);
-    return { p, slotId: p.lineupSlotId, ahead, shown, counted, avg: regularAvg(counted, weeks) };
+    return { p, slotId: p.lineupSlotId, ahead, shown, counted, avg: manAvg(p, weeks, hist, ahead, index) };
   }));
 }
 
