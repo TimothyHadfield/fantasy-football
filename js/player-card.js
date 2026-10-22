@@ -595,12 +595,25 @@ export function weekRun({
   const tokens = weeks.map((week, i) =>
     projToken(projections[i], demo, { week, byeWeek, injuryStatus: statusAt(i) }));
 
+  // THE BASELINE IS HIS WEEKS STILL TO COME (Tim, 2026-10-22: "make it so that
+  // the base number everything is being judged off of is just future proj weeks
+  // that are not 0 ... all past weeks are still colored, just based on that
+  // future number"). "Still to come" is after `splitAfter`; a run without one
+  // uses `currentWeek` (that week and on, less a week he already has a score
+  // in, as the card's "Proj" does); a run with neither is all to come.
+  const scored = (i) => typeof actuals[i] === 'number' && Number.isFinite(actuals[i]);
+  const futureAt = splitW !== null ? (w) => Number(w) > splitW
+    : Number.isFinite(Number(currentWeek)) && currentWeek !== null && currentWeek !== ''
+      ? (w, i) => Number(w) >= Number(currentWeek) && !scored(i)
+      : () => true;
+  const values = tokens.map((t, i) => (t.kind === 'num' ? Number(projections[i]) : null));
   const scale = heat
-    ? heatScale(tokens.map((t, i) => (t.kind === 'num' ? Number(projections[i]) : null)))
+    ? futureScale(values, weeks.map((w, i) => futureAt(w, i) && !(byeWeek !== null && byeWeek !== undefined &&
+        Number(byeWeek) === Number(w))))
     : null;
   // The words on every cell name the group, because this group is not the one
   // the rest of the site's cells are measured against — see the long note above.
-  const WHAT = 'his own weeks in this run';
+  const WHAT = scale && scale.base === 'future' ? 'his own weeks to come' : 'his own weeks in this run';
 
   const cols = weeks.map((week, i) => {
     const start = startAt(i);
@@ -796,12 +809,44 @@ function splitLine(week) {
 function heatLine(scale) {
   const edge = scale.edges[scale.edges.length - 1];
   const at = (v) => (Math.round(v * 10) / 10).toFixed(1);
+  const s = scale.n === 1 ? '' : 's';
+  const base = scale.base === 'future'
+    ? `${at(scale.mean)} over the ${scale.n} week${s} still to come that he is projected to play ` +
+      '(bye and 0.0 weeks left out); weeks already played are coloured against that same average.'
+    : `${at(scale.mean)} over the ${scale.n} week${s} with a number.`;
   return 'Colour on the Proj row compares each week with HIS OWN other weeks — green is a good ' +
     'week for him, red a poor one. It is never a comparison with another player or another ' +
     `position. Full colour at ${at(scale.mean + edge * scale.sd)} pts ` +
     `or better, ${at(scale.mean - edge * scale.sd)} pts or worse, against an average of ` +
-    `${at(scale.mean)} over the ${scale.n} week${scale.n === 1 ? '' : 's'} with a number. His best ` +
+    `${base} His best ` +
     'and worst weeks also carry ▲ or ▼, so none of it depends on telling red from green.';
+}
+
+/**
+ * The preview's scale, centred on his WEEKS STILL TO COME (Tim, 2026-10-22).
+ *
+ * `values` is every week's number (null where there is none); `future[i]` says
+ * whether week i is still to come and not his bye. The centre is the average of
+ * the future weeks projected above 0 — the same rule as the card's "Proj"
+ * (js/value.js `restProjAvg`). The spread is those same weeks' when there are
+ * two or more with a visible spread, else every numbered week's, so a man with
+ * one week left is still coloured. With no future week above 0 (season over,
+ * out for the year) it is the old scale over every numbered week. Every
+ * numbered week, past ones included, is still placed and ranked on it.
+ * `heatScale` itself is untouched; this only builds the object it would.
+ *
+ * @returns {Object|null} a heatScale object (`base: 'future'` when centred on
+ *   the weeks to come; `n` is then how many weeks the centre averages)
+ */
+export function futureScale(values, future) {
+  const all = heatScale(values);
+  const ahead = values.filter((v, i) => future[i] && typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (!ahead.length) return all;
+  const own = ahead.length >= 2 ? heatScale(ahead) : null;
+  const spread = own || all;
+  if (!spread) return null;
+  const mean = ahead.reduce((a, b) => a + b, 0) / ahead.length;
+  return { ...(all || spread), mean, sd: spread.sd, n: ahead.length, base: 'future' };
 }
 
 // --------------------------------------------------- registering and wiring
