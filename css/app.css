@@ -2121,6 +2121,13 @@ a.conn-chip.conn-saved { color: inherit; text-decoration: none; cursor: pointer;
 .dr-board tr.dr-und-head td { border-top: 1px solid var(--line-2); }
 .dr-board td.dr-und-label { font-size: 10.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
 /* ================================================ end of not drafted */
+/* ============ DRAFT BOARD: PERFECT DRAFT (2026-10-22)
+ * Tim: "Make the Perfect Draft a button next to drafted and own now." A third
+ * button on the same switch, its own width; hidden on an auction (a segmented
+ * button has a display of its own, so `hidden` has to be said here). */
+.dr-box { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: auto; }
+.dr-box button[hidden] { display: none; }
+/* ============================================== end of perfect draft */
 /* ============ THE BRAND IS THE WAY TO THE MAIN MENU (2026-10-10)
  * Tim: "To go to this main menu you will click on the fantasy button in the top
  * left." On every section page the brand is now a link to leagues.html. It is

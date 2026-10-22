@@ -578,6 +578,86 @@ export function teamReview(rows, teamId, key = 'diff', { plain = false } = {}) {
   };
 }
 
+// ------------------------------------------------------------ the perfect draft
+//
+// Tim, 2026-10-22: "could you add a hypothetical "perfect draft" that
+// automatically selects the most currently valuable players that you could've
+// drafted for that round, and then shifts all the players down to even out the
+// draft? Make sure it only selects the player that was between that pick and
+// your current pick. For example, I picked Omarian Hampton at 14 and Jenty at
+// 27. The perfect draft simply chooses the player with the highest value
+// between position 12-26 and shifts all the players down accordingly. this
+// means that I would hypothetically choose Walker (pos 23), and positions 14-22
+// would shift so that it all lines up acordingly."
+//
+// Read as: the draft is walked in pick order, for EVERY team. At a team's pick
+// P its window is the men on the board at picks P … (its next pick − 1) — to
+// the end of the draft for its last pick. It takes the one worth most today;
+// he moves to P and the men from P to where he stood each slide one pick
+// later, so every slot stays filled and the others keep their order. Then pick
+// P + 1, on the board as it now stands. Of equals the earlier man is taken, so
+// when the best in the window is already at P nothing moves. ("12-26" in his
+// words is taken as 14-26: his example moves Walker up and shifts 14-22.)
+
+/**
+ * The perfect draft's order.
+ *
+ * @param {Array<{overall:number, teamId:number, playerId:number}>} picks in pick order
+ * @param {function(number):number|null} worthOf playerId -> what he is worth
+ *   today; a man with none is never taken over a man with one
+ * @returns {Array<object>} one a slot, in pick order: the slot's own pick
+ *   (overall, round, roundPick, teamId, bid, keeper) with the man who fills it
+ *   (`playerId`) and where he was really taken (`from`, his overall pick)
+ */
+export function perfectOrder(picks, worthOf) {
+  const slots = (picks || []).slice().sort((a, b) => a.overall - b.overall);
+  const from = new Map(slots.map((p) => [p.playerId, p.overall]));
+  const worth = (id) => {
+    const v = num(worthOf ? worthOf(id) : null);
+    return v === null ? -Infinity : v;
+  };
+  const men = slots.map((p) => p.playerId);
+  for (let i = 0; i < slots.length; i++) {
+    let next = slots.length;
+    for (let j = i + 1; j < slots.length; j++) if (slots[j].teamId === slots[i].teamId) { next = j; break; }
+    let best = i;
+    for (let k = i + 1; k < next; k++) if (worth(men[k]) > worth(men[best])) best = k;
+    if (best !== i) men.splice(i, 0, men.splice(best, 1)[0]);
+  }
+  return slots.map((p, i) => ({ ...p, playerId: men[i], from: from.get(men[i]) }));
+}
+
+/**
+ * The review's rows as the perfect draft has them: each man in his new slot,
+ * with every figure that hangs on the slot worked again there — `at` is the new
+ * pick, `expected` the line read at it (so `valueDiff` is his Value today less
+ * that), `diff` and `preDiff` the new pick less `now` and `pre`. What is his
+ * own (Value now, preseason Value, points, places) goes with him. `from` is
+ * where he was really taken. Snake drafts only: an auction has no pick order.
+ *
+ * @param {ReturnType<typeof reviewDraft>} rv
+ * @param {Array<object>} order `perfectOrder(...)`
+ */
+export function perfectRows(rv, order) {
+  const byId = new Map(((rv && rv.rows) || []).map((r) => [r.playerId, r]));
+  return (order || []).map((slot) => {
+    const r = byId.get(slot.playerId);
+    if (!r) return null;
+    const at = slot.overall;
+    const e = rv.curve && r.expected !== null ? expectedAt(rv.curve, at) : null;
+    const expected = e === null ? null : round1(e);
+    return {
+      ...r,
+      overall: at, round: slot.round, roundPick: slot.roundPick, teamId: slot.teamId,
+      bid: slot.bid, keeper: slot.keeper, from: slot.from, at,
+      diff: r.now === null ? null : at - r.now,
+      preDiff: r.pre === null ? null : at - r.pre,
+      expected,
+      valueDiff: r.valueNow === null || expected === null ? null : round1(r.valueNow - expected),
+    };
+  }).filter(Boolean);
+}
+
 // ------------------------------------------------------------ the sample draft
 
 /** What was expected of a sample man before the season, over the bar at his position. */

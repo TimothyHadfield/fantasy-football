@@ -110,6 +110,8 @@ async function boot({ store = {}, stubs = true } = {}) {
         labels: [...$('boxToggle').querySelectorAll('button')].map((b) => [b.dataset.box, text(b)]),
         on: [...$('boxToggle').querySelectorAll('button.on')].map((b) => b.dataset.box),
       } : null,
+      perfectHidden: $('boxToggle') && $('boxToggle').querySelector('button[data-box="perfect"]')
+        ? $('boxToggle').querySelector('button[data-box="perfect"]').hidden : null,
       // THE COMPARISON SWITCH: each tab's key, its words and whether it is hidden, and the one lit.
       compare: {
         labels: [...$('compareToggle').querySelectorAll('button')].map((b) => [b.dataset.compare, text(b), b.hasAttribute('hidden')]),
@@ -636,6 +638,34 @@ const CHILDREN = {
     const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live' }, 'ff.connection': CONN } });
     const ok = await p.settle('demo');
     return { ok, calls: p.calls(), page: p.read(), fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors };
+  },
+
+  // THE PERFECT DRAFT (Tim, 2026-10-22), on the snake (DR_SNAKE=1) with Value
+  // known: team 3 picked, every view, a moved man's number opened, then back.
+  async perfect() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live', 'draft.team.1241838-2026': 3 }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    const click = (sel) => p.fire(p.document.querySelector(sel), 'click');
+    const prefs = () => JSON.parse(p.map.get('ff.prefs') || '{}');
+    const drafted = p.read();
+    const before = p.calls();
+    click('#boxToggle button[data-box="perfect"]');
+    const pages = {};
+    for (const k of ['now', 'exp', 'val', 'pre']) {
+      click(`#compareToggle button[data-compare="${k}"]`);
+      pages[k] = p.read();
+    }
+    click('#compareToggle button[data-compare="now"]');
+    const prefsPerfect = prefs();
+    let pop = null;
+    const pid = process.env.DR_MOVED || '';
+    const why = pid ? p.document.querySelector(`#draftBoard .dr-why[data-pid="${pid}"]`) : null;
+    if (why) { p.fire(why, 'mouseover'); pop = p.read().pop; p.fire(why, 'mouseout'); }
+    click('#boxToggle button[data-box="own"]');
+    const own = p.read();
+    click('#boxToggle button[data-box="drafted"]');
+    const back = p.read();
+    return { ok, drafted, pages, pop, own, back, prefsPerfect, prefsBack: prefs(), before, after: p.calls(), fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors };
   },
 
   // A SNAKE (DR_SNAKE=1 makes the espn stub's draft one: same men, same order).
@@ -1393,7 +1423,8 @@ function checkAvg(page, name, figure, said, rounds) {
     eq([mine3.length, own3.length, got.length, gone.length, dropped.length], [17, 13, 1, 5, 3], 'own: (team 3 — 17 drafted, 13 of the drafted held now, one of them another team’s pick, five of its own gone, three of those dropped)');
 
     // DEFAULT: the column, exactly as before.
-    eq(d.box, { hidden: false, labels: [['drafted', 'Drafted'], ['own', 'Own now']], on: ['drafted'] }, 'own: the switch is on the page, on Drafted');
+    eq(d.box, { hidden: false, labels: [['drafted', 'Drafted'], ['own', 'Own now'], ['perfect', 'Perfect draft']], on: ['drafted'] }, 'own: the switch is on the page, on Drafted');
+    ok(d.perfectHidden === true, 'own: (an auction: no Perfect draft button, there being no pick order to re-draft)');
     eq([d.team, d.mineHead, d.mineTeams, d.mineCells], ['3', ['3'], ['3'], 18], 'own, Drafted: the team’s column is boxed as it was — its total and seventeen rounds');
     eq([d.ownPids, d.ownOther, d.boardOwn], [[], 0, false], 'own, Drafted: and no cell is boxed on its own');
 
@@ -1413,7 +1444,24 @@ function checkAvg(page, name, figure, said, rounds) {
     eq([o.und.head, o.und.rows], [null, []], 'own: (no undrafted man on a squad here, so no Not drafted block)');
     eq([o.avg.rows.length, [...o.avg.rows, ...d.avg.rows, o.avg.total, d.avg.total, o.avg.head, d.avg.head].filter((c) => !c || c.boxed).length],
       [17, 0], 'own: the Avg column is there and boxed in neither state');
-    eq([o.table, o.tiles, o.sub], [d.table, d.tiles, d.sub], 'own: the team’s table, its tiles and the line under the heading are untouched');
+    // STEALS & MISSES FOLLOW THE SWITCH (Tim, 2026-10-22: "base it off the
+    // players that are selected out of the three different types of player
+    // selections, not just the ones that were drafted by that user").
+    eq(o.sub, d.sub, 'own: the line under the heading is untouched');
+    eq([sortS(d.table.map((x) => x.pid)), sortS(o.table.map((x) => x.pid))], [sortS(mine3), sortS(own3)],
+      'own: Steals & misses lists the seventeen it drafted on Drafted, the thirteen it holds on Own now');
+    {
+      const rowsOf = (pids) => rvV.rows.filter((x) => pids.includes(String(x.playerId)));
+      const ends = (pids) => {
+        const xs = rowsOf(pids);
+        const hi = xs.reduce((a, x) => (a === null || x.valueDiff > a.valueDiff ? x : a), null);
+        const lo = xs.reduce((a, x) => (a === null || x.valueDiff < a.valueDiff ? x : a), null);
+        return [hi && hi.valueDiff > 0 ? [String(hi.playerId), sv(hi.valueDiff)] : null, lo && lo.valueDiff < 0 ? [String(lo.playerId), sv(lo.valueDiff)] : null];
+      };
+      const tilesOf = (pg) => pg.tiles.map((t) => (t.pid ? [t.pid, t.v] : null));
+      eq([tilesOf(d), tilesOf(o)], [ends(mine3), ends(own3)], 'own: its best steal and biggest miss are of the men on show in each state');
+      ok(JSON.stringify(tilesOf(d)) !== JSON.stringify(tilesOf(o)) || JSON.stringify(ends(mine3)) === JSON.stringify(ends(own3)), 'own: (and they differ here when the men do)');
+    }
     const sumBy = (team, key, ownNow) => sv(Math.round(rvV.rows.filter((x) => (ownNow ? FX.players[x.playerId].onTeamId : x.teamId) === team)
       .reduce((a, x) => a + x[key], 0) * 10) / 10);
     eq(d.totalRow.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), sumBy(id, 'valueDiff', false)]), 'own, Drafted: each total adds up the differences of the men a team drafted');
@@ -1532,6 +1580,12 @@ function checkAvg(page, name, figure, said, rounds) {
     // Boxed for the picked team (3): its four, as well as its drafted men it holds.
     const three = perTeam(3).map((x) => String(x.playerId));
     eq([all.filter((x) => x.own).map((x) => x.pid).sort(), three.every((pid) => o.ownPids.includes(pid))], [[...three].sort(), true], 'not drafted: the picked team’s own are boxed with the rest of its men');
+    // STEALS & MISSES ON OWN NOW: the men nobody drafted are among the team's,
+    // with no price and no pick (Tim, 2026-10-22: "base it off the players
+    // that are selected out of the three different types of player selections").
+    const und3 = o.table.filter((x) => three.includes(x.pid));
+    eq([und3.length, und3.map((x) => [x.cells[1], x.cells[2]])], [three.length, three.map(() => ['—', '—'])], 'steals & misses, Own now: team 3’s men nobody drafted are in its table, no price, no pick');
+    eq(d.table.filter((x) => three.includes(x.pid)), [], 'steals & misses, Drafted: and not on Drafted');
     // Each view's own figure: Value difference is his Value today (nothing was expected), Expected 0.0.
     const col = (k) => r.pages[`own.${k}`].und.rows.flatMap((row) => row.cells.filter((x) => !x.empty));
     eq(col('now').filter((x) => x.d !== sv(r1x(VAL.VALUES_UNDRAFTED.players[x.pid].value))).slice(0, 3), [], 'not drafted, Value difference: his Value today, signed — nothing was expected of him');
@@ -1586,6 +1640,83 @@ function checkAvg(page, name, figure, said, rounds) {
     const top = want.byId.get(f.table[0].pid);
     eq(r.pop && r.pop.rows.map((x) => x[0]), ['Points so far', 'Projected rest', 'Drafted', ...(top.keeper ? ['Keeper'] : []), 'Worth now', top.diff > 0 ? 'Steal' : 'Miss'], 'snake: the preview says Drafted, not a price');
     eq(r.pop && r.pop.rows[2], ['Drafted', `Pick ${top.overall}`], 'snake: his pick');
+  }
+}
+
+// ------------------------------------------------------------- perfect draft
+// Tim, 2026-10-22: "add a hypothetical "perfect draft" that automatically
+// selects the most currently valuable players that you could've drafted for
+// that round, and then shifts all the players down … Adjust all the sum
+// numbers to account for these new player calculations. Make the Perfect Draft
+// a button next to drafted and own now." The real league's men as a snake,
+// with its Value known; worked out here with js/draft-review.js.
+{
+  const VAL = await import('./draft-stub-value.mjs');
+  const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const raw = JSON.parse(JSON.stringify(RAW));
+  raw.settings.draftSettings.type = 'SNAKE';
+  for (const p of raw.draftDetail.picks) p.bidAmount = 0;
+  const plain = expected(raw);
+  const draft = R.parseDraft(raw);
+  const players = new Map(plain.rv.rows.map((x) => [x.playerId, { name: x.name, position: x.position, soFar: x.soFar, rest: x.rest, total: x.total }]));
+  const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: VAL.WORTH });
+  const nowOf = new Map(rv.rows.map((x) => [x.playerId, x.valueNow]));
+  const order = R.perfectOrder(draft.picks, (id) => nowOf.get(id));
+  const prow = R.perfectRows(rv, order);
+  const pById = new Map(prow.map((x) => [String(x.playerId), x]));
+  const moved = prow.filter((x) => x.from !== x.at);
+  // The man moved furthest up, for his card.
+  const star = moved.slice().sort((a, b) => (b.from - b.at) - (a.from - a.at))[0];
+  ok(moved.length > 20 && star && star.from - star.at > 5, 'perfect: (on this league many men move, some a long way up)', [moved.length, star && `${star.name} ${star.from}→${star.at}`]);
+
+  const r = run('perfect', { DR_SNAKE: '1', FF_VALUE: JSON.stringify(VAL.VALUES), DR_MOVED: star ? String(star.playerId) : '' });
+  ok(!r.boot, 'perfect: boots', r.boot);
+  if (!r.boot) {
+    ok(r.ok, 'perfect: settles');
+    eq([r.errors, r.fetches], [[], []], 'perfect: no errors, and nothing went to ESPN around the stubs');
+    eq([r.after.draft, r.after.players, r.after.ranks], [r.before.draft, r.before.players, r.before.ranks], 'perfect: the switch asks ESPN for nothing');
+    eq(r.drafted.box.labels, [['drafted', 'Drafted'], ['own', 'Own now'], ['perfect', 'Perfect draft']], 'perfect: a third button, next to Drafted and Own now');
+    eq(r.pages.now.box.on, ['perfect'], 'perfect: it lights');
+    eq(r.prefsPerfect['draft.box'], 'perfect', 'perfect: and is remembered');
+
+    const f = r.pages.now;
+    // THE BOARD: every slot holds the perfect draft's man, under the slot's team, with its pick.
+    const slotOf = new Map(order.map((s) => [String(s.playerId), s]));
+    const wrong = f.cells.filter((c) => {
+      const s = slotOf.get(c.pid);
+      return !s || c.team !== String(s.teamId) || c.went.split(' ')[0] !== String(s.overall);
+    });
+    eq([f.cells.length, wrong.slice(0, 3)], [170, []], 'perfect: 170 cells, each man in his perfect slot, under its team, at its pick');
+    eq(draft.order.map((id) => f.cells.filter((c) => c.team === String(id)).map((c) => c.pid)),
+      draft.order.map((id) => order.filter((s) => s.teamId === id).map((s) => String(s.playerId))), 'perfect: each team’s column runs its perfect picks in pick order');
+    const st = f.cells.find((c) => c.pid === String(star.playerId));
+    eq(st && st.went.split(' ')[0], String(star.at), `perfect: ${star.name}, taken ${star.from}th, sits at ${star.at}`);
+    // EVERY VIEW: the cells and the totals are the perfect draft's own figures.
+    const said = { now: (v) => sv(v), exp: (v) => v.toFixed(1), val: (v) => v.toFixed(1), pre: (v) => signed(v) };
+    const CELL = { now: 'valueDiff', exp: 'expected', val: 'valueNow', pre: 'preDiff' };
+    const TOT = { now: 'valueDiff', exp: 'expected', val: 'valueNow', pre: 'valuePre' };
+    for (const k of ['now', 'exp', 'val', 'pre']) {
+      const pg = r.pages[k];
+      eq(pg.cells.filter((c) => c.d !== said[k](pById.get(c.pid)[CELL[k]])).slice(0, 3), [], `perfect, ${k}: every cell is his ${CELL[k]} at his perfect pick`);
+      const tot = R.teamValues(prow, TOT[k]);
+      const sayTot = (v) => (k === 'now' ? sv(v) : v.toFixed(1));
+      eq(pg.totalRow && pg.totalRow.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), sayTot(tot.get(id))]), `perfect, ${k}: each team’s total adds up its perfect-draft men`);
+      eq([pg.und.head, pg.und.rows.length], [null, 0], `perfect, ${k}: no Not drafted block`);
+    }
+    // Expected value follows the slot: a man moved up is expected more of.
+    eq([pById.get(String(star.playerId)).expected > rv.rows.find((x) => x.playerId === star.playerId).expected], [true], 'perfect: (the man moved up has a higher expected value at his new pick)');
+    ok(r.pages.now.totalRow.cells.some((c, i) => c.v !== r.drafted.totalRow.cells[i].v), 'perfect: the totals are not the drafted ones');
+    // The picked team's column is boxed, as on Drafted.
+    eq([f.mineTeams, f.mineCells, f.ownPids], [['3'], 18, []], 'perfect: the picked team’s column is boxed, as on Drafted');
+    // Its own panel: its perfect picks.
+    eq(f.table.map((x) => x.pid).sort(), prow.filter((x) => x.teamId === 3).map((x) => String(x.playerId)).sort(), 'perfect: the team’s table lists its perfect-draft picks');
+    // The moved man's card: where he goes now and where he really went.
+    eq(r.pop && r.pop.rows.slice(0, 2), [['Perfect draft', `Pick ${star.at}`], ['Drafted', `Pick ${star.from}`]], 'perfect: a moved man’s number opens his perfect pick and his real one');
+    ok(/Perfect draft/.test(f.note) && /next one/.test(f.note), 'perfect: how it works says what the perfect draft is', f.note);
+    // Back: Own now and Drafted are as they were.
+    eq(r.own.box.on, ['own'], 'perfect: Own now still works after it');
+    eq(r.back.cells, r.drafted.cells, 'perfect: and Drafted puts every cell back');
+    eq(r.prefsBack['draft.box'], undefined, 'perfect: Drafted is not stored, being the default');
   }
 }
 
