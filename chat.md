@@ -102,3 +102,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built (live, last 4aa14cf):** CI fixes (manager push 0f8bdfc); sweep rows 18+10 d07e270, 8 ca1afce, 14 887f80f, 17 fead285, 19 90c217f, 20 fb76585, 9 3d60de3 (extension: reload it); row 4 already fixed by 6b4c283; test-projhist-cloud expectation fixed 4aa14cf (sync reads the index once, on purpose).
 - **Verified how:** CI run 39065492885 green on all 5 shards and deployed (re-run after a test-store goesOut flake). Touched suites locally (projhist-cloud 132, cloud 247, cloud-wiring 356, leagues 140, extension 335, wv-test 1284 and others). New checks for rows 9, 18, 19, 20 seen failing first.
 - **Open:** test-store goesOut flaky (load-order race). Rows 8, 10, 14, 17 have no new tests (timing races, read only). Row 9 depends on ESPN sending `mStatus` for earlier seasons.
+
+## 2026-10-22 · Week recap previews (builder)
+- **Asked:** "fantasy: none of the players or anything in the new week recap section have previews or anything like that like the rest of the cite. fix it"
+- **Built:** `js/week-summary-page.js` only: players → player card + Players link (Home's `pref`), managers → team stat card, scores → starters card, Missed figures → swaps card, Up while out → its two projections. Titles on those cells removed (one preview per number).
+- **Verified how:** new `tests/recap-previews-check.mjs` 23 (12 failed on the old code), recap-cloud-check 68, test-week-summary 83, text-audit 12/0; phone-view WebKit 393 taps + 1440 hover on demo and league 1241838.
+- **Open:** the recap is on Home only (Summary lost it 10-19). Not seen on Tim's iPhone.

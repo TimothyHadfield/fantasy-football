@@ -383,6 +383,9 @@
     },
     "recap-cloud-check.mjs": {
       "assertions": 68
+    },
+    "recap-previews-check.mjs": {
+      "assertions": 23
     }
   }
 }

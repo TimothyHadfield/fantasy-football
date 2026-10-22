@@ -41,6 +41,16 @@ import {
 } from './week-summary.js';
 import { injuryRow, returnLabel, gainLabel, RETURN_TITLE, GAINS_TITLE } from './injury-gains.js';
 import { healthy } from './injury.js';
+// THE HOUSE PREVIEWS (Tim, 2026-10-22: "none of the players or anything in the
+// new week recap section have previews or anything like that like the rest of
+// the cite. fix it"). The same two cards Home's other panels use: a player's
+// name opens the classic player card and is a link to his row on Players; a
+// manager's name and a number open a stat card of what it is made of.
+import { statCard, clearPops, wirePops, teamWeekSpec } from './pop.js';
+import { playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns } from './player-card.js';
+import { teamHref, playerHref } from './links.js';
+import { shortName } from './actual-season-table.js';
+import { ordinal } from './heat.js';
 
 const $ = (id) => document.getElementById(id);
 const f1 = (n) => (typeof n === 'number' && Number.isFinite(n) ? n.toFixed(1) : '—');
@@ -116,13 +126,20 @@ function demoInputs(L, week) {
   const last = L.weeks[L.weeks.length - 1];
   const next = week < last ? generateDemoWeekRosters(week + 1).teams : null;
   const later = [];
+  // The weeks a player card draws (js/player-card.js `playerCardFromWeeks`).
+  const weekTeams = new Map();
+  if (week > 1) weekTeams.set(week - 1, generateDemoWeekRosters(week - 1).teams);
+  weekTeams.set(week, teams);
   for (let w = week + 1; w <= Math.min(last, week + LATER_WEEKS); w++) {
-    later.push({ week: w, players: byId(generateDemoWeekRosters(w).teams) });
+    const ts = generateDemoWeekRosters(w).teams;
+    weekTeams.set(w, ts);
+    later.push({ week: w, players: byId(ts) });
   }
   const all = (ts) => ts.flatMap((t) => t.players || []);
   const poolOf = (w) => (w >= 1 && w <= L.last ? all(generateDemoWeekRosters(w).teams).concat(generateDemoFreeAgents(w)) : []);
   return {
     teams,
+    weekTeams,
     pool: all(teams).concat(generateDemoFreeAgents(week)),
     moves: null,
     prevTeams: week > 1 ? generateDemoWeekRosters(week - 1).teams : null,
@@ -255,6 +272,7 @@ async function liveInputs(L, week) {
 
   return {
     teams,
+    weekTeams,
     pool,
     moves,
     prevTeams: weekTeams.get(week - 1) || null,
@@ -351,8 +369,116 @@ function paintPicker(weeks, pick = null) {
 
 const posLabel = (p) => (p === 'DST' ? 'D/ST' : p || '');
 const returnText = (i) => esc(returnLabel(i));
+const isNum = (n) => typeof n === 'number' && Number.isFinite(n);
+
+// ------------------------------------------------------------ the previews
+//
+// `ctx` is the week on screen: { week, weekTeams, byes, demo, teamsById,
+// idByName, standing }. Set by `paint`, read by the helpers below.
+let ctx = null;
+const PREFIX = 'recap';
+
+/**
+ * A player's name: the classic player card (his weeks the recap read), on a
+ * link to his row on Players — Home's `pref`, in the recap. `ident` replaces
+ * the card's top line where the recap knows more (an injury's owner and type).
+ */
+function man(p, inner, { ident = null } = {}) {
+  if (!p || !ctx) return inner;
+  const id = p.playerId;
+  const noId = id === null || id === undefined;
+  const made = playerCardFromWeeks(ctx.weekTeams, p, {
+    currentWeek: ctx.week, byes: ctx.byes, demo: ctx.demo,
+    id: `recap:${noId ? p.name : id}`,
+  });
+  made.ident = ident || made.ident.replace(/ · ACTIVE$/, '');
+  const tip = tipAttr(registerRun(made, PREFIX));
+  if (noId) return `<span class="pref"${tip} tabindex="0">${inner}</span>`;
+  return `<a class="pref" href="${esc(playerHref(id))}"${tip}` +
+    ` aria-label="${esc(p.name)} — open his next 13 weeks on the Players page">${inner}</a>`;
+}
+
+/** A stat card's attribute for the recap, or '' when there is no spec. */
+const pop = (spec) => (spec ? statCard(spec, { prefix: PREFIX }) : '');
+const span = (spec, inner) => (spec ? `<span${pop(spec)}>${inner}</span>` : inner);
+
+/** A team after the week: record and rank, and its score that week. Opens its roster. */
+function teamSpec(teamId) {
+  if (!ctx || teamId === null || teamId === undefined) return null;
+  const t = ctx.teamsById.get(teamId);
+  if (!t) return null;
+  const st = ctx.standing.get(teamId);
+  const g = ctx.scoreOf.get(teamId);
+  return {
+    title: t.name,
+    sub: `After week ${ctx.week}`,
+    rows: [
+      ...(st ? [{ label: 'Record', note: `${ordinal(st.rank)} of ${ctx.standing.size}`, value: `${st.w}-${st.l}${st.t ? `-${st.t}` : ''}` }] : []),
+      ...(st ? [{ label: 'PF', value: st.pf }] : []),
+      ...(g ? [{ label: `Week ${ctx.week}`, note: isNum(g.proj) ? `proj ${g.proj.toFixed(1)}` : '', value: g.pts }] : []),
+    ],
+    href: teamHref(teamId, ctx.week),
+    hrefLabel: 'Open roster',
+  };
+}
+const team = (teamId, name) => span(teamSpec(teamId), esc(name));
+const teamByName = (name) => (ctx ? ctx.idByName.get(name) : undefined);
+
+const SLOT_ORDER = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'OP', 'D/ST', 'DST', 'K'];
+/** A team's score that week, in its starters (with each man's projection). */
+function scoreSpec(teamId, total) {
+  const t = ctx && ctx.teamsById.get(teamId);
+  if (!t || !isNum(total)) return null;
+  const slotOf = (p) => p.slot || posLabel(p.position);
+  const at = (p) => { const i = SLOT_ORDER.indexOf(slotOf(p)); return i < 0 ? SLOT_ORDER.length : i; };
+  const starters = (t.players || []).filter((p) => p && p.started)
+    .map((p, i) => ({ p, i })).sort((a, b) => at(a.p) - at(b.p) || a.i - b.i).map((x) => x.p);
+  if (!starters.length) return null;
+  return teamWeekSpec({
+    team: t.name, week: ctx.week, total,
+    starters: starters.map((p) => ({ slot: slotOf(p), name: shortName(p), pts: isNum(p.actual) ? p.actual : 0, proj: isNum(p.projected) ? p.projected : null })),
+    href: teamHref(teamId, ctx.week),
+  });
+}
+const score = (teamId, total) => span(scoreSpec(teamId, total), f1(total));
+
+/** Missed points: who would have come in and gone out, adding up to the figure. */
+function swapSpec(m, which) {
+  const sw = which === 'perfect' ? m.swapsPerfect : m.swapsReasonable;
+  const total = which === 'perfect' ? m.missedPerfect : m.missedReasonable;
+  if (!sw) return null;
+  const rows = [
+    ...sw.in.map((x) => ({ label: x.name, note: 'start', value: x.pts })),
+    ...sw.out.map((x) => ({ label: x.name, note: 'sit', html: x.pts ? `−${x.pts.toFixed(1)}` : '0.0' })),
+  ];
+  const t10 = (v) => Math.round(v * 10);
+  const miss = isNum(total) ? t10(total) - (sw.in.reduce((a, x) => a + t10(x.pts), 0) - sw.out.reduce((a, x) => a + t10(x.pts), 0)) : 0;
+  if (miss && Math.abs(miss) <= rows.length) rows.push({ label: 'Rounding', value: miss / 10 });
+  return {
+    title: m.name,
+    sub: `Week ${ctx.week} · ${which === 'perfect' ? 'Perfect' : 'Reasonable'}`,
+    rows,
+    total: { label: 'Missed', html: signed(total) },
+    foot: rows.length ? '' : 'No change.',
+    href: teamHref(m.teamId, ctx.week),
+    hrefLabel: 'Open roster',
+  };
+}
+
+/** Up while out: a teammate's rise, as his two projections. */
+function gainSpec(g) {
+  return {
+    title: g.name,
+    sub: 'Up while out',
+    rows: [
+      { label: 'While out', note: `avg of ${g.weeks} wk${g.weeks === 1 ? '' : 's'}`, value: g.during },
+      { label: 'Before', html: `−${g.before.toFixed(1)}` },
+    ],
+    total: { label: 'Up', html: gainLabel(g) },
+  };
+}
 const gainsText = (gains) => (gains && gains.length
-  ? gains.map((g) => `${esc(g.name)} <span class="pos">${gainLabel(g)}</span>`).join('<br>')
+  ? gains.map((g) => `${man(g, esc(g.name))} <span class="pos"${pop(gainSpec(g))}>${gainLabel(g)}</span>`).join('<br>')
   : '<span class="muted">—</span>');
 const INJURY_HEAD = `<th class="name">Player</th><th class="txt" title="${esc(RETURN_TITLE)}">Est. return</th>` +
   `<th class="txt" title="${esc(GAINS_TITLE)}">Up while out</th>`;
@@ -360,44 +486,61 @@ const table = (head, rows, cls = '') =>
   `<div class="table-scroll"><table class="recap-table ${cls}"><thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
 const block = (title, inner, id, cls = '') => `<div class="recap-block ${cls}" id="${id}"><h3>${title}</h3>${inner}</div>`;
 const none = (cols, text) => [`<tr><td colspan="${cols}" class="muted name-less">${text}</td></tr>`];
-const who = (p) => `${esc(p.name)}`;
-const swapText = (sw) => {
-  if (!sw || (!sw.in.length && !sw.out.length)) return 'No change.';
-  const list = (xs) => xs.map((x) => `${x.name} ${x.pts.toFixed(1)}`).join(', ');
-  return `Start ${list(sw.in)} · sit ${list(sw.out)}`;
-};
+const who = (p) => man(p, esc(p.name));
+/** An owner by name (the rows carry his team id when they came off a roster). */
+const ownerOf = (p) => (p.owner ? team(p.teamId ?? teamByName(p.owner), p.owner) : '<span class="muted">FA</span>');
 
 function paint(s, inputs, L) {
+  // Every card of the last paint is dead: their markup is about to go.
+  clearRuns(PREFIX);
+  clearPops(PREFIX);
+  const teams = inputs.teams || [];
+  const scoreOf = new Map();
+  for (const g of s.facts.games) {
+    scoreOf.set(g.winnerId, { pts: g.winnerPts, proj: g.winnerProj });
+    scoreOf.set(g.loserId, { pts: g.loserPts, proj: g.loserProj });
+  }
+  ctx = {
+    week: s.week,
+    weekTeams: inputs.weekTeams || new Map([[s.week, teams]]),
+    byes: (inputs.injury && inputs.injury.byes) || null,
+    demo: !!L.demo,
+    teamsById: new Map(teams.map((t) => [t.id, t])),
+    idByName: new Map(teams.map((t) => [t.name, t.id])),
+    standing: new Map(s.standings.map((r) => [r.teamId, r])),
+    scoreOf,
+  };
+
   const F = s.facts;
   const facts = [
-    ['High score', F.high ? `${esc(F.high.name)} ${f1(F.high.pts)}` : '—'],
-    ['Low score', F.low ? `${esc(F.low.name)} ${f1(F.low.pts)}` : '—'],
-    ['Biggest win', F.biggest ? `${esc(F.biggest.winner)} by ${f1(F.biggest.margin)}` : '—'],
-    ['Closest', F.closest ? `${esc(F.closest.winner)} by ${f1(F.closest.margin)}` : '—'],
+    ['High score', F.high ? `${team(F.high.id, F.high.name)} ${score(F.high.id, F.high.pts)}` : '—'],
+    ['Low score', F.low ? `${team(F.low.id, F.low.name)} ${score(F.low.id, F.low.pts)}` : '—'],
+    ['Biggest win', F.biggest ? `${team(F.biggest.winnerId, F.biggest.winner)} by ${f1(F.biggest.margin)}` : '—'],
+    ['Closest', F.closest ? `${team(F.closest.winnerId, F.closest.winner)} by ${f1(F.closest.margin)}` : '—'],
     ['League avg', F.avg === null ? '—' : `${f1(F.avg)}${F.avgProj === null ? '' : ` (proj ${f1(F.avgProj)})`}`],
     ['Upsets', String(F.upsets)],
-    ['Best bench', s.bench ? `${who(s.bench)} ${f1(s.bench.actual)} · ${esc(s.bench.owner)}` : '—'],
-    ['Best pickup', s.pickup ? `${who(s.pickup)} ${f1(s.pickup.actual)} · ${esc(s.pickup.owner)}`
+    ['Best bench', s.bench ? `${who(s.bench)} ${f1(s.bench.actual)} · ${ownerOf(s.bench)}` : '—'],
+    ['Best pickup', s.pickup ? `${who(s.pickup)} ${f1(s.pickup.actual)} · ${ownerOf(s.pickup)}`
       : s.pickupFrom ? 'None started' : '<span class="muted">Not known</span>'],
   ].map(([k, v]) => `<tr><th scope="row" class="name">${k}</th><td class="txt">${v}</td></tr>`);
 
   const games = F.games.map((g) => `<tr${g.upset ? ' class="upset"' : ''}>
-    <td class="name">${esc(g.winner)}${g.upset ? ' <span class="tag" title="Won though projected lower">Upset</span>' : ''}</td>
-    <td>${f1(g.winnerPts)}</td><td class="txt">${esc(g.loser)}</td><td>${f1(g.loserPts)}</td>
+    <td class="name">${team(g.winnerId, g.winner)}${g.upset ? ' <span class="tag" title="Won though projected lower">Upset</span>' : ''}</td>
+    <td>${score(g.winnerId, g.winnerPts)}</td><td class="txt">${team(g.loserId, g.loser)}</td><td>${score(g.loserId, g.loserPts)}</td>
     <td class="muted">${f1(g.winnerProj)}–${f1(g.loserProj)}</td></tr>`);
 
   const standings = s.standings.map((r) => {
     const mv = r.move === null ? '' : r.move > 0 ? `▲${r.move}` : r.move < 0 ? `▼${-r.move}` : '–';
     const cls = r.move > 0 ? 'd-up' : r.move < 0 ? 'd-down' : 'd-zero';
-    return `<tr><td>${r.rank}</td><td class="name">${esc(r.name)}</td><td>${r.w}-${r.l}${r.t ? `-${r.t}` : ''}</td><td class="${cls}">${mv}</td><td>${f1(r.pf)}</td></tr>`;
+    return `<tr><td>${r.rank}</td><td class="name">${team(r.teamId, r.name)}</td><td>${r.w}-${r.l}${r.t ? `-${r.t}` : ''}</td><td class="${cls}">${mv}</td><td>${f1(r.pf)}</td></tr>`;
   });
 
-  const missed = s.missed.map((m) => `<tr><td class="name">${esc(m.name)}</td><td>${f1(m.scored)}</td>
-    <td title="${esc(swapText(m.swapsReasonable))}">${signed(m.missedReasonable)}</td>
-    <td title="${esc(swapText(m.swapsPerfect))}">${signed(m.missedPerfect)}</td></tr>`);
+  const missed = s.missed.map((m) => `<tr><td class="name">${team(m.teamId, m.name)}</td><td>${score(m.teamId, m.scored)}</td>
+    <td${pop(swapSpec(m, 'reasonable'))}>${signed(m.missedReasonable)}</td>
+    <td${pop(swapSpec(m, 'perfect'))}>${signed(m.missedPerfect)}</td></tr>`);
 
   const playerRows = (rows) => rows.map((p) => `<tr><td class="name">${who(p)}</td><td class="txt">${esc(p.position)}</td>
-    <td class="txt">${p.owner ? esc(p.owner) : '<span class="muted">FA</span>'}</td><td>${f1(p.projected)}</td><td>${f1(p.actual)}</td>
+    <td class="txt">${ownerOf(p)}</td><td>${f1(p.projected)}</td><td>${f1(p.actual)}</td>
     <td class="${p.diff > 0 ? 'pos' : 'neg'}">${signed(p.diff)}</td></tr>`);
   const pHead = '<th class="name">Player</th><th class="txt">Pos</th><th class="txt">Owner</th><th>Proj</th><th>Pts</th><th>±</th>';
 
@@ -405,8 +548,11 @@ function paint(s, inputs, L) {
     <td class="name">${r.top ? `${who(r.top)} <span class="muted">${f1(r.top.actual)}</span>` : '—'}</td>
     <td title="Average of the top ${r.depth}">${f1(r.topAvg)}</td><td>${f1(r.startAvg)}</td><td class="muted">${f1(r.startProj)}</td></tr>`);
 
+  // His owner, status and injury: on his card's top line (once a `title` here).
+  const hurtIdent = (i) => [i.name, posLabel(i.position), i.proTeam, i.label || `Missed week ${s.week + 1}`, i.type, i.owner]
+    .filter(Boolean).join(' · ');
   const injuries = s.injuries.map((i) => `<tr${i.source === 'reconstructed' ? ' class="rebuilt"' : ''}>
-    <td class="name" title="${esc([i.owner, i.label || `Missed week ${s.week + 1}`, i.type].filter(Boolean).join(' · '))}">${who(i)} <span class="muted">${esc(posLabel(i.position))}</span></td>
+    <td class="name">${man(i, `${esc(i.name)} <span class="muted">${esc(posLabel(i.position))}</span>`, { ident: hurtIdent(i) })}</td>
     <td class="txt">${returnText(i)}</td><td class="txt gains">${gainsText(i.gains)}</td></tr>`);
 
   // A block is never left blank: an empty one says why in one line.
@@ -448,6 +594,8 @@ function paintNote(s, inputs, L) {
 // ------------------------------------------------------------------ wiring
 
 if ($('recapWeek')) {
+  // The cards, wired once on the recap's own box (re-rendered freely after).
+  if ($('recapBody')) { wireTips($('recapBody')); wirePops($('recapBody')); }
   $('recapWeek').addEventListener('change', (e) => {
     const w = Number(e.target.value);
     if (Number.isFinite(w)) showWeek(w);
