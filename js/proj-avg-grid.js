@@ -508,11 +508,14 @@ export function totalAvgLabel(team, got) {
  * @param {Function} o.nameCell  team -> its `<td class="name">`
  * @param {Function} o.rowClass  team -> the row's classes ('picked', 'me')
  * @param {string} [o.prefix]  the stat-card prefix this table registers under
+ * @param {Object} [o.lead]    one page-only column right after Team (the Trade
+ *   page's Depth): `{ head, cell: (team) => '<td…>', band: [key, scale] }`
  */
-export function gridHtml({ teams, rows, slots, weeks, teamHead, nameCell, rowClass, prefix = 'ov' }) {
+export function gridHtml({ teams, rows, slots, weeks, teamHead, nameCell, rowClass, prefix = 'ov', lead = null }) {
   const head =
     `<tr>
        <th class="name" data-sort title="${teamHead}">Team</th>
+       ${lead ? lead.head : ''}
        ${rows.map((r) => `<th data-sort title="What this squad's ${esc(r.key)} is worth in an ` +
          `average week: that slot's projection in every regular-season week ` +
          `${projAvgWord(weeks)}, averaged. ` +
@@ -548,6 +551,7 @@ export function gridHtml({ teams, rows, slots, weeks, teamHead, nameCell, rowCla
       return `
       <tr class="${cls}" data-team="${t.id}">
         ${nameCell(t)}
+        ${lead ? lead.cell(t) : ''}
         ${cells}
         ${withCard(`<td class="grid-total grouped${th ? ` ${th.cls}` : ''}"` +
         `${total === null ? '' : ` data-v="${total}"`} ` +
@@ -560,7 +564,8 @@ export function gridHtml({ teams, rows, slots, weeks, teamHead, nameCell, rowCla
 
   // Named once: the key says which columns took no scale, the strip inside the
   // toggle prints the ones that did.
-  const bandCols = [...rows.map((r) => [r.key, colScale.get(r.key)]), ['Total', totalScale]];
+  const bandCols = [...(lead && lead.band ? [lead.band] : []),
+    ...rows.map((r) => [r.key, colScale.get(r.key)]), ['Total', totalScale]];
   return { head, body, bandCols };
 }
 

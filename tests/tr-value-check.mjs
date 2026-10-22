@@ -287,7 +287,10 @@ function readPage(document) {
     gainB: gainText($('cuGainB')),
     valA: topValue(document),
     valB: oldValue(document),
-    grid: text($('projAvgTable')),
+    // Less its Depth cells (2026-10-22): Depth is a sum of Values, a dash with
+    // no lines, and is held to its own claims in tr-depth-check.mjs.
+    grid: [...$('projAvgTable').querySelectorAll('tr')].map((tr) => [...tr.children]
+      .filter((td) => !/\bdepth\b/.test(td.getAttribute('class') || '')).map(text).join(' ')).join(' ¦ '),
     // THE FINDER, LESS ITS VALUE COLUMN (2026-10-12). A trade row carries a
     // "Value" split cell now (Tim: "Do Value change / (top) you, (bottom)
     // them"): the custom box's own figure, which follows no switch and is a
