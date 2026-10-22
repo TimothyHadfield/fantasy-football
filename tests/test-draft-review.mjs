@@ -474,6 +474,34 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
   // A function does as well as a Map.
   const fn = R.reviewDraft({ draft: d, players, slots: [2], teams: 2, ranks, worth: { base, now: (id) => now.get(id), pre: (id) => pre.get(id) ?? null } });
   eq(fn.rows.map((r) => r.valueDiff), rv.rows.map((r) => r.valueDiff), 'value: the two sources may be functions');
+
+  // OWN NOW (Tim, 2026-10-22: "if it's on own now, it calculates the total
+  // value of the players that the user currently owns … because the players
+  // that user currently owns might've been undrafted, list them"). Today team 1
+  // holds 12 (team 2's pick) and 13; team 2 holds 11 and 15 (team 1's) and two
+  // men nobody drafted, 21 and 22; 14 is on nobody's squad.
+  const squads = [
+    { id: 1, players: [{ playerId: 12 }, { playerId: 13 }] },
+    { id: 2, players: [{ playerId: 11 }, { playerId: 21 }, { playerId: 15 }, { playerId: 22 }, { playerId: 21 }] },
+  ];
+  eq(R.undraftedOwned(squads, d.picks), [{ teamId: 2, playerId: 21 }, { teamId: 2, playerId: 22 }], 'own: the men on a squad nobody drafted, each once, in squad order');
+  eq([R.undraftedOwned([], d.picks), R.undraftedOwned(null, null)], [[], []], 'own: no squads, nobody');
+  const u21 = R.undraftedRow({ teamId: 2, playerId: 21, name: 'P21', position: 'RB', valueNow: 3.25, valuePre: 1.5, valued: true });
+  eq([u21.undrafted, u21.at, u21.expected, u21.valueNow, u21.valueDiff, u21.valuePre, u21.diff, u21.preDiff], [true, null, 0, 3.25, 3.3, 1.5, null, null],
+    'own: a man nobody drafted was expected nothing, so his difference is his Value today; he has no pick, place or rank');
+  const u22 = R.undraftedRow({ teamId: 2, playerId: 22, position: 'RB', valueNow: null, valued: true });
+  eq([u22.valueNow, u22.valueDiff, u22.expected], [null, null, 0], 'own: no Value today, no difference');
+  const noLine = R.undraftedRow({ teamId: 2, playerId: 21, valueNow: 3.25, valued: false });
+  eq([noLine.valueNow, noLine.expected, noLine.valueDiff], [null, null, null], 'own: without the line, none of the three (as a pick has none)');
+  const owner = new Map([[12, 1], [13, 1], [11, 2], [15, 2], [21, 2], [22, 2]]);
+  const all = [...rv.rows, u21, u22];
+  // Drafted: team 1 = 11, 13, 15; team 2 = 12, 14. Own now: team 1 = 12, 13; team 2 = 11, 15, 21, 22.
+  eq([...R.teamValues(rv.rows, 'valueDiff')], [[1, 3.2], [2, -8.3]], 'own: drafted, the differences of the men each drafted (0.5 + 3.8 − 1.1; −9.1 + 0.8)');
+  eq([...R.teamValues(all, 'valueDiff', owner)].sort(), [[1, -5.3], [2, 2.7]], 'own: own now, the differences of the men each holds (−9.1 + 3.8; 0.5 − 1.1 + 3.3)');
+  eq([...R.teamValues(all, 'valueNow', owner)].sort(), [[1, 9.9], [2, 16.15]].map(([t, v]) => [t, Math.round(v * 10) / 10]), 'own: own now, Value today (0 + 9.9; 12.5 + 0.4 + 3.25)');
+  eq([...R.teamValues(all, 'expected', owner)].sort(), [[1, 15.2], [2, 13.5]], 'own: own now, expected (9.1 + 6.1; 12 + 1.5 + 0 + 0)');
+  eq([...R.teamValues(all, 'valuePre', owner)].sort(), [[1, 18], [2, 11.5]], 'own: own now, preseason Value (6 + 12; 10 + 0 + 1.5)');
+  ok(!R.teamValues(all, 'valueNow', owner).has(undefined), 'own: a man on nobody’s squad counts for nobody');
 }
 
 // --------------------------------------------- vs worth now on Value, real

@@ -385,11 +385,69 @@ export function expectedAt(curve, place) {
  * predictions (which is different than the preseason expected value we talked
  * about before)").
  */
-export function teamValues(rows, key = 'valueNow') {
+export function teamValues(rows, key = 'valueNow', ownerOf = null) {
   const out = new Map();
-  for (const r of rows || []) out.set(r.teamId, (out.get(r.teamId) || 0) + (num(r[key]) ?? 0));
+  for (const r of rows || []) {
+    // OWN NOW (`ownerOf`, playerId -> the team holding him today): a man counts
+    // for that team instead, and a man nobody holds counts for nobody.
+    const team = ownerOf ? ownerOf.get(r.playerId) : r.teamId;
+    if (team === undefined || team === null) continue;
+    out.set(team, (out.get(team) || 0) + (num(r[key]) ?? 0));
+  }
   for (const [id, v] of out) out.set(id, round1(v));
   return out;
+}
+
+// ------------------------------------------------ the men nobody drafted
+//
+// Tim, 2026-10-22: "make sure that if the selection is on drafted, then it
+// calculates the total value of the players the user drafted, but if it's on
+// own now, it calculates the total value of the players that the user currently
+// owns. … also because the players that user currently owns might've been
+// undrafted, list them at the very bottom under that user's collumn bellow the
+// last round of the draft."
+
+/**
+ * The men on a squad today whom nobody drafted, each once, in squad order.
+ * @param {Array<{id:number, players:Array<{playerId:number}>}>} squads the week in play's
+ * @param {Array<{playerId:number}>} picks the draft's
+ * @returns {Array<{teamId:number, playerId:number}>}
+ */
+export function undraftedOwned(squads, picks) {
+  const drafted = new Set((picks || []).map((p) => p.playerId));
+  const seen = new Set();
+  const out = [];
+  for (const t of squads || []) {
+    for (const p of t.players || []) {
+      if (!p || drafted.has(p.playerId) || seen.has(p.playerId)) continue;
+      seen.add(p.playerId);
+      out.push({ teamId: t.id, playerId: p.playerId });
+    }
+  }
+  return out;
+}
+
+/**
+ * An undrafted man as a row of the review (`reviewDraft`'s shape), so the
+ * board, a card and a total read him as they read a pick. Nothing was spent on
+ * him, so NOTHING WAS EXPECTED OF HIM: `expected` is 0 (when there is a line at
+ * all) and his difference is his Value today. He has no pick, no price, no
+ * place and no rank, so every figure made of those is null.
+ *
+ * @param {Object} o
+ * @param {boolean} o.valued whether the expected-value line exists (`reviewDraft(...).curve`)
+ */
+export function undraftedRow({ teamId, playerId, name = '', position = '', soFar = null, rest = null, total = null,
+  valueNow = null, valuePre = null, valued = false }) {
+  const now = valued ? num(valueNow) : null;
+  return {
+    overall: null, round: null, roundPick: null, teamId, playerId, bid: null, keeper: false, undrafted: true,
+    at: null, name, position, soFar: num(soFar), rest: num(rest), total: num(total),
+    value: null, now: null, diff: null,
+    espnRank: null, pre: null, preDiff: null,
+    valueNow: now, expected: valued ? 0 : null, valueDiff: now === null ? null : round1(now),
+    valuePre: num(valuePre),
+  };
 }
 
 /**

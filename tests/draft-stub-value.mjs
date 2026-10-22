@@ -53,6 +53,17 @@ export const VALUES = {
     .map(([id, p]) => [id, { position: p.position, avg: avgOf(p), value: V.valueOf(BASE, p.position, avgOf(p)) }])),
 };
 
+/** VALUES with the men nobody drafted on the squads too (DR_UNDRAFTED=1, draft-stub-undrafted.mjs). */
+const { UNDRAFTED } = await import('./draft-stub-undrafted.mjs');
+export const VALUES_UNDRAFTED = {
+  ...VALUES,
+  players: {
+    ...VALUES.players,
+    ...Object.fromEntries(Object.entries(UNDRAFTED)
+      .map(([id, p]) => [id, { position: p.position, avg: avgOf(p), value: V.valueOf(BASE, p.position, avgOf(p)) }])),
+  },
+};
+
 await T.loadBaseline();
 /** ESPN's preseason projection a game under default PPR, or null for a man not in the file. */
 export function preOf(id) {
