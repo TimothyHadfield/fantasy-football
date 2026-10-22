@@ -776,8 +776,11 @@ function render() {
 /**
  * One row per league member, in the order the image and the table both use.
  *
- * Sorted by title chance where there is one, then by LUCK — so the person the
- * chart is about is at the top rather than whoever ESPN happens to list first.
+ * Sorted by title chance minus loser chance where there is one, then by LUCK —
+ * so the person the chart is about is at the top rather than whoever ESPN
+ * happens to list first. Tim, 2026-10-22: "If one user has a 12% chance to win
+ * and a 1% chance to lose they should go above a user with a 13% chance to win
+ * and a 4% chance to lose."
  * The table's own headers can re-sort it; the IMAGE is always this order,
  * because a picture cannot be re-sorted by the person reading it.
  */
@@ -813,8 +816,9 @@ function buildRows(view, sim) {
     };
   });
 
+  const standing = (r) => (r.title == null && r.last == null ? -Infinity : (r.title ?? 0) - (r.last ?? 0));
   rows.sort((a, b) =>
-    (b.title ?? -1) - (a.title ?? -1) ||
+    (standing(b) - standing(a) || 0) ||
     (b.luck ?? -Infinity) - (a.luck ?? -Infinity) ||
     String(a.name).localeCompare(String(b.name))
   );
