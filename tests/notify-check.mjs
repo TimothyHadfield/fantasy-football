@@ -230,7 +230,7 @@ if (process.argv[2]) {
       const rec = p.saved(season);
       eq(rec && [rec.v, rec.team, rec.week, rec.now, rec.soon, rec.idea], [1, ME, 5, 3, 1, 3], 'the count is saved under the league’s own key: 3 this week, 1 coming, 3 ideas');
       ok(rec && Math.abs(rec.at - Date.now()) < 60000 && rec.until === stubbed.KICKOFF, 'with when it was worked out and the next kickoff', rec);
-      eq(mod.savedCount(), { now: 3, soon: 1, idea: 3, fresh: true }, 'savedCount: the bell’s numbers, fresh');
+      eq(mod.savedCount(), { now: 3, pending: 0, soon: 1, idea: 3, fresh: true }, 'savedCount: the bell’s numbers, fresh');
       eq(mod.savedCount(Date.now() + mod.FRESH_MS + 1000).fresh, false, 'savedCount: stale after three hours');
       // A kickoff an hour off: fresh until it, stale after — well inside the three hours.
       const key = `ff.notes.${LEAGUE}-${season}`;
@@ -239,7 +239,7 @@ if (process.argv[2]) {
       eq([mod.savedCount(soon - 1000).fresh, mod.savedCount(soon + 1000).fresh], [true, false], 'savedCount: stale once a game has kicked off');
       p.map.set(key, JSON.stringify(rec));
       p.map.set('ff.connection', JSON.stringify({ ...conn, teamId: 2 }));
-      eq(mod.savedCount(), { now: 0, soon: 0, idea: 0, fresh: false }, 'savedCount: another team’s count is not yours');
+      eq(mod.savedCount(), { now: 0, pending: 0, soon: 0, idea: 0, fresh: false }, 'savedCount: another team’s count is not yours');
       p.map.set('ff.connection', JSON.stringify(conn));
       const before = p.calls('schedule').length;
       const lines = await mod.refresh();
@@ -376,7 +376,7 @@ if (process.argv[2]) {
       ok(p.list.hasAttribute('hidden') || p.list.children.length === 0, 'and nothing else in the panel');
       eq(p.calls().filter((c) => c[0] !== 'canSetLineup'), [], 'nothing is read for it: no schedule, no rosters, no wire');
       eq(p.saved(season - 1), null, 'and no count is saved');
-      eq(mod.savedCount(), { now: 0, soon: 0, idea: 0, fresh: true }, 'savedCount: nothing to count, and nothing to work out');
+      eq(mod.savedCount(), { now: 0, pending: 0, soon: 0, idea: 0, fresh: true }, 'savedCount: nothing to count, and nothing to work out');
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }
 
@@ -388,7 +388,7 @@ if (process.argv[2]) {
       ok(/You are/.test(p.sentence()) && p.sentence().split(/\s+/).length <= 12, 'one sentence pointing at "You are"', p.sentence());
       eq(p.badge(), 'Live', 'the league is still the real one');
       eq(p.calls('weeks').length + p.calls('wire').length, 0, 'no coming weeks and no wire are read for nobody');
-      eq(mod.savedCount(), { now: 0, soon: 0, idea: 0, fresh: true }, 'savedCount: nothing to count');
+      eq(mod.savedCount(), { now: 0, pending: 0, soon: 0, idea: 0, fresh: true }, 'savedCount: nothing to count');
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }
 

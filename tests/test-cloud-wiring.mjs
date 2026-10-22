@@ -1928,6 +1928,116 @@ SCENARIOS['pending-sync'] = async () => {
   ok('carrying none', !('pendingTrades' in refused.payload.schedule));
 };
 
+// ------------------------------------------------------------ pending-moves
+//
+// Tim, 2026-10-22: "If I have a player being pulled from the waivers that
+// should show up somewhere. All of these types of things should be shown."
+// The computer reads the waiting claims with the offers, names the men once,
+// and the sync carries them on the same schedule; the phone reads them back
+// with no request. Documented record shape (js/pending.js lists the sources).
+
+const claimRecord = (id, bidAmount, add, drop, over = {}) => ({
+  id, type: 'WAIVER', status: 'PENDING', isPending: true, executionType: 'EXECUTE', teamId: 1,
+  bidAmount, scoringPeriodId: 3, proposedDate: Date.now() - 3600 * 1000, processDate: Date.now() + DAY,
+  items: [
+    ...(add !== null ? [{ type: 'ADD', playerId: add, fromTeamId: 0, toTeamId: 1 }] : []),
+    ...(drop !== null ? [{ type: 'DROP', playerId: drop, fromTeamId: 1, toTeamId: 0 }] : []),
+  ],
+  ...over,
+});
+
+SCENARIOS['pending-moves'] = async () => {
+  const map = installStorage();
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  const fake = makeFake();
+  espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+  cloud.configure({ transport: fake });
+  map.set(WAITING_KEY, JSON.stringify({ leagueId: LEAGUE_ID, season: SEASON, teamId: 1 }));
+  const sync = async () => {
+    espn.clearReadCache();
+    const payload = await season.buildCloudPayload();
+    const res = await cloud.syncUp(LEAGUE_ID, SEASON, payload, {});
+    return { payload, res };
+  };
+  const RECORDS = [
+    offerRecord('offer-to-me', 3, [[301, 3, 1], [101, 1, 3]]),
+    offerRecord('offer-by-me', 1, [[102, 1, 2], [201, 2, 1]]),
+    claimRecord('claim-faab', 7, 9001, 9002),
+    claimRecord('claim-plain', 0, 9003, null),
+    claimRecord('claim-theirs', 4, 9004, null, { teamId: 2 }),
+  ];
+
+  // --- the computer: one read, both kinds, the men named ----------------------
+  installFetch(CLOUD.scale, CLOUD.name);
+  let asked = answerPending(RECORDS);
+  const live = await season.fetchPendingMoves();
+  eq(asked.length, 1, 'one read of ESPN\'s waiting list for both kinds');
+  ok('both trade directions', same(live.offers.map((o) => [o.id, o.fromMe]), [['offer-to-me', false], ['offer-by-me', true]]), JSON.stringify(live.offers));
+  ok('my two claims, not another team\'s', same(live.claims.map((c) => c.id), ['claim-faab', 'claim-plain']), JSON.stringify(live.claims));
+  const [faab, plain] = live.claims;
+  ok('the FAAB claim: its bid, the man coming and going, named, first in line',
+    !!faab && faab.bid === 7 && faab.add === 9001 && faab.drop === 9002 && faab.addName === 'Free Agent 1' && faab.dropName === 'Free Agent 2' && faab.order === 1,
+    JSON.stringify(faab));
+  ok('the no-FAAB claim: bid 0, nobody dropped, second in line',
+    !!plain && plain.bid === 0 && plain.drop === null && plain.addName === 'Free Agent 3' && plain.order === 2, JSON.stringify(plain));
+
+  // --- the sync carries them on the schedule ----------------------------------
+  const up = await sync();
+  ok('the sync went up', up.res.ok, up.res.reason);
+  const sent = up.payload.schedule.pendingTrades;
+  ok('the claims ride with the offers', !!sent && same(sent.claims.map((c) => c.id), ['claim-faab', 'claim-plain']), JSON.stringify(sent));
+  ok('with their names', !!sent && sent.claims[0].addName === 'Free Agent 1');
+  ok('still no document of their own', ![...fake.docs.keys()].some((p) => /pending|offer|claim/i.test(p)), [...fake.docs.keys()].join(' '));
+
+  // --- the phone: zero ESPN requests ------------------------------------------
+  season.forgetCloud();
+  espn.clearReadCache();
+  const phoneCalls = installFetch(LIVE.scale, LIVE.name);
+  asked = answerPending([claimRecord('a-live-one', 1, 9005, null)]);
+  const onPhone = await season.fetchPendingMoves();
+  eq(phoneCalls.length + asked.length, 0, 'fetchPendingMoves on the synced copy made ZERO ESPN requests');
+  ok('the phone is told both offers', same(onPhone.offers.map((o) => o.id), ['offer-to-me', 'offer-by-me']));
+  ok('and both claims, bid and names as sent', same(onPhone.claims.map((c) => [c.id, c.bid, c.addName]), [['claim-faab', 7, 'Free Agent 1'], ['claim-plain', 0, 'Free Agent 3']]),
+    JSON.stringify(onPhone.claims));
+  ok('each with asOf', onPhone.claims.every((c) => c.asOf === sent.at));
+
+  // --- time passes on the phone: processed claims and lapsed offers go --------
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 1.5 * DAY;
+    const later = await season.fetchPendingMoves();
+    ok('a day and a half on, the claims have processed: none shown', same(later.claims, []), JSON.stringify(later.claims));
+    ok('the offers still stand (two days to answer)', later.offers.length === 2);
+    Date.now = () => realNow() + 3 * DAY;
+    ok('three days on, the offers have lapsed too', same((await season.fetchPendingMoves()).offers, []));
+  } finally {
+    Date.now = realNow;
+  }
+  eq(phoneCalls.length + asked.length, 0, 'and none of that asked ESPN');
+
+  // --- an offer ESPN no longer lists is gone on the next sync -----------------
+  installFetch(CLOUD.scale, CLOUD.name);
+  asked = answerPending([RECORDS[1], RECORDS[3]]);
+  const next = await sync();
+  ok('the next sync carries only what ESPN still lists',
+    same([next.payload.schedule.pendingTrades.offers.map((o) => o.id), next.payload.schedule.pendingTrades.claims.map((c) => c.id)], [['offer-by-me'], ['claim-plain']]),
+    JSON.stringify(next.payload.schedule.pendingTrades));
+  season.forgetCloud();
+  installFetch(LIVE.scale, LIVE.name);
+  const after = await season.fetchPendingMoves();
+  ok('so the phone shows only those', same([after.offers.map((o) => o.id), after.claims.map((c) => c.id)], [['offer-by-me'], ['claim-plain']]));
+
+  // --- claims only: still carried ---------------------------------------------
+  installFetch(CLOUD.scale, CLOUD.name);
+  answerPending([RECORDS[2]]);
+  const onlyClaim = await sync();
+  ok('a claim with no offer still rides', !!onlyClaim.payload.schedule.pendingTrades
+    && same(onlyClaim.payload.schedule.pendingTrades.offers, []) && onlyClaim.payload.schedule.pendingTrades.claims.length === 1,
+    JSON.stringify(onlyClaim.payload.schedule.pendingTrades));
+};
+
 // ---------------------------------------------------------- out-for-season
 //
 // Tim, 2026-10-12: "I just saw a trade offer with a player that was out for the

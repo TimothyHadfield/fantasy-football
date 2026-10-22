@@ -121,6 +121,7 @@ import {
 import { stageTrade, isAvailable as bridgeAvailable, extensionVersion, currentSeason } from './bridge.js';
 // The finished list's best deals, kept for the Notifications page.
 import { tradesNote, saveTradesNote } from './notify-trades.js';
+import * as pendingView from './pending-view.js';
 import {
   depthTable, findTrades, findTradesSliced, slotsForLeague, typicalWeek, weekProjection, PACKAGE_KINDS,
   priceTradeAcrossWeeks, setCutValue, seasonLineupValue,
@@ -3914,7 +3915,7 @@ function offerRowAt(offer, i, key, opts = {}) {
     // N on the first of them, 0 (no cell at all) on the rest.
     (opts.nameSpan === 0 ? '' :
       `<td class="name"${opts.nameSpan > 1 ? ` rowspan="${opts.nameSpan}"` : ''}>` +
-      `<span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}</td>`) +
+      `<span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}${opts.nameTag || ''}</td>`) +
     // THE GOAL, SECOND — right beside the manager, so on a phone the answer is
     // on the first screen rather than past four columns of names.
     // CHANCE: finishing first on top, finishing last under it, whichever the
@@ -7827,6 +7828,9 @@ function setGoalToggles(value) {
 async function useDemo() {
   state.source = 'demo';
   state.isDemo = true;
+  // Your league's pending offers are not the sample league's (PENDING TRADES).
+  pendingTurn++;
+  mergePending([]);
   state.byes = {};
   // The preseason arrows score with ESPN's default rules on demo (whose men are
   // invented, so none is in the preseason copy and no arrow is drawn).
@@ -8011,6 +8015,84 @@ async function useLive() {
   await gamesRead;
   await loadWeek();
   autoLoad();
+  loadPendingTrades();
+}
+
+// ---- PENDING TRADES: ESPN's offers, saved automatically ---------------------
+//
+// Tim, 2026-10-22: "If someone sent a trade or I sent a trade, then That should
+// be an automatically saved trade on the cite with a label of some sort saying
+// it's a pending move and showing the deadline."
+//
+// Every offer ESPN lists for your team (both ways, and an accepted one in the
+// league's review) is a row in Saved trades, drawn by the same code as one you
+// saved, with a "Pending" badge, who sent it and its clock under the manager's
+// name (each pending row is a group of its own, so the label is its own). Read with `season.fetchPendingTrades` — the bridge on a computer, the
+// synced copy on a phone (no request there) — at every load and Sync now.
+//
+// THEY ARE NEVER WRITTEN TO STORAGE (`saveCustomTrades` leaves them out): the
+// list ESPN gives is the truth, so one ESPN no longer lists (accepted and done,
+// declined, lapsed, withdrawn) is simply not drawn next time. A trade YOU saved
+// that matches an offer is marked instead of drawn twice, and when the offer
+// goes it loses the badge and stays saved. No Remove or Send later on an
+// automatic row (it would come straight back, and it has been sent); Assume works.
+
+const dealKeyOf = (x) =>
+  `${x.a}|${x.b}|${x.sendA.slice().sort().join(',')}|${x.sendB.slice().sort().join(',')}`;
+
+/** The saved list with ESPN's pending offers folded in (see above). */
+function mergePending(offers) {
+  const me = state.espnTeamId;
+  // Last read's automatic rows go; your own lose last read's badge.
+  const rows = state.customSaved
+    .filter((e) => !e.auto)
+    .map((e) => {
+      if (!e.pending) return e;
+      const { pending: _was, ...rest } = e;
+      return rest;
+    });
+  const assumedKey = state.assumed && state.assumed.entry ? dealKeyOf(state.assumed.entry) : null;
+  const added = [];
+  for (const o of (me === null || me === undefined || state.isDemo) ? [] : (offers || [])) {
+    const entry = { a: me, b: Number(o.withTeamId), sendA: (o.send || []).map(String), sendB: (o.get || []).map(String) };
+    if (!Number.isFinite(entry.b) || entry.b === me || (!entry.sendA.length && !entry.sendB.length)) continue;
+    const info = {
+      id: String(o.id || ''), fromMe: o.fromMe === true ? true : o.fromMe === false ? false : null,
+      expiresAt: Number.isFinite(o.expiresAt) ? o.expiresAt : null,
+      review: o.review === true, processAt: Number.isFinite(o.processAt) ? o.processAt : null,
+    };
+    const k = dealKeyOf(entry);
+    const mirrored = dealKeyOf({ a: entry.b, b: entry.a, sendA: entry.sendB, sendB: entry.sendA });
+    const mine = rows.findIndex((e) => dealKeyOf(e) === k || dealKeyOf(e) === mirrored);
+    if (mine >= 0) { rows[mine] = { ...rows[mine], pending: info }; continue; }
+    if (k === assumedKey || mirrored === assumedKey) continue;   // taken as done already
+    if (added.some((e) => dealKeyOf(e) === k)) continue;
+    added.push({ ...entry, auto: true, pending: info });
+  }
+  state.customSaved = added.concat(rows);
+}
+
+let pendingTurn = 0;
+/** Read the offers waiting and redraw the saved list. Never throws. */
+async function loadPendingTrades() {
+  const turn = ++pendingTurn;
+  let offers = [];
+  try {
+    if (typeof season.fetchPendingTrades === 'function') offers = (await season.fetchPendingTrades()) || [];
+  } catch { offers = []; }
+  if (turn !== pendingTurn || state.source !== 'live') return;
+  mergePending(offers);
+  renderCustom();
+}
+
+/** The badge and the words a pending row carries in its last cell. */
+function pendingLabelHtml(entry) {
+  const p = entry && entry.pending;
+  if (!p) return '';
+  // Under the manager's name, so who it is with goes unsaid.
+  const who = p.review ? 'Accepted' : p.fromMe ? 'Sent by you' : 'Sent to you';
+  const bits = [who, pendingView.offerDeadline(p)].filter(Boolean);
+  return `<span class="cu-pend"><span class="badge demo pend-badge">Pending</span> ${esc(bits.join(' · '))}</span>`;
 }
 
 /**
@@ -9136,7 +9218,7 @@ function renderCustomSaved() {
   // click read. A deal sent from another squad carries its own tag, so it is a
   // group of its own; one that will not price goes last, on its own line.
   const groupOf = (i) => (offers[i]
-    ? `${offers[i].partner.name}\u0000${offers[i].partner.id}\u0000${offers[i].fromLabel || ''}` : null);
+    ? `${offers[i].partner.name}\u0000${offers[i].partner.id}\u0000${offers[i].fromLabel || ''}\u0000${rows[i].pending ? rows[i].pending.id : ''}` : null);
   const order = rows.map((_, i) => i).sort((x, y) => {
     const gx = groupOf(x), gy = groupOf(y);
     if (gx === null || gy === null) return (gx === null) - (gy === null) || x - y;
@@ -9147,8 +9229,11 @@ function renderCustomSaved() {
   const seen = new Set();
   $('cuRows').innerHTML = order.map((i) => {
     const entry = rows[i];
-    const drop = `<td class="cu-remove">` +
-      `<button type="button" class="cu-drop" data-drop="${i}">Remove</button></td>`;
+    // A PENDING offer (see PENDING TRADES) says so first; an automatic one has
+    // no Remove or Send later — it has been sent, and ESPN's list decides it.
+    const pend = pendingLabelHtml(entry);
+    const drop = `<td class="cu-remove">${pend}` +
+      (entry.auto ? '' : `<button type="button" class="cu-drop" data-drop="${i}">Remove</button>`) + `</td>`;
     if (priced[i].error) {
       // A deal that will not price cannot be assumed either: it has no Assume.
       const a = teamById(entry.a);
@@ -9167,8 +9252,8 @@ function renderCustomSaved() {
     // THE ASSUMED TRADE.
     const tail = `<td class="cu-remove">` +
       `<button type="button" class="cu-drop cu-assume" data-assume="${i}">Assume</button>` +
-      `<button type="button" class="cu-drop" data-drop="${i}">Remove</button>` +
-      sendLaterHtml(entry, i) + `</td>`;
+      (entry.auto ? '' : `<button type="button" class="cu-drop" data-drop="${i}">Remove</button>` +
+        sendLaterHtml(entry, i)) + `</td>`;
     const g = groupOf(i);
     const first = !seen.has(g);
     seen.add(g);
@@ -9177,6 +9262,9 @@ function renderCustomSaved() {
       goal: true,
       attrs: ` data-cu="${i}"${first ? ' data-cu-first' : ''}`,
       nameSpan: first ? sizeOf.get(g) : 0,
+      // A pending offer is a group of its own (see `groupOf`), so its label
+      // sits under the manager's name, on the phone's first screen.
+      nameTag: pend,
       tail,
     });
   }).join('');
@@ -10324,7 +10412,15 @@ function renderCustomBuilt(building) {
 
 /** Saved trades outlive a reload; the price never does. */
 function saveCustomTrades() {
-  prefs.set('custom', state.customSaved);
+  // ESPN's pending offers are never kept (see PENDING TRADES): only your own
+  // saves, without the badge a read put on them.
+  prefs.set('custom', state.customSaved
+    .filter((e) => !e.auto)
+    .map((e) => {
+      if (!e.pending) return e;
+      const { pending: _p, ...rest } = e;
+      return rest;
+    }));
 }
 
 function loadCustomTrades() {

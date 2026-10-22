@@ -13,8 +13,8 @@
 //                  arrives.
 //   load()         the same run, resolving with the whole state the page draws
 //                  (`status`, `notes`, `week`, …).
-//   savedCount()   `{ now, soon, idea, fresh }` — the counts the last run left,
-//                  for the bell. No read of any kind.
+//   savedCount()   `{ now, pending, soon, idea, fresh }` — the counts the last
+//                  run left, for the bell. No read of any kind.
 //
 // THIS FILE IS THE ONLY WRITER OF THE COUNT (docs/notifications-plan.md, After
 // review 2): `ff.notes.<leagueId>-<season>` =
@@ -48,7 +48,7 @@ export const HOLE_WIRE_MAX = 3;
 export const countKey = (leagueId, season) => `ff.notes.${leagueId}-${season}`;
 export const tradesKey = (leagueId, season) => `ff.notes.trades.${leagueId}-${season}`;
 
-const ZERO = { now: 0, soon: 0, idea: 0 };
+const ZERO = { now: 0, pending: 0, soon: 0, idea: 0 };
 
 function readJson(key) {
   try {
@@ -84,7 +84,7 @@ export function savedCount(now = Date.now()) {
   const age = now - Number(rec.at);
   const fresh = Number.isFinite(age) && age >= 0 && age < FRESH_MS &&
     !(Number.isFinite(rec.until) && now >= rec.until);
-  return { now: n(rec.now), soon: n(rec.soon), idea: n(rec.idea), fresh };
+  return { now: n(rec.now), pending: n(rec.pending), soon: n(rec.soon), idea: n(rec.idea), fresh };
 }
 
 /** The week being played next: the first with a game not yet final (Home's rule), or null. */
@@ -274,15 +274,21 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
     return Number.isFinite(at) && at <= now;
   };
 
-  // Offers waiting on ESPN: `[]` when the read is not there yet, or fails.
+  // Offers and the other moves waiting on ESPN (claims, queued adds and drops):
+  // `[]` when the read is not there yet, or fails. One read for both.
   let offers = [];
+  let claims = [];
   try {
-    if (has('fetchPendingTrades')) offers = (await season.fetchPendingTrades()) || [];
-  } catch { offers = []; }
+    if (has('fetchPendingMoves')) {
+      const got = (await season.fetchPendingMoves()) || {};
+      offers = Array.isArray(got.offers) ? got.offers : [];
+      claims = Array.isArray(got.claims) ? got.claims : [];
+    } else if (has('fetchPendingTrades')) offers = (await season.fetchPendingTrades()) || [];
+  } catch { offers = []; claims = []; }
 
   const base = {
     week, teamId: cfg.teamId, league, team, teams, slots: slotsOf(m, teams), isLocked, byes,
-    offers,
+    offers, claims,
     // On the synced copy an offer is as old as the sync that carried it.
     offersAt: cloud && has('weekReadAt') ? season.weekReadAt(week) : null,
     saved: readJson(tradesKey(cfg.leagueId, cfg.season)),

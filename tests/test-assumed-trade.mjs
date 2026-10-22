@@ -612,6 +612,48 @@ const SCENARIOS = {
     eq(d.assumedAfter, null, '... and the assumed trade');
     eq((d.customAfter || []).length, 1, '... which is back in the saved list');
   },
+
+  // PENDING TRADES (Tim, 2026-10-22: "If someone sent a trade or I sent a
+  // trade, then That should be an automatically saved trade on the cite with a
+  // label of some sort saying it's a pending move and showing the deadline").
+  async 'trade-pending'() {
+    const testsDir = path.dirname(fileURLToPath(import.meta.url));
+    const expiresAt = Date.now() + 2 * 864e5;
+    const saved = [{ a: 1, b: 3, sendA: ['104'], sendB: ['301'] }, { a: 1, b: 2, sendA: ['105'], sendB: ['202'] }];
+    const offers = [
+      { id: 'p-in', withTeamId: 2, get: [201], send: [103], fromMe: false, expiresAt },   // Bo sent it to me
+      { id: 'p-out', withTeamId: 3, get: [301], send: [104], fromMe: true, expiresAt },   // I sent it to Cy: already saved
+    ];
+    const page = (pending) => {
+      const res = spawnSync(process.execPath, ['--import', './tr-register.mjs', path.join(testsDir, 'tr-test.mjs'), 'pendingLive'], {
+        cwd: testsDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 240000,
+        env: { ...process.env, TR_PENDING: JSON.stringify(pending), TR_SAVED: JSON.stringify(saved) },
+      });
+      const line = (res.stdout || '').split('\n').find((l) => l.startsWith('@@'));
+      return line ? JSON.parse(line.slice(2)) : { boot: String(res.stderr || '').slice(-1500) };
+    };
+    const d = page(offers);
+    ok('the Trade page answered', !d.boot, d.boot);
+    if (d.boot) return;
+    ok('with no errors', (d.errors || []).length === 0, JSON.stringify(d.errors));
+    eq(d.rows.length, 3, 'two saved + one offer that was not saved: three rows (the saved one is not drawn twice)');
+    const bo = d.rows.find((r) => r.mgr === 'Bo' && r.pend);
+    const cy = d.rows.find((r) => r.mgr === 'Cy');
+    ok('the offer TO me is a row of its own, labelled', !!bo && /^Pending Sent to you · expires \w{3} \d/.test(bo.pend), JSON.stringify(bo));
+    ok('... with Assume but no Remove or Send later', !!bo && bo.assume && !bo.remove && !bo.later, JSON.stringify(bo));
+    ok('the offer BY me marks the trade I saved', !!cy && /^Pending Sent by you · expires/.test(cy.pend || ''), JSON.stringify(cy));
+    ok('... which keeps its Remove', !!cy && cy.remove, JSON.stringify(cy));
+    ok('my other saved trade has no label', d.rows.some((r) => r.mgr === 'Bo' && !r.pend && r.remove), JSON.stringify(d.rows));
+    eq(d.custom, saved, 'nothing pending is written to the saved list');
+
+    // The offers answered, lapsed or withdrawn: ESPN lists none.
+    const e = page([]);
+    ok('the page answered again', !e.boot, e.boot);
+    if (e.boot) return;
+    eq(e.rows.length, 2, 'the offer no longer listed is gone');
+    ok('and nothing is labelled pending', e.rows.every((r) => !r.pend), JSON.stringify(e.rows));
+    eq(e.custom, saved, 'both trades I saved are still saved');
+  },
 };
 
 // ------------------------------------------------------------------ run

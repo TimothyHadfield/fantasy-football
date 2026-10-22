@@ -1373,7 +1373,9 @@ async function updateBell() {
       if (turn !== bellTurn) return;
       c = mod.savedCount();
     }
-    showBellCount(c && c.fresh ? (Number(c.now) || 0) + (Number(c.soon) || 0) : null);
+    // Pending moves (claims, your offers, a trade in review) count too (2026-10-22).
+    showBellCount(c && c.fresh
+      ? (Number(c.now) || 0) + (Number(c.pending) || 0) + (Number(c.soon) || 0) : null);
   } catch {
     if (turn === bellTurn) showBellCount(null);
   }

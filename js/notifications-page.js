@@ -32,8 +32,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/** The three headings, in the list's order. */
-const HEADINGS = { now: 'This week', soon: 'Coming weeks', idea: 'Ideas' };
+/** The headings, in the list's order. */
+const HEADINGS = { now: 'This week', pending: 'Pending', soon: 'Coming weeks', idea: 'Ideas' };
 
 /** The one sentence of a state with no list. (The sample league says so in its badge.) */
 const SENTENCES = {

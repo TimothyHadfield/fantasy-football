@@ -1790,6 +1790,14 @@ table.summary-table td.num, table.summary-table th.num { text-align: right; font
  * still being played, so some of what is shown for it is not final (the
  * Decisions page: js/decisions-page.js, js/actual-season-table.js). */
 .badge.live.wk-live { margin-left: 4px; padding: 0 4px; font-size: 9px; line-height: 1.5; letter-spacing: 0.03em; }
+/* PENDING MOVES (2026-10-22): the `.badge.demo` amber, sized like the LIVE tag
+ * above. Home's lines under the deadlines (js/home-page.js renderPending) and
+ * the Trade page's saved rows that ESPN lists as pending (js/trade-page.js). */
+.badge.demo.pend-badge { padding: 0 4px; font-size: 9px; line-height: 1.5; letter-spacing: 0.03em; vertical-align: 1px; }
+.pend-list { margin: 0 0 10px; font-size: 13px; color: var(--dim); }
+.pend-list .pend-line { padding: 2px 0; }
+.pend-list .pend-line a { color: var(--text); }
+.cu-pend { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 400; color: var(--dim); white-space: normal; line-height: 1.35; }
 /* A man still playing: the number is his projection, not a score. */
 .sbw-actual td.wk.sbw-proj .sbw-pts { font-style: italic; font-weight: 400; }
 .sbw-actual:not([data-view="diff"]) td.wk.sbw-proj .sbw-pts { color: var(--dim); }

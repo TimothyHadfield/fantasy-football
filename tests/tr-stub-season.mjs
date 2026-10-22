@@ -656,3 +656,12 @@ export async function fetchDecisionWorld() {
   try { moves = JSON.parse(process.env.TR_PAST_TRADES || '[]'); } catch { moves = []; }
   return { moves };
 }
+
+// ------------------------------------------------------------ pending offers
+//
+// js/season.js `fetchPendingTrades` (2026-10-22). NONE by default.
+// `TR_PENDING` is a JSON list of offers in its shape, e.g.
+//   [{"id":"p1","withTeamId":2,"get":[201],"send":[103],"fromMe":false,"expiresAt":1790000000000}]
+export async function fetchPendingTrades() {
+  try { return JSON.parse(process.env.TR_PENDING || '[]'); } catch { return []; }
+}

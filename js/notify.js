@@ -16,6 +16,7 @@
 //                                               best legal lineup cannot fill
 //   pickup     js/waiver-gain.js `gainOf`       the Players page's Gain column
 //   offer      season.fetchPendingTrades()      a trade offer waiting on ESPN
+//   claim      season.fetchPendingMoves()       a waiver claim / queued move
 //   trade      the deals the Trade page saved   its ranked list, with their age
 //   send-later a saved custom trade's "After wk N"  once week N is played
 //
@@ -26,6 +27,7 @@
 //           names the men, or null when there is nothing honest to name. It
 //           never repeats the detail, and never invents a player.
 //   level   'now'  this week, acts before a kickoff
+//           'pending' a move made and waiting on ESPN (claim, your offer, review)
 //           'soon' a coming week
 //           'idea' pick-ups and trades
 //   action  `{ label, href }`, or for a lineup change
@@ -46,12 +48,17 @@ import { gainBase, gainOf } from './waiver-gain.js';
 import { INJURY_RANK } from './injury.js';
 import { playerHref, positionHref, dealHref, espnLineupHref } from './links.js';
 import { describeAge } from './store.js';
+import { offerDeadline, claimWhat, claimTitle, claimDetail } from './pending-view.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
 
-/** The three levels, most urgent first — the order of the list. */
-export const LEVELS = ['now', 'soon', 'idea'];
+/**
+ * The levels, most urgent first — the order of the list. 'pending' (2026-10-22)
+ * is a move already made and waiting on ESPN: your own offer, an accepted trade
+ * in review, a waiver claim. Nothing to do, but the bell counts it.
+ */
+export const LEVELS = ['now', 'pending', 'soon', 'idea'];
 
 /** How many pick-ups are suggested, and how many saved deals are listed. */
 export const PICKUP_MAX = 3;
@@ -414,20 +421,55 @@ function offerNotes({ offers, teams, offersAt, now }) {
     const get = names(o.get);
     const send = names(o.send);
     const deal = get && send ? `Get ${get} for ${send}` : get ? `Get ${get}` : send ? `Send ${send}` : 'Open it to see the deal';
+    // Its clock (2026-10-22): when it lapses, or when an accepted one goes through.
+    const clock = offerDeadline(o, now);
+    const review = o.review === true;
     out.push({
       id: `offer-${has(o.id) ? o.id : `${o.withTeamId}-${(o.get || []).join('.')}-${(o.send || []).join('.')}`}`,
       kind: 'offer',
-      // An offer to you waits on YOUR answer; your own is waiting on him.
-      level: o.fromMe ? 'idea' : 'now',
-      title: o.fromMe ? `Your offer to ${who}` : `Trade offer from ${who}`,
-      detail: deal + age,
+      // An offer to you waits on YOUR answer; your own is waiting on him, and
+      // an accepted one on the league's review: both pending moves.
+      level: review || o.fromMe ? 'pending' : 'now',
+      title: review ? `Trade with ${who} accepted` : o.fromMe ? `Your offer to ${who}` : `Trade offer from ${who}`,
+      detail: deal + (clock ? ` · ${clock}` : '') + age,
       // No verdict is worked out here (that is the Trade page's own search).
       // Your own offer waits on him: there is nothing for you to do.
-      suggest: o.fromMe ? null : `Check it on Trade before it expires${expiryDay(o.expiresAt, now)}`,
+      suggest: review || o.fromMe ? null : `Check it on Trade before it expires${expiryDay(o.expiresAt, now)}`,
       action: {
         label: 'Open it',
         href: dealHref({ with: o.withTeamId, get: o.get, send: o.send }) || 'trade.html',
       },
+    });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ claim
+
+/**
+ * YOUR OTHER MOVES WAITING ON ESPN (Tim, 2026-10-22: "If I have a player being
+ * pulled from the waivers that should show up somewhere"): one 'pending' line
+ * per waiver claim, queued add or drop, or lineup change, from
+ * `season.fetchPendingMoves().claims` (js/pending.js `pendingClaims`). The
+ * button shows the claimed man on Players (or the man cut, for a drop).
+ */
+export function claimNotes({ claims, claimsAt = null, now = Date.now() } = {}) {
+  const age = Number.isFinite(claimsAt) ? ` · as of ${describeAge(now - claimsAt)}` : '';
+  const out = [];
+  for (const c of Array.isArray(claims) ? claims : []) {
+    if (!c || !has(c.id)) continue;
+    const detail = [claimWhat(c), claimDetail(c, now)].filter(Boolean).join(' · ');
+    const man = has(c.add) ? c.add : has(c.drop) ? c.drop : null;
+    out.push({
+      id: `claim-${c.id}`,
+      kind: 'claim',
+      level: 'pending',
+      title: claimTitle(c),
+      detail: detail + age,
+      suggest: null,
+      action: man !== null
+        ? { label: 'See him', href: playerHref(man) }
+        : { label: 'Open Players', href: 'waivers.html' },
     });
   }
   return out;
@@ -550,6 +592,7 @@ export function sendLaterNotes({ later = [], teamId, teams = [], week } = {}) {
  * @param {Object|null} [o.wire]  see `pickups`; null until the wire has been read
  * @param {Array} [o.offers]    `season.fetchPendingTrades()`
  * @param {number|null} [o.offersAt]  when the offers were read, if that is not now (a synced copy)
+ * @param {Array} [o.claims]    `season.fetchPendingMoves().claims` (read with the offers)
  * @param {Object|null} [o.saved]  the Trade page's saved deals
  * @param {Array} [o.later]     the Trade page's saved custom trades (see `sendLaterNotes`)
  * @param {number} [o.now]      epoch ms, for the ages
@@ -560,7 +603,7 @@ export function sendLaterNotes({ later = [], teamId, teams = [], week } = {}) {
 export function buildNotes({
   week, teamId, league = null, team = null, teams = [], slots = [],
   isLocked = hasPlayed, byes = null, coming = [], wire = null, fill = null,
-  offers = [], offersAt = null, saved = null, later = [], now = Date.now(),
+  offers = [], offersAt = null, claims = [], saved = null, later = [], now = Date.now(),
 } = {}) {
   if (!team) return [];
   const start = startNotes({ week, teamId, league, team, slots, isLocked });
@@ -570,6 +613,7 @@ export function buildNotes({
     ...holeNotes({ coming, slots, byes, fill }),
     ...pickupNotes({ team, slots, wire }),
     ...offerNotes({ offers, teams, offersAt, now }),
+    ...claimNotes({ claims, claimsAt: offersAt, now }),
     ...sendLaterNotes({ later, teamId, teams, week }),
     ...tradeNotes({ saved, teamId, now }),
   ];
@@ -583,7 +627,7 @@ export function buildNotes({
 
 /** How many lines stand at each level: what the bell's count is made of. */
 export function countNotes(notes) {
-  const c = { now: 0, soon: 0, idea: 0 };
+  const c = { now: 0, pending: 0, soon: 0, idea: 0 };
   for (const n of notes || []) if (n && n.level in c) c[n.level]++;
   return c;
 }

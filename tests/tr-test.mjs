@@ -4035,6 +4035,36 @@ SCENARIOS.assumeLive = async function assumeLive() {
   };
 };
 
+/**
+ * PENDING TRADES (2026-10-22): on the stubbed REAL league, the offers
+ * `TR_PENDING` lists are drawn in Saved trades with a Pending label; one that
+ * matches a trade you saved marks that row instead. `TR_SAVED` seeds the saved
+ * list. Read by tests/test-assumed-trade.mjs `trade-pending`.
+ */
+SCENARIOS.pendingLive = async function pendingLive() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live', 'trade.custom': JSON.parse(process.env.TR_SAVED || '[]') }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  await settleGoal(document);
+  await settle(500);
+  const rows = [...document.querySelectorAll('#cuRows tr[data-cu]')].map((tr) => {
+    // The label sits in the first row of its group's name cell.
+    const name = tr.querySelector('td.name');
+    return {
+      mgr: name ? text(name.querySelector('.mgr')) : null,
+      pend: name && name.querySelector('.cu-pend') ? text(name.querySelector('.cu-pend')) : null,
+      remove: !!tr.querySelector('button[data-drop]'),
+      assume: !!tr.querySelector('button[data-assume]'),
+      later: !!tr.querySelector('[data-send-after], .send-later, select'),
+    };
+  });
+  let prefs = null;
+  try { prefs = JSON.parse(globalThis.localStorage.getItem('ff.prefs') || '{}'); } catch { prefs = null; }
+  return { errors, rows, custom: prefs ? prefs['trade.custom'] ?? null : null };
+};
+
 /** The title goal on the stubbed REAL league: the live half of `goalInputs`. */
 SCENARIOS.goalLive = async function goalLive() {
   const seed = {

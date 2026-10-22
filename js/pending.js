@@ -115,7 +115,10 @@ const idOf = (v) => {
 
 /** Has this offer's time run out? Only an offer that names one can. */
 export function expired(offer, now) {
-  return Number.isFinite(now) && offer && typeof offer.expiresAt === 'number' && offer.expiresAt <= now;
+  if (!Number.isFinite(now) || !offer) return false;
+  // An accepted trade in review is done once ESPN's time to carry it out passes.
+  if (offer.review === true) return typeof offer.processAt === 'number' && offer.processAt <= now;
+  return typeof offer.expiresAt === 'number' && offer.expiresAt <= now;
 }
 
 /**
@@ -154,9 +157,16 @@ export function pendingTrades(raw, myTeamId, opts) {
     const seen = new Set();
     for (const t of list) {
       if (!t || typeof t !== 'object') continue;
-      if (t.type !== 'TRADE_PROPOSAL') continue;
+      // An ACCEPTED trade waiting out the league's review period is the same
+      // record turned TRADE_ACCEPT, trade legs and all, with `processDate` the
+      // time ESPN will carry it out (dustinJ15/fantasy `pending_trades`, probed
+      // 2026-10-13: "An accepted trade stays in this view through the league's
+      // review period"). Listed with `review: true` and `processAt`.
+      const review = t.type === 'TRADE_ACCEPT';
+      if (t.type !== 'TRADE_PROPOSAL' && !review) continue;
       if (t.executionType === 'CANCEL') continue;
-      if (t.status !== undefined && t.status !== null && t.status !== 'PENDING') continue;
+      if (t.status !== undefined && t.status !== null && t.status !== 'PENDING' &&
+        !(review && t.status === 'ACCEPTED')) continue;
       if (t.isPending === false) continue;
       const ownId = idOf(t.id);
       if (ownId && closed.has(ownId)) continue;
@@ -194,6 +204,12 @@ export function pendingTrades(raw, myTeamId, opts) {
         expiresAt: stamp(t.expirationDate),
         fromMe: proposer === null ? null : proposer === me,
       };
+      if (review) {
+        // Accepted: its offer clock no longer applies; the review's does.
+        offer.expiresAt = null;
+        offer.review = true;
+        offer.processAt = stamp(t.processDate);
+      }
       if (now !== null && expired(offer, now)) continue;
       if (seen.has(offer.id)) continue;
       seen.add(offer.id);
@@ -227,7 +243,7 @@ export function cleanOffers(offers, max = MAX_OFFERS) {
       const send = o.send.map(playerOf);
       if (get.includes(null) || send.includes(null)) continue;
       if ((!get.length && !send.length) || get.length > MAX_PLAYERS || send.length > MAX_PLAYERS) continue;
-      out.push({
+      const clean = {
         id,
         withTeamId,
         get,
@@ -235,8 +251,195 @@ export function cleanOffers(offers, max = MAX_OFFERS) {
         proposedAt: stamp(o.proposedAt),
         expiresAt: stamp(o.expiresAt),
         fromMe: typeof o.fromMe === 'boolean' ? o.fromMe : null,
-      });
+      };
+      // Only an accepted trade in review carries these two (see `pendingTrades`).
+      if (o.review === true) {
+        clean.expiresAt = null;
+        clean.review = true;
+        clean.processAt = stamp(o.processAt);
+      }
+      out.push(clean);
     } catch { /* not an offer */ }
   }
   return out;
+}
+
+// ===========================================================================
+// THE OTHER MOVES WAITING: waiver claims, queued adds and drops, lineup moves
+// ===========================================================================
+//
+// Tim, 2026-10-22: "If I have a player being pulled from the waivers that
+// should show up somewhere. All of these types of things should be shown."
+//
+// THE SAME LIST, THE SAME CAVEAT: documented, not measured. A claim, as other
+// people's code reads it off this very view:
+//
+//   {
+//     id: '<uuid>', type: 'WAIVER', status: 'PENDING', executionType: 'EXECUTE',
+//     teamId: 1,                    // whose claim it is
+//     bidAmount: 7,                 // the FAAB bid; 0 in a priority league
+//     proposedDate: 1760000000000,  // when it was made
+//     processDate: 1760100000000,   // when ESPN runs it (the waiver run)
+//     scoringPeriodId: 7,
+//     items: [
+//       { type: 'ADD',  playerId: 901, fromTeamId: 0, toTeamId: 1 },
+//       { type: 'DROP', playerId: 103, fromTeamId: 1, toTeamId: 0 },
+//     ],
+//   }
+//
+// SOURCES (read 2026-10-22):
+//   github.com/dustinJ15/fantasy  src/ff/sources/espn.py  `pending_claims` —
+//     "the `WAIVER` records whose `teamId` is mine (probed 2026-10-21)": skips a
+//     CANCEL copy and any status but PENDING / none, the ADD item's `playerId`
+//     is the man claimed, the DROP item's the man cut, `bidAmount` ("0 in a
+//     priority league"), `processDate`, `proposedDate`, `scoringPeriodId`.
+//     `waiver_run_ts`: "the `processDate` it stamps on every pending claim in
+//     the league (probed 2026-10-13: 03:00 ET the next processing day)". No
+//     per-claim priority field is read there; the order below is ESPN's list
+//     order, NOT a measured priority.
+//   github.com/cwendt94/espn-api  espn_api/football/transaction.py — a
+//     transaction's `bidAmount`, `processDate` / `proposedDate`, `status`,
+//     `type`, and items' `type` / `playerId` / `fromTeamId` / `toTeamId`; types
+//     FREEAGENT, WAIVER, WAIVER_ERROR (league.py `transactions`).
+//
+// WHAT IS LISTED: every record on the list whose `teamId` is mine that is not a
+// trade (those are `pendingTrades`'), still pending by the same rule as an
+// offer, with at least one ADD, DROP or LINEUP item of mine.
+//   kind  'waiver'      a WAIVER claim
+//         'free-agent'  a FREEAGENT add waiting (a lock, a game under way)
+//         'drop'        any other record that only drops
+//         'lineup'      a ROSTER record with lineup moves queued
+//         'other'       anything else of mine with items, named by its type
+
+/** How many other moves a synced copy carries. */
+export const MAX_CLAIMS = 20;
+const MAX_NAME = 60;
+
+const nameOf = (v) => (typeof v === 'string' && v.trim() && v.length <= MAX_NAME ? v.trim() : null);
+
+const KINDS = new Set(['waiver', 'free-agent', 'drop', 'lineup', 'other']);
+
+/**
+ * My other moves still waiting on ESPN.
+ *
+ * @param {Object|Array} raw a `view=mPendingTransactions` payload, or its list
+ * @param {number|string} myTeamId
+ * @returns {Array<{id:string, kind:string, add:number|null, drop:number|null,
+ *   moves:number, bid:number|null, processAt:number|null,
+ *   proposedAt:number|null, order:number}>}
+ *   `add` / `drop` the first man added / cut, `moves` how many lineup moves,
+ *   `bid` the FAAB bid when ESPN sent one (0 is a real bid in a priority
+ *   league; shown only when above 0), `order` 1, 2, … in ESPN's order among my
+ *   claims. Never throws.
+ */
+export function pendingClaims(raw, myTeamId) {
+  try {
+    const list = Array.isArray(raw) ? raw
+      : (raw && typeof raw === 'object' && Array.isArray(raw.pendingTransactions)) ? raw.pendingTransactions
+        : null;
+    const me = teamOf(myTeamId);
+    if (!list || me === null) return [];
+
+    const closed = new Set();
+    for (const t of list) {
+      if (!t || typeof t !== 'object') continue;
+      const rel = idOf(t.relatedTransactionId);
+      if (rel && rel !== idOf(t.id)) closed.add(rel);
+    }
+
+    const out = [];
+    const seen = new Set();
+    let claims = 0;
+    for (const t of list) {
+      if (!t || typeof t !== 'object') continue;
+      const type = typeof t.type === 'string' ? t.type : '';
+      if (!type || type.startsWith('TRADE')) continue;
+      if (teamOf(t.teamId) !== me) continue;
+      if (t.executionType === 'CANCEL') continue;
+      if (t.status !== undefined && t.status !== null && t.status !== 'PENDING') continue;
+      if (t.isPending === false) continue;
+      const ownId = idOf(t.id);
+      if (ownId && closed.has(ownId)) continue;
+      if (!Array.isArray(t.items)) continue;
+
+      let add = null;
+      let drop = null;
+      let moves = 0;
+      for (const i of t.items) {
+        if (!i || typeof i !== 'object') continue;
+        const player = playerOf(i.playerId);
+        if (player === null) continue;
+        if (i.type === 'ADD' && add === null) add = player;
+        else if (i.type === 'DROP' && drop === null) drop = player;
+        else if (i.type === 'LINEUP') moves++;
+      }
+      if (add === null && drop === null && moves === 0) continue;
+
+      const kind = type === 'WAIVER' ? 'waiver'
+        : type === 'FREEAGENT' ? 'free-agent'
+          : add === null && drop !== null && moves === 0 ? 'drop'
+            : type === 'ROSTER' && moves > 0 ? 'lineup'
+              : 'other';
+      const id = ownId || `${kind}:${add ?? ''}>${drop ?? ''}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const bid = typeof t.bidAmount === 'number' && Number.isFinite(t.bidAmount) && t.bidAmount >= 0
+        ? t.bidAmount : null;
+      const claim = kind === 'waiver' || kind === 'free-agent';
+      out.push({
+        id,
+        kind,
+        add,
+        drop,
+        moves,
+        bid,
+        processAt: stamp(t.processDate),
+        proposedAt: stamp(t.proposedDate),
+        order: claim ? ++claims : 0,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Moves cut to the contract's fields and a bounded size, for the synced copy
+ * and for what is believed coming back out of it. Names the computer looked up
+ * (`addName`, `dropName`, `addPos`) ride along when they are short strings.
+ */
+export function cleanClaims(claims, max = MAX_CLAIMS) {
+  if (!Array.isArray(claims)) return [];
+  const out = [];
+  for (const c of claims) {
+    if (out.length >= max) break;
+    try {
+      if (!c || typeof c !== 'object') continue;
+      const id = idOf(c.id);
+      const kind = KINDS.has(c.kind) ? c.kind : null;
+      const add = c.add === null || c.add === undefined ? null : playerOf(c.add);
+      const drop = c.drop === null || c.drop === undefined ? null : playerOf(c.drop);
+      const moves = Number.isInteger(c.moves) && c.moves >= 0 && c.moves < 100 ? c.moves : 0;
+      if (!id || !kind || (add === null && drop === null && moves === 0)) continue;
+      const bid = typeof c.bid === 'number' && Number.isFinite(c.bid) && c.bid >= 0 && c.bid < 100000 ? c.bid : null;
+      const clean = {
+        id, kind, add, drop, moves, bid,
+        processAt: stamp(c.processAt),
+        proposedAt: stamp(c.proposedAt),
+        order: Number.isInteger(c.order) && c.order >= 0 && c.order < 100 ? c.order : 0,
+      };
+      for (const k of ['addName', 'dropName', 'addPos']) {
+        const n = nameOf(c[k]);
+        if (n) clean[k] = n;
+      }
+      out.push(clean);
+    } catch { /* not a move */ }
+  }
+  return out;
+}
+
+/** Has this claim's waiver run been and gone? Only one that names a time can. */
+export function claimDone(claim, now) {
+  return Number.isFinite(now) && claim && typeof claim.processAt === 'number' && claim.processAt <= now;
 }

@@ -90,8 +90,76 @@ const BY_ME = proposal('bbbb-2', 1, [item(102, 1, 2), item(201, 2, 1)]);
   same(p.pendingTrades({ pendingTransactions: [claim] }, ME), [], 'a waiver claim is not a trade offer');
   const roster = { id: 'dddd-5', type: 'ROSTER', status: 'PENDING', teamId: 1, items: [item(101, 1, 1, 'LINEUP')] };
   same(p.pendingTrades({ pendingTransactions: [roster] }, ME), [], 'nor is a lineup move');
-  const accept = proposal('dddd-6', 1, [item(301, 3, 1), item(101, 1, 3)], { type: 'TRADE_ACCEPT' });
-  same(p.pendingTrades({ pendingTransactions: [accept] }, ME), [], 'nor is an accepted trade waiting on the league\'s review');
+  // 2026-10-22: AN ACCEPTED TRADE IN THE LEAGUE'S REVIEW IS a pending move — the
+  // same record turned TRADE_ACCEPT, with `processDate` the time it goes through
+  // (dustinJ15/fantasy `pending_trades`, probed 2026-10-13).
+  const T3 = T0 + 3 * 24 * 3600 * 1000;
+  const accept = proposal('dddd-6', 1, [item(301, 3, 1), item(101, 1, 3)], { type: 'TRADE_ACCEPT', processDate: T3 });
+  same(p.pendingTrades({ pendingTransactions: [accept] }, ME),
+    [{ id: 'dddd-6', withTeamId: 3, get: [301], send: [101], proposedAt: T0, expiresAt: null, fromMe: true, review: true, processAt: T3 }],
+    'an accepted trade waiting on the league\'s review is listed, flagged review, with when it processes and no offer clock');
+  same(p.pendingTrades({ pendingTransactions: [accept] }, ME, { now: T2 + 1 }).length, 1,
+    'its old offer clock running out does not drop it');
+  same(p.pendingTrades({ pendingTransactions: [accept] }, ME, { now: T3 }), [], 'once it has processed it is gone');
+  same(p.pendingTrades({ pendingTransactions: [{ ...accept, status: 'ACCEPTED' }] }, ME).length, 1, 'status ACCEPTED on it is still in review');
+  same(p.pendingTrades({ pendingTransactions: [{ ...accept, status: 'EXECUTED' }] }, ME), [], 'an executed one is done');
+  same(p.cleanOffers(p.pendingTrades({ pendingTransactions: [accept] }, ME)),
+    p.pendingTrades({ pendingTransactions: [accept] }, ME), 'the synced copy keeps review and processAt');
+  // An accept that is a record of its own, naming the proposal: one line, not two.
+  const asked = proposal('dddd-7', 3, [item(301, 3, 1), item(101, 1, 3)]);
+  const yes = proposal('dddd-8', 1, [item(301, 3, 1), item(101, 1, 3)], { type: 'TRADE_ACCEPT', relatedTransactionId: 'dddd-7', processDate: T3 });
+  same(p.pendingTrades({ pendingTransactions: [asked, yes] }, ME).map((o) => [o.id, !!o.review]), [['dddd-8', true]],
+    'a proposal answered by a separate accept shows once, as the accepted trade');
+}
+
+// --------------------------------------------- the other moves: claims
+{
+  const T1 = T0 + 24 * 3600 * 1000;
+  const claim = (id, over = {}, items = [item(901, 0, 1, 'ADD'), item(103, 1, 0, 'DROP')]) => ({
+    id, type: 'WAIVER', status: 'PENDING', executionType: 'EXECUTE', isPending: true, teamId: 1,
+    memberId: '{00000000-0000-0000-0000-000000000000}', scoringPeriodId: 7,
+    bidAmount: 7, proposedDate: T0, processDate: T1, items, ...over,
+  });
+  const got = p.pendingClaims({ pendingTransactions: [claim('w-1')] }, ME);
+  same(got, [{ id: 'w-1', kind: 'waiver', add: 901, drop: 103, moves: 0, bid: 7, processAt: T1, proposedAt: T0, order: 1 }],
+    'a FAAB claim: who comes, who goes, the bid, when it processes, claim 1');
+  same(p.pendingClaims({ pendingTransactions: [claim('w-2', { bidAmount: 0 })] }, ME)[0].bid, 0,
+    'a priority league\'s claim: bid 0 (kept; the words leave it out)');
+  same(p.pendingClaims({ pendingTransactions: [claim('w-3', { bidAmount: undefined })] }, ME)[0].bid, null,
+    'a claim with no bidAmount: bid null');
+  same(p.pendingClaims({ pendingTransactions: [claim('w-4', {}, [item(902, 0, 1, 'ADD')])] }, ME)[0],
+    { id: 'w-4', kind: 'waiver', add: 902, drop: null, moves: 0, bid: 7, processAt: T1, proposedAt: T0, order: 1 },
+    'an add with nobody dropped');
+  same(p.pendingClaims({ pendingTransactions: [claim('a'), claim('b'), claim('c', { teamId: 4 })] }, ME).map((c) => [c.id, c.order]),
+    [['a', 1], ['b', 2]], 'my claims numbered in ESPN\'s order; another team\'s left out');
+  same(p.pendingClaims({ pendingTransactions: [claim('x', { status: 'EXECUTED' }), claim('y', { executionType: 'CANCEL' }),
+    claim('z', { isPending: false }), claim('q', { status: 'FAILED_INVALIDPLAYERSOURCE' })] }, ME), [],
+  'executed, cancelled, not pending or failed: none');
+  same(p.pendingClaims({ pendingTransactions: [claim('r'), { id: 's', type: 'WAIVER', status: 'CANCELED', executionType: 'CANCEL', relatedTransactionId: 'r', teamId: 1, items: [] }] }, ME), [],
+    'a claim a CANCEL copy names is gone');
+  same(p.pendingClaims({ pendingTransactions: [TO_ME, BY_ME] }, ME), [], 'a trade offer is not a claim');
+  const fa = p.pendingClaims({ pendingTransactions: [claim('f', { type: 'FREEAGENT', bidAmount: 0, processDate: undefined })] }, ME)[0];
+  same([fa.kind, fa.processAt, fa.order], ['free-agent', null, 1], 'a queued free-agent add');
+  same(p.pendingClaims({ pendingTransactions: [claim('d', { type: 'FREEAGENT' }, [item(104, 1, 0, 'DROP')])] }, ME)[0].kind, 'free-agent',
+    'a FREEAGENT record that only drops is still the free-agent kind');
+  same(p.pendingClaims({ pendingTransactions: [claim('d2', { type: 'DRAFT' }, [item(104, 1, 0, 'DROP')])] }, ME)[0].kind, 'drop',
+    'any other record that only drops is a drop');
+  const lu = p.pendingClaims({ pendingTransactions: [claim('l', { type: 'ROSTER', bidAmount: undefined }, [item(101, 1, 1, 'LINEUP'), item(102, 1, 1, 'LINEUP')])] }, ME)[0];
+  same([lu.kind, lu.moves, lu.order], ['lineup', 2, 0], 'a queued lineup change: two moves, not a numbered claim');
+  same(p.pendingClaims({ pendingTransactions: [claim('e', {}, [])] }, ME), [], 'a claim with no men in it: none');
+  for (const bad of [undefined, null, {}, { pendingTransactions: 'x' }, 7]) same(p.pendingClaims(bad, ME), [], 'rubbish in, []');
+  same(p.pendingClaims({ pendingTransactions: [claim('w-1')] }, 0), [], 'no team, []');
+  // The copy.
+  const named = got.map((c) => ({ ...c, addName: 'Ray Keane', dropName: 'Eli Ward', addPos: 'WR', memberId: 'x' }));
+  same(p.cleanClaims(named), [{ ...got[0], addName: 'Ray Keane', dropName: 'Eli Ward', addPos: 'WR' }],
+    'cleanClaims keeps the contract and the names, nothing else');
+  same(p.cleanClaims([{ id: 'k', kind: 'hack', add: 1 }, { id: '', kind: 'waiver', add: 1 }, { id: 'k', kind: 'waiver' },
+    { id: 'k', kind: 'waiver', add: 'x' }, null, 4]), [], 'whatever is not a move is dropped');
+  same(p.cleanClaims(named.map((c) => ({ ...c, addName: 'z'.repeat(200) })))[0].addName, undefined, 'a name too long to be one is dropped');
+  eq(p.cleanClaims(Array.from({ length: 30 }, (_, i) => ({ ...got[0], id: `m${i}` }))).length, 20, 'a copy carries at most 20');
+  eq(p.claimDone(got[0], T1 - 1), false, 'claimDone: before its waiver run');
+  eq(p.claimDone(got[0], T1), true, 'claimDone: at it');
+  eq(p.claimDone({ processAt: null }, T1), false, 'claimDone: no time, never');
 }
 
 // ------------------------------------------- no longer pending, five ways

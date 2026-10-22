@@ -2669,35 +2669,111 @@ function myTeamId(cfg, given) {
  * @returns {Promise<Array>}
  */
 export async function fetchPendingTrades(opts) {
+  return (await readPending(opts, { names: false })).offers;
+}
+
+/**
+ * EVERY MOVE WAITING ON ESPN FOR YOUR TEAM (Tim, 2026-10-22: "If someone sent a
+ * trade or I sent a trade … a pending move … showing the deadline. If I have a
+ * player being pulled from the waivers that should show up somewhere").
+ *
+ * `{ offers, claims }`: `offers` as `fetchPendingTrades` (an accepted trade in
+ * the league's review carries `review: true` and `processAt`), `claims` as
+ * js/pending.js `pendingClaims` — waiver claims, queued adds, drops, lineup
+ * moves — each with `addName` / `addPos` / `dropName` where the names could be
+ * found. On the computer: the same one read as the offers (js/espn.js shares
+ * it), plus one `kona_player_info` read for the names of men nobody rosters,
+ * only when there are claims. On the phone: the synced copy only, no request
+ * (rule 20), each move carrying `asOf`.
+ *
+ * Never throws: `{ offers: [], claims: [] }` for none or unreadable.
+ */
+export async function fetchPendingMoves(opts) {
+  return readPending(opts, { names: true });
+}
+
+/** The man's name and position out of one `kona_player_info` entry. */
+function claimNamesFrom(entries) {
+  const out = new Map();
+  for (const e of entries || []) {
+    try {
+      const p = espn.parsePlayerWeek(e, 0);
+      if (p.playerId !== null && p.name) out.set(Number(p.playerId), { name: p.name, position: p.position });
+    } catch { /* not a man */ }
+  }
+  return out;
+}
+
+/**
+ * Name each claim's men: one ESPN read for all of them (a hundred ids a
+ * request; a name does not change with the week, so week 1 is asked). Never
+ * throws.
+ */
+async function nameClaims(claims) {
+  if (!claims.length) return claims;
+  const known = new Map();
+  const want = [];
+  for (const c of claims) {
+    for (const id of [c.add, c.drop]) if (id !== null) want.push(id);
+  }
+  if (want.length) {
+    try {
+      for (const [id, v] of claimNamesFrom(await espn.fetchPlayersWeek(want, 1))) known.set(id, v);
+    } catch { /* ESPN would not say: the lines name nobody */ }
+  }
+  return claims.map((c) => {
+    const a = c.add !== null ? known.get(Number(c.add)) : null;
+    const d = c.drop !== null ? known.get(Number(c.drop)) : null;
+    return {
+      ...c,
+      ...(a ? { addName: a.name, addPos: a.position } : {}),
+      ...(d ? { dropName: d.name } : {}),
+    };
+  });
+}
+
+/** The one place both answers are read. See `fetchPendingTrades` / `fetchPendingMoves`. */
+async function readPending(opts, { names }) {
+  const none = { offers: [], claims: [] };
   try {
     const cfg = storable();
-    if (!cfg || pastSeason()) return [];
+    if (!cfg || pastSeason()) return none;
     const team = myTeamId(cfg, opts ? opts.teamId : undefined);
-    if (team === null) return [];
+    if (team === null) return none;
 
     const down = await cloudDown();
     if (down) {
       const kept = down.schedule ? down.schedule.pendingTrades : null;
-      if (!kept || typeof kept !== 'object' || Number(kept.teamId) !== team) return [];
+      if (!kept || typeof kept !== 'object' || Number(kept.teamId) !== team) return none;
       const at = Number(kept.at);
       // The sync's own time (an ISO string) when the copy carries no time of its own.
       const synced = typeof down.syncedAt === 'string' ? Date.parse(down.syncedAt) : NaN;
       const asOf = Number.isFinite(at) && at > 0 ? at : (Number.isFinite(synced) && synced > 0 ? synced : null);
       const now = Date.now();
-      return pending.cleanOffers(kept.offers)
-        .filter((o) => !pending.expired(o, now))
-        .map((o) => ({ ...o, asOf }));
+      return {
+        offers: pending.cleanOffers(kept.offers)
+          .filter((o) => !pending.expired(o, now))
+          .map((o) => ({ ...o, asOf })),
+        // A claim whose waiver run has passed has been run: the copy is older than that.
+        claims: pending.cleanClaims(kept.claims)
+          .filter((c) => !pending.claimDone(c, now))
+          .map((c) => ({ ...c, asOf })),
+      };
     }
 
-    return pending.pendingTrades(await espn.fetchPendingTransactions(), team, { now: Date.now() });
+    const raw = await espn.fetchPendingTransactions();
+    const offers = pending.pendingTrades(raw, team, { now: Date.now() });
+    const claims = names ? await nameClaims(pending.pendingClaims(raw, team)) : [];
+    return { offers, claims };
   } catch {
-    return [];
+    return none;
   }
 }
 
 /**
  * What a sync sends of them, or null for nothing (no team chosen, an earlier
- * season, none waiting, ESPN refusing): one read, through the bridge.
+ * season, none waiting, ESPN refusing): one read, through the bridge (and one
+ * for the names of claimed men, only when there are claims).
  */
 async function pendingForSync() {
   const cfg = storable();
@@ -2705,9 +2781,16 @@ async function pendingForSync() {
   const team = myTeamId(cfg);
   if (team === null) return null;
   const at = Date.now();
-  const offers = pending.cleanOffers(
-    pending.pendingTrades(await espn.fetchPendingTransactions(), team, { now: at }));
-  return offers.length ? { teamId: team, at, offers } : null;
+  const raw = await espn.fetchPendingTransactions();
+  const offers = pending.cleanOffers(pending.pendingTrades(raw, team, { now: at }));
+  let claims = [];
+  try {
+    claims = pending.cleanClaims(await nameClaims(pending.pendingClaims(raw, team)));
+  } catch { claims = []; }
+  if (!offers.length && !claims.length) return null;
+  // `claims` absent, not empty, when there are none: the copy is then exactly
+  // what it was before claims rode it.
+  return claims.length ? { teamId: team, at, offers, claims } : { teamId: team, at, offers };
 }
 
 // ===========================================================================

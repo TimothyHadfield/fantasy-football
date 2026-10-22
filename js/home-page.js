@@ -55,7 +55,8 @@ import {
 } from './player-card.js';
 // A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
 import './loose-weeks.js';
-import { teamHref, playerHref, weekHref, statsHref } from './links.js';
+import { teamHref, playerHref, weekHref, statsHref, dealHref } from './links.js';
+import * as pendingView from './pending-view.js';
 // The positional floor's one sentence, so Home states it in the same words as
 // Analysis and Trade. See js/floor.js.
 import { describeFloors } from './floor.js';
@@ -902,6 +903,7 @@ function loadDemo(note = '') {
   state.benchRosters =
     state.benchWeek === week ? null : generateDemoWeekRosters(state.benchWeek);
   startOdds();   // clears any live odds: demo games are all final
+  renderPending();   // the sample league has no moves waiting
 
   setStatus(
     (note ? `${note} ` : '') +
@@ -969,6 +971,8 @@ async function loadLiveNow(cfg, wanted) {
     state.waiverRead = null;
     state.byes = null;
     state.rosters = rosters;
+    // The moves waiting on ESPN: their own read, beside the rest.
+    readPending(wanted);
     const odds = startOdds();
     await loadBench();
     if (!wanted()) return;
@@ -1634,6 +1638,70 @@ function renderDeadlines(m) {
   el.textContent = m.deadlines || '';
   if (m.deadlines) el.removeAttribute('hidden');
   else el.setAttribute('hidden', '');
+}
+
+/**
+ * YOUR MOVES WAITING ON ESPN, under the deadlines line (Tim, 2026-10-22: "If
+ * someone sent a trade or I sent a trade … a pending move … showing the
+ * deadline. If I have a player being pulled from the waivers that should show
+ * up somewhere"). One line each, a "Pending" badge in front: trade offers both
+ * ways (and an accepted one in review), waiver claims, queued adds and drops.
+ * Off `season.fetchPendingMoves` — the bridge on a computer, the synced copy on
+ * a phone (no request there). Hidden with none, and on the sample league.
+ */
+function renderPending() {
+  const el = $('pendingMoves');
+  if (!el) return;
+  const got = state.isDemo ? null : state.pendingMoves;
+  const offers = (got && got.offers) || [];
+  const claims = (got && got.claims) || [];
+  if (!offers.length && !claims.length) {
+    el.innerHTML = '';
+    el.setAttribute('hidden', '');
+    return;
+  }
+  const now = Date.now();
+  const names = new Map();
+  const teamName = new Map((state.schedule?.teams || []).map((t) => [String(t.id), t.name]));
+  for (const t of state.rosters?.teams || []) {
+    for (const p of t.players || []) names.set(String(p.playerId), p.name);
+  }
+  const men = (ids) => (ids || []).map((id) => names.get(String(id))).filter(Boolean).join(', ');
+  const badge = '<span class="badge demo pend-badge">Pending</span>';
+  const lines = [];
+  for (const o of offers) {
+    const who = teamName.get(String(o.withTeamId)) || 'another team';
+    const get = men(o.get);
+    const send = men(o.send);
+    const deal = get && send ? `Get ${get} for ${send}` : get ? `Get ${get}` : send ? `Send ${send}` : '';
+    const bits = [deal, pendingView.offerDeadline(o, now)].filter(Boolean);
+    const href = dealHref({ with: o.withTeamId, get: o.get, send: o.send }) || 'trade.html';
+    // The same titles as the Notifications page.
+    const title = o.review ? `Trade with ${who} accepted` : o.fromMe ? `Your offer to ${who}` : `Trade offer from ${who}`;
+    lines.push(`<div class="pend-line">${badge} <a href="${esc(href)}">${esc(title)}</a>${bits.length ? ` · ${esc(bits.join(' · '))}` : ''}</div>`);
+  }
+  for (const c of claims) {
+    const man = c.add ?? c.drop ?? null;
+    const title = pendingView.claimTitle(c);
+    const head = man !== null ? `<a href="${esc(playerHref(man))}">${esc(title)}</a>` : esc(title);
+    const bits = [pendingView.claimWhat(c), pendingView.claimDetail(c, now)].filter(Boolean);
+    lines.push(`<div class="pend-line">${badge} ${head} · ${esc(bits.join(' · '))}</div>`);
+  }
+  el.innerHTML = lines.join('');
+  el.removeAttribute('hidden');
+}
+
+/** Read the moves waiting (never throws), then draw them. */
+async function readPending(wanted) {
+  if (typeof season.fetchPendingMoves !== 'function') return;
+  try {
+    const got = await season.fetchPendingMoves();
+    if (wanted && !wanted()) return;
+    state.pendingMoves = got || null;
+  } catch {
+    state.pendingMoves = null;
+  }
+  renderPending();
 }
 
 function renderWeekPicker(m) {

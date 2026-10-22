@@ -15,6 +15,7 @@ import { pathToFileURL } from 'node:url';
 import { REPO } from './repo.mjs';
 
 const N = await import(pathToFileURL(path.join(REPO, 'js/notify.js')).href);
+const PV = await import(pathToFileURL(path.join(REPO, 'js/pending-view.js')).href);
 const { buildNotes, movesFor, holesIn, pickups, countNotes, onBye } = N;
 
 let pass = 0;
@@ -336,22 +337,32 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
     { id: 'def', withTeamId: 7, get: [701], send: [112], proposedAt: NOW - 2 * HOUR, expiresAt: NOW + 40 * HOUR, fromMe: true },
   ];
   const ns = kind(notes({ team, offers }), 'offer');
+  // The clock in the detail (2026-10-22), in this machine's own zone.
+  const exp = `expires ${PV.whenText(NOW + 40 * HOUR, NOW)}`;
   eq(ns, [
     { id: 'offer-abc', kind: 'offer', level: 'now', title: 'Trade offer from Team Three',
-      detail: 'Get Quin Ashby for Eli Ward, Jon Ross',
+      detail: `Get Quin Ashby for Eli Ward, Jon Ross · ${exp}`,
       suggest: 'Check it on Trade before it expires Saturday',
       action: { label: 'Open it', href: 'trade.html?with=3&get=301&send=105,110' } },
-    { id: 'offer-def', kind: 'offer', level: 'idea', title: 'Your offer to Team Seven',
-      detail: 'Get Sol Vance for Lou Thorn',
+    { id: 'offer-def', kind: 'offer', level: 'pending', title: 'Your offer to Team Seven',
+      detail: `Get Sol Vance for Lou Thorn · ${exp}`,
       suggest: null,
       action: { label: 'Open it', href: 'trade.html?with=7&get=701&send=112' } },
-  ], 'offer: one line per offer, theirs this week (with the day it expires) and yours an idea with nothing to do, opening that deal on Trade');
+  ], 'offer: one line per offer, theirs this week (with the day it expires) and yours a pending move with nothing to do, each with its clock, opening that deal on Trade');
+  ok(/^expires (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2}:\d\d (AM|PM)$/.test(exp), 'offer: the clock reads as a day and a time', exp);
+  // An accepted trade in the league's review: pending, with when it goes through.
+  const review = kind(notes({ team, offers: [{ ...offers[0], expiresAt: null, review: true, processAt: NOW + 20 * HOUR }] }), 'offer')[0];
+  eq([review.level, review.title, review.detail, review.suggest],
+    ['pending', 'Trade with Team Three accepted', `Get Quin Ashby for Eli Ward, Jon Ross · processes ${PV.whenText(NOW + 20 * HOUR, NOW)}`, null],
+    'offer: an accepted trade in review is a pending line saying when it processes');
   const when = (expiresAt) => kind(notes({ team, offers: [{ ...offers[0], expiresAt }] }), 'offer').map((n) => n.suggest);
   eq([when(null), when(NOW - HOUR), when(NOW + 9 * 24 * HOUR)].flat(),
     Array(3).fill('Check it on Trade before it expires'), 'offer: no expiry known, one already past, or one over six days off: no day is named');
   // On the synced copy the offer is as old as the sync.
   const old = kind(notes({ team, offers: [offers[0]], offersAt: NOW - 2 * HOUR }), 'offer');
-  eq(old[0] && old[0].detail, 'Get Quin Ashby for Eli Ward, Jon Ross · as of 2 hours ago', 'offer: a synced copy says how old it is');
+  eq(old[0] && old[0].detail, `Get Quin Ashby for Eli Ward, Jon Ross · ${exp} · as of 2 hours ago`, 'offer: a synced copy says how old it is');
+  eq(kind(notes({ team, offers: [{ ...offers[0], expiresAt: NOW - HOUR }] }), 'offer')[0].detail,
+    'Get Quin Ashby for Eli Ward, Jon Ross', 'offer: a clock already gone is not printed');
   eq(kind(notes({ team, offers: [] }), 'offer'), [], 'offer: none waiting, no line');
   eq(kind(notes({ team, offers: null }), 'offer'), [], 'offer: a read that gave nothing is no line');
   eq(kind(notes({ team, offers: [{ id: 'x' }] }), 'offer'), [], 'offer: an offer with no other team is dropped');
@@ -444,16 +455,39 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   const ns = notes({ team, coming, offers, wire, byes: { 4: 6 } });
   eq(ns.map((n) => `${n.level}:${n.kind}`), ['now:start', 'now:offer', 'soon:hole', 'idea:pickup', 'idea:trade'],
     'order: this week, then the coming weeks, then ideas');
-  eq(countNotes(ns), { now: 2, soon: 1, idea: 2 }, 'counts: how many stand at each level');
+  eq(countNotes(ns), { now: 2, pending: 0, soon: 1, idea: 2 }, 'counts: how many stand at each level');
   eq(new Set(ns.map((n) => n.id)).size, ns.length, 'every line has its own id');
   ok(ns.every((n) => n.title && n.detail && n.action && n.action.label && n.action.href), 'every line has a title, a detail and one button with somewhere to go');
   ok(ns.every((n) => n.title.split(/\s+/).length <= 8 && n.action.label.split(/\s+/).length <= 2), 'a line is a few words and its button one or two');
-  eq(countNotes([]), { now: 0, soon: 0, idea: 0 }, 'counts: none');
+  eq(countNotes([]), { now: 0, pending: 0, soon: 0, idea: 0 }, 'counts: none');
   // The suggested action: on every line here but the "look" one, and short.
   ok(ns.every((n) => 'suggest' in n && (n.suggest === null || (typeof n.suggest === 'string' && n.suggest))), 'every line carries `suggest`: words or null', ns.map((n) => n.suggest));
   eq(ns.filter((n) => n.suggest === null).map((n) => n.id), ['trade-look'], 'only "Look for trades" has nothing to suggest');
   ok(ns.every((n) => !n.suggest || n.suggest.split(/\s+/).length <= 10), 'a suggestion is ten words or fewer', ns.map((n) => n.suggest));
   ok(ns.every((n) => !n.suggest || n.suggest !== n.detail), 'and never the detail said again');
+}
+
+// ---------------------------------------------------------------- pending claims (2026-10-22)
+{
+  const at = NOW + 9 * HOUR;
+  const claims = [
+    { id: 'w1', kind: 'waiver', add: 900, drop: 105, addName: 'Ned Park', dropName: 'Eli Ward', bid: 7, processAt: at, order: 1 },
+    { id: 'w2', kind: 'waiver', add: 901, drop: null, addName: 'Ty Moss', bid: 0, processAt: at, order: 2 },
+    { id: 'd1', kind: 'drop', add: null, drop: 110, dropName: 'Jon Ross', bid: null, processAt: null, order: null },
+  ];
+  const ns = kind(notes({ team: teamOf(squad()), claims }), 'claim');
+  const when = PV.whenText(at, NOW);
+  eq(ns.map((n) => [n.id, n.level, n.title, n.detail, n.action.href]), [
+    ['claim-w1', 'pending', 'Waiver claim', `Add Ned Park, drop Eli Ward · $7 bid · claim 1 · processes ${when}`, 'waivers.html?player=900'],
+    ['claim-w2', 'pending', 'Waiver claim', `Add Ty Moss · claim 2 · processes ${when}`, 'waivers.html?player=901'],
+    ['claim-d1', 'pending', 'Drop', 'Drop Jon Ross', 'waivers.html?player=110'],
+  ], 'claims: a FAAB claim shows its bid, a no-FAAB claim none, each with its order and process time; a drop says who');
+  eq(countNotes(notes({ team: teamOf(squad()), claims })).pending, 3, 'claims: the bell counts them as pending');
+  eq(N.claimNotes({ claims: [claims[1]], claimsAt: NOW - 2 * HOUR, now: NOW })[0].detail,
+    `Add Ty Moss · claim 2 · processes ${when} · as of 2 hours ago`, 'claims: a synced copy says how old it is');
+  eq(N.claimNotes({ claims: [null, {}, 'x'] }), [], 'claims: rubbish makes no lines');
+  eq(kind(notes({ team: teamOf(squad()) }), 'claim'), [], 'claims: none known, no lines');
+  ok(ns.every((n) => n.title.split(/\s+/).length <= 8 && n.action.label.split(/\s+/).length <= 2), 'claims: a few words and a short button');
 }
 
 console.log(fail ? `\n${pass} passed, ${fail} failed` : `\nAll ${pass} assertions passed`);

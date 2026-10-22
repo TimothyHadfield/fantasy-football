@@ -128,6 +128,7 @@ import * as starters from './who-to-start.js';
 // THE DIAMOND AND THE COIN by a name (Tim, 2026-10-14: "show the diamond or
 // coin just like in the trade section") — the Trade page's rule and markup.
 import * as outlook from './outlook-mark.js';
+import * as pendingView from './pending-view.js';
 // THE GREEN NAME: his bye is behind him (Tim, 2026-10-14) — the Trade page's rule.
 import { byePastOf, byePastHtml } from './bye-past.js';
 
@@ -746,6 +747,7 @@ async function loadLive() {
   render();
   refreshWeeks(token);
   loadValue(token);
+  loadClaims(token);
 }
 
 /**
@@ -3989,6 +3991,38 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
  * A `title` on a SPAN, never on the player link: js/touch-titles.js makes a
  * titled span tappable on a phone and deliberately leaves links alone.
  */
+/**
+ * "Pending claim" beside a man one of your waiting moves adds, "Pending drop"
+ * beside one it cuts (Tim, 2026-10-22: "If I have a player being pulled from
+ * the waivers that should show up somewhere"). Off `state.claims`, read by
+ * `loadClaims` (season.fetchPendingMoves: the bridge on a computer, the synced
+ * copy on a phone). The title carries the bid and the waiver run.
+ */
+function claimTag(p, drop = false) {
+  const c = state.claims && state.claims[drop ? 'drops' : 'adds'].get(Number(p.playerId));
+  if (!c) return '';
+  const why = [pendingView.claimWhat(c), pendingView.claimDetail(c)].filter(Boolean).join(' · ');
+  return `<span class="tag warn pend-claim" title="${esc(why)}">${drop ? 'Pending drop' : 'Pending claim'}</span> `;
+}
+
+/** Your moves waiting on ESPN, by the man they add and the man they cut. Never throws. */
+async function loadClaims(token) {
+  if (typeof season.fetchPendingMoves !== 'function') return;
+  try {
+    const got = await season.fetchPendingMoves();
+    if (token !== state.token) return;
+    const adds = new Map();
+    const drops = new Map();
+    for (const c of (got && got.claims) || []) {
+      if (c.add !== null && c.add !== undefined && !adds.has(Number(c.add))) adds.set(Number(c.add), c);
+      if (c.drop !== null && c.drop !== undefined && !drops.has(Number(c.drop))) drops.set(Number(c.drop), c);
+    }
+    const had = state.claims && (state.claims.adds.size || state.claims.drops.size);
+    state.claims = { adds, drops };
+    if (had || adds.size || drops.size) render();
+  } catch { /* none shown */ }
+}
+
 function waiverTag(p) {
   if (p.status !== 'WAIVERS') return '';
   const when = Number.isFinite(p.waiverClears) ? new Date(p.waiverClears) : null;
@@ -4141,7 +4175,7 @@ function wireRow(row, weeks, lineup, avgScales, weekScales) {
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
         playerLink(p, nameHtml(p), `${esc(p.name)}${owned} — jump to his row, show every ` +
           `remaining week and his actual scores`, true), trendMark(p, false) + outlookMark(p, true),
-        `${injuryTag(status)}${waiverTag(p)}`)}</td>
+        `${injuryTag(status)}${waiverTag(p)}`, claimTag(p))}</td>
       ${identityCells(row, heat)}
       ${gainCell(p)}
       ${weekCells(p, weeks, true, p.playerId === state.spotlight, (i) =>
@@ -4182,7 +4216,7 @@ function mineRow(row, weeks, avgScales, weekScales) {
         nameLine(playerLink(p, nameHtml(p), why, false, tradeManHref(p.playerId, me, me)), trendMark(p, true) + outlookMark(p, false),
           injuryTag(availability(p.injuryStatus)),
           // The label opens your men at that position (`mineCard`), keyboard included.
-          `<span class="mine-tag" tabindex="0">${esc(label)}</span> `) +
+          `<span class="mine-tag" tabindex="0">${esc(label)}</span> ${claimTag(p, true)}`) +
         `</td>
       ${identityCells(row, heat)}
       <td class="gain"></td>
@@ -4361,7 +4395,7 @@ function takenRow(row, weeks, avgScales, weekScales) {
         playerLink(p, nameHtml(p), `${esc(p.name)} — on ${esc(owner)}’s roster. Open a ` +
           'custom trade with him ticked', false, tradeManHref(p.playerId, row.ownerId, myTeamId())),
         trendMark(p, true) + outlookMark(p, false),
-        injuryTag(status))}</td>
+        injuryTag(status), claimTag(p, true))}</td>
       <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" data-c="pos"${tradeHrefFor(row) ? ' data-go' : ''}>${
         esc(p.position)}${rank === null ? '' : `<span class="rank">${rank}</span>`}</td>
       <td class="left">${esc(p.proTeam)}</td>
