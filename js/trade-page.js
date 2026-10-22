@@ -95,7 +95,7 @@ import { pastTradeBars, undoesPastTrade } from './past-trades.js';
 // The custom box's orange / red boxes and each side's needs (Tim, 2026-10-15). Pure.
 import { hintSteps } from './custom-hint.js';
 import { slotAverages, positionNeeds } from './slot-needs.js';
-import { acceptBy } from './accept-by.js';
+import { acceptBy, deadlineWeekOf } from './accept-by.js';
 // "Send: now / after week N" in the custom box (Tim, 2026-10-15). Pure.
 import { sendAfterChoices, liveSendAfter, weeksAfter, weeksBefore } from './send-after.js';
 // THE ASSUMED TRADE's one implementation, shared with every other page through
@@ -2168,6 +2168,9 @@ function cardFor(p, ctx = null) {
       // The weeks the deal's two squads play each other — an arrow on each.
       vsWeeks: meet.weeks,
       vsName: meet.name,
+      // The red trade-deadline line, on this page's cards only (Tim, 2026-10-22).
+      deadlineWeek: state.isDemo ? null
+        : deadlineWeekOf({ deadline: state.tradeRules?.deadline ?? null, kickoffs: state.kickoffs }),
     }),
   };
 }

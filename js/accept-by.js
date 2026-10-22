@@ -61,3 +61,34 @@ export function acceptBy({ teams, kickoffs, weeks, reviewHours, deadline, now })
   }
   return null;
 }
+
+/**
+ * THE WEEK THE TRADE DEADLINE FALLS IN, for the red line on the Trade page's
+ * player cards (Tim, 2026-10-22: "my league settings have it at Dec 2nd, which
+ * is during week 13, so put the red line between weeks 12 and 13").
+ *
+ * An NFL week runs from the day after the previous week's last game to its own
+ * last game, so the deadline's week is the FIRST week whose LAST kickoff is at
+ * or after the deadline. Dec 2 2026 (a Wednesday): week 12's last game is
+ * Monday Nov 30, week 13's is Monday Dec 7, so week 13 — line before it.
+ *
+ * @param {Object} o
+ * @param {number|null} o.deadline   epoch ms (`espn.parseTrades`), null/0 = none
+ * @param {Object} o.kickoffs        `{ [proTeamId]: { [week]: epochMs } }`
+ * @returns {number|null} the week, or null (no deadline, no kickoffs, or the
+ *   deadline is after every known game)
+ */
+export function deadlineWeekOf({ deadline, kickoffs } = {}) {
+  if (!Number.isFinite(deadline) || deadline <= 0 || !kickoffs) return null;
+  const last = new Map();
+  for (const byWeek of Object.values(kickoffs)) {
+    for (const [w, ms] of Object.entries(byWeek || {})) {
+      const week = Number(w);
+      if (!Number.isFinite(week) || !Number.isFinite(ms)) continue;
+      if (!last.has(week) || ms > last.get(week)) last.set(week, ms);
+    }
+  }
+  const weeks = [...last.keys()].sort((a, b) => a - b);
+  for (const week of weeks) if (last.get(week) >= deadline) return week;
+  return null;
+}
