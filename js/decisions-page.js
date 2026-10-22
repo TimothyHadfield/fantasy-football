@@ -2362,10 +2362,12 @@ function renderSummary() {
   const real = chartOf(o, null);
   const hyp = chartOf(o, m);
 
-  // The Summary page's order — title chance, then LUCK — and the hypothetical
-  // in the SAME order, so a row reads straight across the pair.
+  // The Summary page's order — title chance minus loser chance (Tim,
+  // 2026-10-22), then LUCK — and the hypothetical in the SAME order, so a row
+  // reads straight across the pair.
+  const standing = (r) => (r.title == null && r.last == null ? -Infinity : (r.title ?? 0) - (r.last ?? 0));
   real.rows.sort((a, b) =>
-    (b.title ?? -1) - (a.title ?? -1) ||
+    (standing(b) - standing(a) || 0) ||
     (b.luck ?? -Infinity) - (a.luck ?? -Infinity) ||
     String(a.name).localeCompare(String(b.name)));
   const byId = new Map(hyp.rows.map((r) => [r.id, r]));
