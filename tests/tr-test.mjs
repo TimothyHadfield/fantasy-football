@@ -9258,8 +9258,16 @@ if (!bm.boot) {
   const TR_PAST_TRADES = JSON.stringify([{ kind: 'trade', teamId: 1, trade: { withTeamId: 2, gives: [past[0]], gets: [past[1]] } }]);
   // TR_SEASON_AVG gives every man a season average, so the box has an Appeal
   // and so a Total (without one the Total range can never be met).
+  // Since 2026-10-22 the box's Value nets out the Value of the men a deal
+  // forces you to cut (brief: "as benchGainOf does"). Receiving Bo's 203 + 209
+  // for nothing cuts two of Ana's men worth 2.0 together, which left the
+  // sample's one in-range deal at 0.0. Bo QB2 (209) is made worth 5.0 here so
+  // that deal is still worth having AFTER the cut (+3.0): the hint is checked
+  // on an honest Value, not on one that ignores the cut.
+  const hintPlayers = JSON.parse(JSON.stringify(players));
+  hintPlayers[stub.playerId(2, 9)].value = 5;
   const ch = run('customHint', { stub: true, env: {
-    FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players }), TR_PAST_TRADES, TR_SEASON_AVG: '1' } });
+    FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players: hintPlayers }), TR_PAST_TRADES, TR_SEASON_AVG: '1' } });
   // WHO NO SUGGESTION HANDS OVER (Tim, 2026-10-16): "stop suggesting to trade
   // K and DEF in the suggested trades list", "don't suggest to trade with any
   // player who has a value under 1". A man he ticked himself is his choice.
@@ -9341,7 +9349,7 @@ if (!bm.boot) {
   // The same with Send = "after week N" (sweep 2026-10-16 #4): the hint was
   // priced over every week and keyed under another cut, so it never finished.
   const cc = run('customHint', { stub: true, env: {
-    FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players }), TR_PAST_TRADES, TR_SEASON_AVG: '1', TR_HINT_CUT: '1' } });
+    FF_VALUE: JSON.stringify({ base: BASE, weeks: WEEKS_LEFT, players: hintPlayers }), TR_PAST_TRADES, TR_SEASON_AVG: '1', TR_HINT_CUT: '1' } });
   ok('HINT AFTER WEEK N: the scenario boots, Send on a week', !cc.boot && Number.isFinite(cc.cut) && cc.cutShown === String(cc.cut),
     cc.boot || JSON.stringify([cc.cut, cc.cutShown]));
   if (!cc.boot) {
