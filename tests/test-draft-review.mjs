@@ -597,8 +597,11 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
 // Tim, 2026-10-22: "I picked Omarian Hampton at 14 and Jenty at 27. The perfect
 // draft simply chooses the player with the highest value between position
 // 12-26 … I would hypothetically choose Walker (pos 23), and positions 14-22
-// would shift". A ten-team snake, four rounds: the seventh team picks 7, 14,
-// 27 and 34, as his did. Player ids are 1000 + where he was really taken.
+// would shift". Then: "optimized only for the current user selected … if the
+// user that is currently selected drafted the best … for each round of the
+// draft that they were actually in, what would their team look like?"
+// A ten-team snake, four rounds: the seventh team picks 7, 14, 27 and 34, as
+// his did. Player ids are 1000 + where he was really taken.
 {
   const TEAMS = 10;
   const snakePicks = [];
@@ -608,80 +611,93 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
     const slot = r % 2 ? k : TEAMS + 1 - k;
     snakePicks.push({ overall: o, round: r, roundPick: k, teamId: slot, playerId: 1000 + o, bid: null, keeper: false });
   }
-  const tim = snakePicks.filter((p) => p.teamId === 7).map((p) => p.overall);
-  eq(tim, [7, 14, 27, 34], 'perfect: (the fixture) the seventh team picks 7, 14, 27 and 34');
+  eq(snakePicks.filter((p) => p.teamId === 7).map((p) => p.overall), [7, 14, 27, 34], 'perfect: (the fixture) the seventh team picks 7, 14, 27 and 34');
   const ids = (order) => order.map((p) => p.playerId - 1000);
-
-  // Every man worth less than the one taken before him: nothing moves.
   const falling = (id) => 100 - (id - 1000);
-  const same = R.perfectOrder(snakePicks, falling);
-  eq(ids(same), snakePicks.map((p) => p.overall), 'perfect: no man is worth more than one taken before him — nothing moves');
+  const upTo40 = Array.from({ length: 40 }, (_, i) => i + 1);
+
+  // Nobody worth more than a man taken before him: nothing moves.
+  const same = R.perfectOrder(snakePicks, falling, 7);
+  eq(ids(same), upTo40, 'perfect: no man is worth more than one taken before him — nothing moves');
   ok(same.every((p, i) => p.from === i + 1 && p.teamId === snakePicks[i].teamId), 'perfect: each slot keeps its team, and from is where he went');
 
-  // Tim's example. The first thirteen men are each worth more than anyone after,
-  // so the teams before him keep theirs; "Walker" (pick 23) is worth more than
-  // anyone from 14 to 26, and less than the first thirteen.
-  const walker = (id) => (id === 1023 ? 150 : id <= 1013 ? 300 - (id - 1000) : falling(id));
-  const t = R.perfectOrder(snakePicks, walker);
-  eq(t[13].playerId, 1023, 'perfect (Tim’s example): Walker, taken 23rd, is his pick at 14');
-  eq(t[13].teamId, 7, 'perfect (Tim’s example): pick 14 is still his team’s');
-  eq(t[13].from, 23, 'perfect (Tim’s example): and says he was really taken 23rd');
+  // TIM'S EXAMPLE. "Walker" (taken 23rd) is worth more than everyone else.
+  // The teams picking 8 to 13 could reach him in a draft where all picked
+  // perfectly; here only the selected team does.
+  const walker = (id) => (id === 1023 ? 150 : falling(id));
+  const t = R.perfectOrder(snakePicks, walker, 7);
+  eq([t[13].playerId, t[13].teamId, t[13].from], [1023, 7, 23], 'perfect (Tim’s example): Walker, taken 23rd, is his pick at 14, and says he went 23rd');
   eq(ids(t).slice(14, 23), [14, 15, 16, 17, 18, 19, 20, 21, 22], 'perfect (Tim’s example): the men taken 14-22 now go 15-23');
-  eq(ids(t).slice(0, 13), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], 'perfect (Tim’s example): picks 1-13 are untouched');
-  eq(ids(t).slice(23), Array.from({ length: 17 }, (_, i) => 24 + i), 'perfect (Tim’s example): picks 24-40 are untouched');
+  eq(ids(t).slice(0, 13), upTo40.slice(0, 13), 'perfect (Tim’s example): picks 1-13 are untouched — the teams before him do not take Walker');
+  eq(ids(t).slice(23), upTo40.slice(23), 'perfect (Tim’s example): picks 24-40 are untouched');
   eq(new Set(ids(t)).size, 40, 'perfect: every man is still on the board once');
+  eq([t[6].playerId, t[26].playerId, t[33].playerId], [1007, 1027, 1034], 'perfect (Tim’s example): his other three picks already were the best in their windows');
+  eq(t.filter((p) => p.teamId === 7).map((p) => p.overall), [7, 14, 27, 34], 'perfect (Tim’s example): he still picks in the rounds he was in');
+  const t2 = R.perfectOrder(snakePicks, walker, '7');
+  eq(ids(t2), ids(t), 'perfect: the team may be named as text, as the page’s picker holds it');
+
+  // OTHER TEAMS NEVER PICK PERFECTLY: each keeps the men sliding into its
+  // slots in their old order, even with men worth far more in their windows.
+  const wild = (id) => ((id * 7919) % 101);
+  const w7 = R.perfectOrder(snakePicks, wild, 7);
+  const rest = w7.filter((p) => p.teamId !== 7).map((p) => p.playerId);
+  const restSorted = [...rest].sort((a, b) => a - b);
+  eq(rest, restSorted, 'perfect: the men in the other teams’ slots stay in their old order — none of them is re-picked');
+  const mine = w7.filter((p) => p.teamId === 7);
+  ok(mine.every((p) => {
+    const i = p.overall - 1;
+    const next = snakePicks.findIndex((q, j) => j > i && q.teamId === 7);
+    const end = next < 0 ? 40 : next;
+    return w7.slice(i + 1, end).every((q) => wild(q.playerId) <= wild(p.playerId));
+  }), 'perfect: each of its picks is worth at least anyone left in its window when it picks');
 
   // Only his window: a man taken at 27 (his next pick) is not his to take at 14.
-  const later = (id) => (id === 1027 ? 150 : id <= 1013 ? 300 - (id - 1000) : falling(id));
-  const l = R.perfectOrder(snakePicks, later);
-  eq(l[13].playerId, 1014, 'perfect: the man at his next pick (27) is outside his window at 14');
+  const later = (id) => (id === 1027 ? 150 : falling(id));
+  eq(R.perfectOrder(snakePicks, later, 7)[13].playerId, 1014, 'perfect: the man at his next pick (27) is outside his window at 14');
+  eq(R.perfectOrder(snakePicks, later, 7)[26].playerId, 1027, 'perfect: and he is his at 27');
 
-  // Every team, not his alone: pick 11 (the tenth team, next pick 30) can reach 23.
-  const open = (id) => (id === 1023 ? 150 : id <= 1010 ? 300 - (id - 1000) : falling(id));
-  const o2 = R.perfectOrder(snakePicks, open);
-  eq([o2[10].playerId, o2[10].teamId], [1023, 10], 'perfect: every team picks this way — pick 11 takes him first when he is in its window');
-
-  // The last pick of a team looks to the end of the draft: the tenth team's last
-  // is 31, and the man taken 40th is the first it can reach.
-  const last = (id) => (id === 1040 ? 150 : id <= 1030 ? 300 - (id - 1000) : falling(id));
-  const z = R.perfectOrder(snakePicks, last);
+  // The last pick looks to the end of the draft: team 10's last is 31.
+  const last = (id) => (id === 1040 ? 150 : falling(id));
+  const z = R.perfectOrder(snakePicks, last, 10);
   eq([z[30].playerId, z[30].teamId], [1040, 10], 'perfect: a team’s last pick reaches to the end of the draft (40 at 31)');
   eq(ids(z).slice(31), [31, 32, 33, 34, 35, 36, 37, 38, 39], 'perfect: and 31-39 slide to 32-40');
 
+  // ANOTHER TEAM SELECTED: its perfect draft, not his.
+  const t3 = R.perfectOrder(snakePicks, walker, 4);
+  eq([t3[13].playerId, t3.find((p) => p.playerId === 1023).overall, t3.find((p) => p.playerId === 1023).teamId], [1014, 17, 4],
+    'perfect: with team 4 selected (picks 4, 17, 24, 37), Walker goes to its pick at 17, and pick 14 is left alone');
+  eq(ids(R.perfectOrder(snakePicks, walker, 99)), upTo40, 'perfect: a team that is not in the draft moves nothing');
+
   // Equals: the earlier man is kept.
-  const tie = (id) => (id === 1014 || id === 1020 ? 150 : id <= 1013 ? 300 - (id - 1000) : falling(id));
-  eq(R.perfectOrder(snakePicks, tie)[13].playerId, 1014, 'perfect: of two equal, the earlier man is kept (no move)');
-  const tie2 = (id) => (id === 1018 || id === 1020 ? 150 : id <= 1013 ? 300 - (id - 1000) : falling(id));
-  eq(R.perfectOrder(snakePicks, tie2)[13].playerId, 1018, 'perfect: of two equal, the earlier taken comes up');
+  const tie = (id) => (id === 1014 || id === 1020 ? 150 : falling(id));
+  eq(R.perfectOrder(snakePicks, tie, 7)[13].playerId, 1014, 'perfect: of two equal, the earlier man is kept (no move)');
+  const tie2 = (id) => (id === 1018 || id === 1020 ? 150 : falling(id));
+  eq(R.perfectOrder(snakePicks, tie2, 7)[13].playerId, 1018, 'perfect: of two equal, the earlier taken comes up');
 
   // A man with no figure is never taken over a man with one.
-  const blank = (id) => (id === 1015 ? null : id <= 1013 ? 300 - (id - 1000) : id === 1016 ? 1 : -50);
-  eq(R.perfectOrder(snakePicks, blank)[13].playerId, 1016, 'perfect: a man with no value is never taken over one with a value');
-  eq(R.perfectOrder([], walker), [], 'perfect: no picks, no draft');
+  const blank = (id) => (id === 1015 ? null : id === 1016 ? 1 : id < 1014 ? falling(id) : -50);
+  eq(R.perfectOrder(snakePicks, blank, 7)[13].playerId, 1016, 'perfect: a man with no value is never taken over one with a value');
+  eq(R.perfectOrder([], walker, 7), [], 'perfect: no picks, no draft');
 
-  // The rows: each man's own figures go with him, the slot's are worked again.
-  const curve = { n: 40, y: Array.from({ length: 40 }, (_, i) => 40 - i) };
+  // THE ROWS: only where he sits changes; every number of his is as on Drafted.
   const rows = snakePicks.map((p) => ({
-    ...p, at: p.overall, name: `M${p.overall}`, position: 'RB', now: p.overall === 23 ? 3 : p.overall,
-    diff: p.overall - (p.overall === 23 ? 3 : p.overall), pre: p.overall, preDiff: 0,
-    valueNow: walker(p.playerId) / 10, expected: 40 - (p.overall - 1), valuePre: 1,
+    ...p, at: p.overall, name: `M${p.overall}`, position: 'RB', now: p.overall, diff: 0, pre: p.overall, preDiff: 1,
+    valueNow: walker(p.playerId) / 10, expected: 40 - (p.overall - 1), valuePre: 1, value: 3,
   }));
   for (const r of rows) r.valueDiff = Math.round((r.valueNow - r.expected) * 10) / 10;
-  const pr = R.perfectRows({ rows, curve }, t);
+  const pr = R.perfectRows({ rows, curve: { n: 40, y: upTo40.map((i) => 41 - i) } }, t);
   eq(pr.length, 40, 'perfect rows: one a slot');
   const w = pr[13];
-  eq([w.playerId, w.overall, w.at, w.teamId, w.round, w.from], [1023, 14, 14, 7, 2, 23], 'perfect rows: Walker sits at 14, his team’s, and was taken 23rd');
-  eq([w.valueNow, w.valuePre, w.name, w.now, w.pre], [15, 1, 'M23', 3, 23], 'perfect rows: his own figures go with him');
-  eq(w.expected, 27, 'perfect rows: expected value is read at his new pick (14), not his old one (23)');
-  eq(w.valueDiff, -12, 'perfect rows: Value difference = Value now − that');
-  eq([w.diff, w.preDiff], [11, -9], 'perfect rows: the place differences are from his new pick');
-  const shifted = pr[14];
-  eq([shifted.playerId, shifted.at, shifted.expected, shifted.teamId], [1014, 15, 26, snakePicks[14].teamId], 'perfect rows: a man pushed one later takes the next slot, its team and its expected value');
+  eq([w.playerId, w.overall, w.round, w.teamId, w.from], [1023, 14, 2, 7, 23], 'perfect rows: Walker sits at 14, his team’s, and was taken 23rd');
+  const SLOT = ['overall', 'round', 'roundPick', 'teamId', 'from'];
+  const strip = (r) => Object.fromEntries(Object.entries(r).filter(([k]) => !SLOT.includes(k)));
+  const byId = new Map(rows.map((r) => [r.playerId, r]));
+  eq(pr.filter((r) => JSON.stringify(strip(r)) !== JSON.stringify(strip(byId.get(r.playerId)))).map((r) => r.playerId), [],
+    'perfect rows: every man keeps every number he has on Drafted — expected, Value now, both differences, his pick');
+  eq([w.expected, w.valueDiff, w.at], [18, -3, 23], 'perfect rows: (Walker’s expected value is still the one at pick 23)');
   const tot = R.teamValues(pr, 'valueDiff');
   const want7 = pr.filter((r) => r.teamId === 7).reduce((a, r) => a + r.valueDiff, 0);
-  near(tot.get(7), Math.round(want7 * 10) / 10, 'perfect rows: a team’s total adds up the men in its perfect slots', 1e-9);
-  const noCurve = R.perfectRows({ rows: rows.map((r) => ({ ...r, expected: null, valueDiff: null })), curve: null }, t);
-  eq([noCurve[13].expected, noCurve[13].valueDiff], [null, null], 'perfect rows: no line, no expected value');
+  near(tot.get(7), Math.round(want7 * 10) / 10, 'perfect rows: a team’s total adds up the unchanged numbers of the men in its slots', 1e-9);
 }
 
 console.log(fail ? `\n${fail} failed, ${pass} passed` : `\nAll ${pass} assertions passed`);
