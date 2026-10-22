@@ -667,6 +667,30 @@ const allPast = weekRun({ ...RUN, splitAfter: 20 });
 ok(allPast.cols.every((c) => !c.splitStart), 'A SPLIT PAST THE END OF THE RUN DRAWS NO LINE',
   JSON.stringify(allPast.cols.map((c) => c.splitStart)));
 ok(!allPast.notes.some((n) => /heavy line/.test(n)), 'and explains no line it did not draw');
+
+// ---- THE TRADE DEADLINE LINE (Tim, 2026-10-22, Trade page only) ----------
+// "put the red line between weeks 12 and 13": `deadlineWeek` marks the week
+// the deadline falls in; the line goes on that column (a left edge), once.
+const dl = weekRun({ ...RUN, deadlineWeek: 6 });
+eq(JSON.stringify(dl.cols.filter((c) => c.dlStart).map((c) => c.week)), JSON.stringify([6]),
+  'THE DEADLINE LINE IS ON THE DEADLINE WEEK, and on exactly one column');
+ok(dl.notes.some((n) => n === 'The red line before week 6 is the trade deadline.'),
+  'and the card says so in words', JSON.stringify(dl.notes));
+ok(run.cols.every((c) => c.dlStart === false) && !run.notes.some((n) => /trade deadline/.test(n)),
+  'WITHOUT deadlineWeek (every page but Trade) NO COLUMN CARRIES IT and nothing is said',
+  JSON.stringify(run.cols.map((c) => c.dlStart)));
+const dlPast = weekRun({ ...RUN, deadlineWeek: 3 });
+eq(JSON.stringify(dlPast.cols.filter((c) => c.dlStart).map((c) => c.week)), JSON.stringify([3]),
+  'a deadline already passed still draws its line when the week is in the run');
+ok(weekRun({ ...RUN, deadlineWeek: 12 }).cols.every((c) => !c.dlStart), 'a deadline week past the run draws nothing');
+ok(weekRun({ ...RUN, deadlineWeek: 1 }).cols.every((c) => !c.dlStart),
+  'nor does one on the run\'s first column (a line with nothing to its left)');
+ok(weekRun({ ...RUN, deadlineWeek: null }).cols.every((c) => !c.dlStart) &&
+  weekRun({ ...RUN, deadlineWeek: 0 }).cols.every((c) => !c.dlStart), 'null or 0 draws nothing');
+const dlBoth = weekRun({ ...RUN, deadlineWeek: 5, playoffWeeks: [5, 6, 7, 8] });
+ok(dlBoth.cols[4].dlStart && dlBoth.cols[4].splitStart && dlBoth.cols[4].poStart,
+  'ON THE SAME COLUMN AS THE SPLIT AND PLAYOFF LINES IT KEEPS ITS OWN MARK beside theirs',
+  JSON.stringify(dlBoth.cols[4]));
 ok(allPast.cols.every((c) => !c.bold),
   'and with the whole run in the past, nothing is bold at all — which is the rule, taken to its end');
 const allFuture = weekRun({ ...RUN, splitAfter: null });

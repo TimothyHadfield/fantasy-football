@@ -48,6 +48,9 @@
 //                   THIS context, because it differs: "weeks he makes your best
 //                   lineup" on a man you own, "weeks he would make your best
 //                   lineup after this trade" on a man you are trading for.
+//     `deadlineWeek` a week number, or null. The Trade page only (2026-10-22):
+//                   a red line BEFORE this week (`dl-start`, a left border like
+//                   `po-start`) marks the league's trade deadline.
 //     `heat`        the red/green scale on the Proj row. DEFAULT ON — see "THE
 //                   SCALE ON THE PROJ ROW" below for the argument, and pass
 //                   `heat: false` to suppress it.
@@ -58,6 +61,7 @@
 //     `past`        the week is at or before `splitAfter`
 //     `bold`        the RENDERED decision: `start === true` AND not `past`
 //     `splitStart`  true on the first column after `splitAfter`
+//     `dlStart`     true on the `deadlineWeek` column (never the run's first)
 //     `heat`        `heatOf()` for that week's projection, or null
 //   and the run carries `notes` (the plain-words lines about the chart) and
 //   `scale` (the heat scale the Proj row was measured on, or null).
@@ -532,6 +536,13 @@ export function weekRun({
   // no arrow anywhere — a card that is not about a deal is about nobody.
   vsWeeks = [],
   vsName = '',
+  // THE TRADE DEADLINE (Tim, 2026-10-22: "only in the trade section … a little
+  // red line inside the player's preview between weeks when the trade deadline
+  // hits"). The week the deadline falls in (`accept-by.js` `deadlineWeekOf`);
+  // the red line goes before it, as a left border like `po-start`. Only the
+  // Trade page passes it; null (every other page) draws nothing. A week that is
+  // not in the run, or is its first column, draws nothing either.
+  deadlineWeek = null,
   // DEFAULT ON, and it is a judgement call rather than an oversight.
   //
   // Tim asked for the scale "across the whole cite … trade views, 14 week
@@ -579,6 +590,12 @@ export function weekRun({
     ? Number(splitAfter)
     : null;
   const splitFirst = splitW === null ? undefined : weeks.find((w) => Number(w) > splitW);
+  // The deadline line: on that week's column, unless it is the run's first
+  // (a line with nothing on its left is a line about nothing).
+  const dlW = deadlineWeek !== null && deadlineWeek !== '' && Number.isFinite(Number(deadlineWeek))
+    ? Number(deadlineWeek)
+    : null;
+  const dlFirst = dlW !== null && weeks.findIndex((w) => Number(w) === dlW) > 0 ? dlW : undefined;
 
   // "The caller has an opinion about who starts" is the ARRAY being there, not
   // any particular entry in it: an array of nulls is a caller that looked and
@@ -634,6 +651,7 @@ export function weekRun({
       // every caller: a week already played is never bold.
       bold: start === true && !past,
       splitStart: splitFirst !== undefined && week === splitFirst,
+      dlStart: dlFirst !== undefined && Number(week) === dlFirst,
       heat: proj.kind === 'num' ? heatOf(Number(projections[i]), scale, { what: WHAT }) : null,
     };
   });
@@ -673,6 +691,7 @@ export function weekRun({
   const notes = [];
   if (told && cols.some((c) => c.start !== null)) notes.push(startsLine(startsNote, cols));
   if (splitFirst !== undefined) notes.push(splitLine(splitFirst));
+  if (dlFirst !== undefined) notes.push(`The red line before week ${dlFirst} is the trade deadline.`);
   if (scale) notes.push(heatLine(scale));
   if (cols.some((c) => c.vs)) notes.push(vsLine(vsName, cols));
 
@@ -682,7 +701,7 @@ export function weekRun({
   // than on it: the run's own fields are an API, and tests compare them.
   RUN_ARGS.set(out, {
     heading, weeks, projections, actuals, currentWeek, demo, byeWeek, injuryStatus,
-    playoffWeeks, starts, splitAfter, startsNote, vsWeeks, vsName, heat,
+    playoffWeeks, starts, splitAfter, startsNote, vsWeeks, vsName, deadlineWeek, heat,
   });
   return out;
 }
@@ -1323,6 +1342,7 @@ function lineHtml(cols, vsName = '') {
       c.now ? 'now' : '',
       c.poStart ? 'po-start' : '',
       c.splitStart ? 'split-start' : '',
+      c.dlStart ? 'dl-start' : '',
     ].filter(Boolean).join(' ');
     return cls ? ` class="${cls}"` : '';
   };
@@ -1345,6 +1365,7 @@ function lineHtml(cols, vsName = '') {
       (c.vs ? `<span class="sr-only"> (you play ${esc(vsName || 'him')})</span>` : '') +
       (c.po ? '<span class="sr-only"> (playoffs)</span>' : '') +
       (c.splitStart ? '<span class="sr-only"> (first week still to come)</span>' : '') +
+      (c.dlStart ? `<span class="sr-only"> (trade deadline before week ${c.week})</span>` : '') +
       spoken(c) +
       '</th>').join('');
   // A ruled-out zero stacks its word UNDER the number (`.tc-mk` is a block), so

@@ -722,6 +722,45 @@ async function checkStartsCard(c, document, window) {
       .length >= 1,
     true);
 
+  // --- the trade deadline line (Tim, 2026-10-22; Trade page cards only) ---
+  // "put the red line between weeks 12 and 13": `deadlineWeek: 13` puts it on
+  // week 13's column in all three rows, wherever the wrap falls.
+  const dlCard = await openHandRun(document, window, {
+    heading: 'Sample projections for weeks 1–16',
+    weeks, projections, actuals: [], currentWeek: 5, splitAfter: 5,
+    starts, playoffWeeks: [14, 15, 16], deadlineWeek: 13,
+  });
+  const dlEls = [...dlCard.querySelectorAll('.tc-run .dl-start')];
+  const dlHead = dlEls.find((el) => el.tagName === 'TH');
+  c.ok('THE DEADLINE LINE IS ON WEEK 13 IN ALL THREE ROWS AND NOWHERE ELSE',
+    dlEls.length === 3 && dlEls.filter((el) => el.tagName === 'TH').length === 1 &&
+    !!dlHead && parseInt(dlHead.textContent, 10) === 13,
+    dlEls.map((el) => `${el.tagName}:${el.textContent.trim()}`).join(' ') || 'no dl-start anywhere');
+  c.ok('and a screen reader hears "trade deadline before week 13"',
+    !!dlHead && /\(trade deadline before week 13\)/.test(srText(dlHead)) &&
+      /red line before week 13 is the trade deadline/.test(srText(dlCard)),
+    dlHead ? srText(dlHead) : 'no head');
+  c.ok('drawn red, as an inset left edge that leaves the grey lines alone',
+    /\.tc-run th\.dl-start, \.tc-run td\.dl-start \{ box-shadow: inset 2px 0 0 var\(--err\); \}/
+      .test(readFileSync(path.join(REPO, 'css/app.css'), 'utf8')),
+    'no dl-start rule in css/app.css');
+  const dlPo = await openHandRun(document, window, {
+    heading: 'Sample projections for weeks 1–16',
+    weeks, projections, actuals: [], currentWeek: 5, splitAfter: 5,
+    starts, playoffWeeks: [14, 15, 16], deadlineWeek: 14,
+  });
+  const dlPoHead = [...dlPo.querySelectorAll('.tc-run th.dl-start')];
+  c.ok('ON THE PLAYOFF COLUMN IT CARRIES BOTH MARKS (grey border + red edge) and the PO tag',
+    dlPoHead.length === 1 && dlPoHead[0].classList.contains('po-start') && /PO/.test(dlPoHead[0].textContent),
+    dlPoHead.map((el) => el.className).join('|'));
+  const noDlCard = await openHandRun(document, window, {
+    heading: 'Sample projections for weeks 1–16',
+    weeks, projections, actuals: [], currentWeek: 5, splitAfter: 13,
+    starts, playoffWeeks: [14, 15, 16],
+  });
+  const noDl = [...noDlCard.querySelectorAll('.dl-start')];
+  c.eq('a run passed no deadlineWeek (every page but Trade) draws no deadline line', noDl.length, 0);
+
   // --- the scale on the Proj row -----------------------------------------
   const heated = handColumns(together).filter((k) => /\bheat\b/.test(k.cls(k.proj)));
   c.ok('THE PROJ ROW CARRIES THE RED/GREEN SCALE', heated.length > 0,
@@ -890,6 +929,9 @@ async function check(scenario, { document, window, errors, rejections }) {
     cell.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
     const hover = document.getElementById('tipCard');
     c.ok('hovering still opens the card', hover && !hover.hidden, 'no card on mouseover');
+    c.ok('an Analysis card carries no trade-deadline line (Trade page only, 2026-10-22)',
+      !!hover && hover.querySelectorAll('.dl-start').length === 0 && !/trade deadline/.test(srText(hover)),
+      'a dl-start reached the Analysis page');
     if (hover) {
       c.eq('as a tooltip, not a sheet', hover.getAttribute('role'), 'tooltip');
       c.eq('with no sheet class', hover.classList.contains('sheet'), false);

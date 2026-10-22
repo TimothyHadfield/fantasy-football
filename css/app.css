@@ -639,6 +639,13 @@ th.po-start, td.po-start,
  * in a wrapped run; a page table that wanted the same line would use
  * `po-start`'s unscoped pair above. */
 .tc-run th.split-start, .tc-run td.split-start { border-left: 2px solid var(--dim); }
+/* THE TRADE DEADLINE (Tim, 2026-10-22: "a little red line inside the player's
+ * preview between weeks when the trade deadline hits"), Trade page cards only.
+ * On the first column of the deadline week, all three rows, so it survives the
+ * wrap like the lines above. An inset shadow rather than a border: when the
+ * same column also carries the grey playoff or split border, both still show
+ * (grey edge, red just inside it) instead of one replacing the other. */
+.tc-run th.dl-start, .tc-run td.dl-start { box-shadow: inset 2px 0 0 var(--err); }
 
 /* THE WEEKS HE STARTS. Bold, as Tim asked — and because NEVER COLOUR OR WEIGHT
  * ALONE is the rule here, also underlined in the accent colour, which is a cue

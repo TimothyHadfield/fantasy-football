@@ -15,7 +15,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { REPO } from './repo.mjs';
 
-const { acceptBy } = await import(pathToFileURL(path.join(REPO, 'js/accept-by.js')).href);
+const { acceptBy, deadlineWeekOf } = await import(pathToFileURL(path.join(REPO, 'js/accept-by.js')).href);
 const espn = await import(pathToFileURL(path.join(REPO, 'js/espn.js')).href);
 
 let pass = 0;
@@ -125,6 +125,45 @@ eq(espn.parseProKickoffs(payload), { 2: { 3: 1790528400000, 4: BUF4, 5: BUF5 } }
   'parseProKickoffs: earliest game per week, no entry for a bye or a dateless game, no FA, no team without games');
 eq(espn.parseProKickoffs(null), {}, 'a missing payload is {} (unknown)');
 eq(espn.parseProKickoffs({ settings: {} }), {}, 'no proTeams is {}');
+
+// ---- THE WEEK THE TRADE DEADLINE FALLS IN (Tim, 2026-10-22) ---------------
+// "my league settings have it at Dec 2nd, which is during week 13, so put the
+// red line between weeks 12 and 13". Rule: the first week whose LAST kickoff is
+// at or after the deadline. 2026: week 1 opens Thu Sep 10; week n's Thursday
+// game is 7(n-1) days later at 00:15 UTC Fri, its Sunday games 17:00 UTC, its
+// Monday game 00:15 UTC Tue. Three teams: Thursday, Sunday, Monday.
+ok(typeof deadlineWeekOf === 'function', 'accept-by exports deadlineWeekOf');
+if (typeof deadlineWeekOf === 'function') {
+  const thu = (n) => Date.UTC(2026, 8, 11, 0, 15) + 7 * (n - 1) * D;   // Thu 8:15 pm ET
+  const sun = (n) => Date.UTC(2026, 8, 13, 17, 0) + 7 * (n - 1) * D;   // Sun 1 pm ET
+  const mon = (n) => Date.UTC(2026, 8, 15, 0, 15) + 7 * (n - 1) * D;   // Mon 8:15 pm ET
+  const season = { 1: {}, 2: {}, 3: {} };
+  for (let n = 1; n <= 18; n++) {
+    season[1][n] = thu(n);
+    if (n !== 9) season[2][n] = sun(n);    // team 2 on bye in week 9
+    season[3][n] = mon(n);
+  }
+  eq(new Date(thu(13)).toISOString().slice(0, 10), '2026-12-04', 'fixture: week 13 Thursday game is Dec 3 ET (Dec 4 UTC)');
+  eq(new Date(mon(12)).toISOString().slice(0, 10), '2026-12-01', 'fixture: week 12 ends Mon Nov 30 ET (Dec 1 UTC)');
+  const dec2 = Date.UTC(2026, 11, 2, 17, 0);   // Wed Dec 2 2026, noon ET
+  eq(deadlineWeekOf({ deadline: dec2, kickoffs: season }), 13, "TIM'S EXAMPLE: a Dec 2 deadline is week 13 (line between 12 and 13)");
+  eq(deadlineWeekOf({ deadline: sun(13) + 3 * H, kickoffs: season }), 13,
+    'a deadline on the Sunday of week 13 is still week 13');
+  eq(deadlineWeekOf({ deadline: mon(13) + H, kickoffs: season }), 14,
+    'one after week 13\'s last kickoff belongs to week 14');
+  eq(deadlineWeekOf({ deadline: mon(12), kickoffs: season }), 12, 'exactly at week 12\'s last kickoff is week 12');
+  eq(deadlineWeekOf({ deadline: Date.UTC(2026, 7, 1), kickoffs: season }), 1, 'a preseason deadline is week 1');
+  eq(deadlineWeekOf({ deadline: mon(18) + D, kickoffs: season }), null, 'after every known game: null (no line)');
+  eq(deadlineWeekOf({ deadline: null, kickoffs: season }), null, 'no deadline: null');
+  eq(deadlineWeekOf({ deadline: 0, kickoffs: season }), null, 'a 0 deadline (ESPN unset): null');
+  eq(deadlineWeekOf({ deadline: dec2, kickoffs: {} }), null, 'no kickoffs known: null, never a guessed week');
+  eq(deadlineWeekOf({ deadline: dec2, kickoffs: null }), null, 'kickoffs missing: null');
+  eq(deadlineWeekOf({ deadline: dec2, kickoffs: { 2: { 13: sun(13) } } }), 13,
+    'one team is enough');
+  eq(deadlineWeekOf({ deadline: dec2, kickoffs: { 1: { 12: thu(12), 13: thu(13) }, 3: { 12: mon(12) } } }), 13,
+    'the week\'s LAST kickoff decides, across teams (week 12 ends before Dec 2)');
+  eq(deadlineWeekOf({ deadline: sun(9) + H, kickoffs: season }), 9, 'a bye on one team does not move the week');
+}
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

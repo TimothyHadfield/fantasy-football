@@ -2997,6 +2997,35 @@ SCENARIOS.acceptBy = async function acceptByScenario() {
 };
 
 /**
+ * THE TRADE DEADLINE LINE ON THE CARDS (Tim, 2026-10-22: "only in the trade
+ * section ... a little red line inside the player's preview between weeks when
+ * the trade deadline hits"). Opens a man's card from the trade list and reads
+ * which week columns carry `dl-start`, in every row of the run.
+ */
+SCENARIOS.deadlineCard = async function deadlineCard() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  await settleGoal(document);
+  // The kickoffs land behind the page; give them a beat, as the page does.
+  await settle(300);
+  const card = openCard(document, '#tradeTable .man[data-tip]');
+  const el = document.getElementById('tipCard');
+  const lined = el ? [...el.querySelectorAll('.tc-run .dl-start')] : [];
+  return {
+    errors,
+    opened: !!card && !card.hidden,
+    weeks: card ? card.weeks : [],
+    dlHeads: lined.filter((x) => x.tagName === 'TH').map((th) => Number((text(th).match(/^\d+/) || ['0'])[0])),
+    dlCells: lined.length,
+    sr: lined.filter((x) => x.tagName === 'TH').map((th) => (th.querySelector('.sr-only:last-of-type') || {}).textContent || '')
+      .concat(el ? [...el.querySelectorAll('.sr-only')].map((x) => x.textContent).filter((t) => /trade deadline/.test(t)) : []),
+  };
+};
+
+/**
  * ONE WEEK FOR BOTH SLOT-BY-SLOT PANELS (Tim, 2026-09-29: "it shows different
  * numbers in different places for the same player ... need to be consistient
  * and accurate in every place"). The halves of the custom box used to keep a
@@ -7413,6 +7442,35 @@ if (!live.boot) {
   ok('demo: the custom box\'s "Accept by" is hidden', d.before.hidden && d.after.hidden, dump([d.before, d.after]));
   } catch (e) {
     ok('the accept-by checks ran to the end without throwing', false, String(e && e.stack).slice(0, 300));
+  }
+}
+
+// ---- the trade deadline line on the cards (Tim, 2026-10-22) -----------------
+//
+// "only in the trade section, could you add a little red line inside the
+// player's preview between weeks when the trade deadline hits". Stub kickoffs:
+// pro team t plays week w at K + (w − 5)·7 d + (t − 1) d, so week w's LAST game
+// is K + (w − 5)·7 d + 3 d. A deadline at K + 12 d is after week 6's last game
+// (K + 10 d) and before week 7's (K + 17 d): week 7, the line between 6 and 7.
+{
+  const DAY = 86400000;
+  const K = Date.now() + 3 * DAY;
+  const dump = (x) => JSON.stringify(x).slice(0, 400);
+  try {
+    const a = run('deadlineCard', { stub: true, env: { TR_KICKOFFS: String(K), TR_DEADLINE: String(K + 12 * DAY) } });
+    ok('deadline card boots, no errors', a.errors.length === 0, dump(a.errors));
+    ok('deadline card: a card opened from the trade list', a.opened && a.weeks.length > 7, dump(a));
+    ok('THE RED LINE IS ON WEEK 7 (between 6 and 7), once', JSON.stringify(a.dlHeads) === '[7]', dump(a));
+    ok('in all three rows of the card (week, proj, act)', a.dlCells === 3, dump(a));
+    ok('and a screen reader hears "trade deadline before week 7"',
+      a.sr.some((t) => /\(trade deadline before week 7\)/.test(t)) && a.sr.some((t) => /red line before week 7 is the trade deadline/.test(t)),
+      dump(a.sr));
+    const n = run('deadlineCard', { stub: true, env: { TR_KICKOFFS: String(K) } });
+    ok('no deadline set: no red line anywhere', n.opened && n.dlCells === 0, dump(n));
+    const late = run('deadlineCard', { stub: true, env: { TR_KICKOFFS: String(K), TR_DEADLINE: String(K + 400 * DAY) } });
+    ok('a deadline after every game: no red line', late.opened && late.dlCells === 0, dump(late));
+  } catch (e) {
+    ok('the deadline-card checks ran to the end without throwing', false, String(e && e.stack).slice(0, 300));
   }
 }
 
