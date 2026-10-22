@@ -512,10 +512,76 @@ const ZERO = weekRun({
   weeks: [1, 2, 3], projections: [0, 20, 40], actuals: [], byeWeek: 9, injuryStatus: null,
 });
 eq(ZERO.cols[0].proj.kind, 'num', 'a 0.00 that is neither a bye nor a ruled-out man is a number');
-eq(ZERO.scale.n, 3, 'AND IT COUNTS: the group is all three weeks, not the two that are not zero');
+// Tim, 2026-10-22: the centre is his weeks to come "that are not 0", so the 0
+// is left out of the AVERAGE — but it is still placed and painted on the scale.
+eq(ZERO.scale.n, 2, 'THE CENTRE LEAVES THE 0.0 OUT: it averages the two weeks above zero');
+close(ZERO.scale.mean, 30, 1e-9, 'so the centre is 30, not 20');
 ok(ZERO.cols[0].heat && ZERO.cols[0].heat.dir === -1,
   'and it paints as the worst week it is, rather than being quietly left out',
   JSON.stringify(ZERO.cols[0].heat));
+eq(ZERO.cols[0].heat.of, 3, 'and it is still ranked among all three weeks');
+
+// ---- THE CENTRE IS HIS WEEKS STILL TO COME (Tim, 2026-10-22) -------------
+//
+// "make it so that the base number everything is being judged off of is just
+// future proj weeks that are not 0? then all past weeks are still colored,
+// just based on that future number, not including the past ones."
+//
+// Weeks 1–4 played at big projections (30, 28, 32, 30); weeks 5–9 to come at
+// 12, 14, a real 0.0, 16, and his bye (week 9, 0.0). Future weeks above 0 are
+// 12, 14, 16: mean 14, sd 2 by hand. The old scale averaged every numbered week
+// (20.25), so his 12 sat near the middle instead of at the red end.
+const { restProjAvg } = await import('../js/value.js');
+const FUT = {
+  weeks: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  projections: [30, 28, 32, 30, 12, 14, 0, 16, 0],
+  actuals: [25, 30, 31, 29, null, null, null, null, null],
+  currentWeek: 5, splitAfter: 4, byeWeek: 9, injuryStatus: null,
+};
+const fut = weekRun(FUT);
+close(fut.scale.mean, 14, 1e-9, 'THE CENTRE IS THE AVERAGE OF HIS FUTURE WEEKS ABOVE 0 (12, 14, 16)');
+close(fut.scale.sd, 2, 1e-9, 'and the spread is those same three weeks’');
+eq(fut.scale.n, 3, 'over three weeks: the past, the 0.0 and the bye are all left out');
+eq(fut.scale.base, 'future', 'and the scale says it is centred on the weeks to come');
+const futMap = Object.fromEntries(FUT.weeks.map((w, i) => [w, FUT.projections[i]]));
+close(restProjAvg(futMap, [5, 6, 7, 8, 9], 9), fut.scale.mean, 1e-9,
+  'THE SAME NUMBER AS THE CARD’S “Proj” (value.js restProjAvg over the weeks left)');
+ok(fut.cols.slice(0, 4).every((c) => c.heat && c.heat.cls === 'heat heat-up-4'),
+  'PAST WEEKS ARE STILL COLOURED, against the future centre: his 28–32 weeks are full green',
+  JSON.stringify(fut.cols.map((c) => c.heat && c.heat.cls)));
+eq(fut.cols[4].heat.cls, 'heat heat-dn-4', 'his 12 to come is a full red week against 14 ± 2');
+eq(fut.cols[5].heat.cls, 'heat heat-0', 'his 14 is the average, uncoloured');
+eq(fut.cols[7].heat.cls, 'heat heat-up-4', 'his 16 is full green');
+ok(fut.cols[6].heat && fut.cols[6].heat.dir === -1, 'the real 0.0 is still painted red');
+eq(fut.cols[8].heat, null, 'the bye is not on the scale at all');
+ok(/his own weeks to come/.test(fut.cols[4].heat.words), 'the cell’s words name the new group',
+  fut.cols[4].heat.words);
+const futNote = fut.notes.find((n) => /Colour on the Proj row/.test(n));
+ok(/average of 14\.0 over the 3 weeks still to come/.test(futNote) && /already played/.test(futNote),
+  'THE KEY LINE SAYS THE CENTRE IS HIS WEEKS TO COME, and that played weeks use it too', futNote);
+
+// No split: the card's own builder passes currentWeek only — that week and on are to come.
+const byNow = weekRun({ weeks: [1, 2, 3, 4, 5, 6], projections: [30, 30, 30, 10, 12, 14], actuals: [], currentWeek: 4 });
+close(byNow.scale.mean, 12, 1e-9, 'WITH NO SPLIT, currentWeek decides: weeks 4–6 average 12');
+// … less the current week once he has a score in it (the card's "Proj" counts open weeks only).
+const doneNow = weekRun({ weeks: [1, 2, 3, 4, 5, 6], projections: [30, 30, 30, 10, 12, 14], actuals: [20, 20, 20, 9, null, null], currentWeek: 4 });
+close(doneNow.scale.mean, 13, 1e-9, 'A FINISHED CURRENT WEEK IS PAST: weeks 5–6 average 13');
+
+// One future week: its number is the centre, the spread falls back to every numbered week.
+const ONE = { weeks: [1, 2, 3, 4], projections: [10, 20, 30, 25], actuals: [], splitAfter: 3 };
+const one = weekRun(ONE);
+close(one.scale.mean, 25, 1e-9, 'ONE WEEK TO COME: the centre is that week (25)');
+close(one.scale.sd, heatScale([10, 20, 30, 25]).sd, 1e-9, 'and the spread is every numbered week’s, so he is still coloured');
+ok(one.cols[0].heat && one.cols[0].heat.dir === -1, 'his 10 in the past is red against 25');
+
+// No future week above 0: the old scale, unchanged.
+const none = weekRun({ weeks: [1, 2, 3, 4, 5, 6], projections: [15, 15, 20, 25, 25, 0], actuals: [], splitAfter: 5,
+  injuryStatus: [null, null, null, null, null, 'OUT'], byeWeek: 12 });
+close(none.scale.mean, 20, 1e-9, 'NO WEEK TO COME ABOVE 0: the centre is every numbered week, as before');
+close(none.scale.sd, 5, 1e-9, 'with the spread as before');
+eq(none.scale.base, undefined, 'and it is the plain heatScale object');
+ok(/average of 20\.0 over the 5 weeks with a number\./.test(none.notes.find((n) => /Colour on/.test(n))),
+  'and the key line is the old one', none.notes.join(' | '));
 
 // ---- THE SCALE CAN BE SUPPRESSED, AND THEN NOTHING OF IT REMAINS ---------
 const off = weekRun({ ...STATES, heat: false });
