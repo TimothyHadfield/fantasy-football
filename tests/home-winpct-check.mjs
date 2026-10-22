@@ -666,8 +666,13 @@ for (const league of Object.keys(LEAGUES)) {
     // Value's weeks. The NFL schedule is left out of the count: this stub
     // answers it with no teams, which is never kept, so it is asked again by
     // each reader that wants the byes.
-    ok(`${tag} Home makes ${L.quoted + 2} league requests of its own, as it did before the cards, and Value's ${valueWeeks.length}`,
-      league.length === L.quoted + 2 + valueWeeks.length, JSON.stringify(home.reads));
+    // Since 2026-10-22 (pending moves) Home also asks once for what is waiting
+    // on ESPN (`mPendingTransactions`, the "This week" panel's pending lines):
+    // exactly one such read, and it is the only addition.
+    const waiting = home.reads.filter((r) => /mPendingTransactions/.test(r));
+    ok(`${tag} Home asks once for the pending moves`, waiting.length === 1, JSON.stringify(home.reads));
+    ok(`${tag} Home makes ${L.quoted + 2} league requests of its own, as it did before the cards, the pending moves' 1 and Value's ${valueWeeks.length}`,
+      league.length === L.quoted + 2 + 1 + valueWeeks.length, JSON.stringify(home.reads));
   }
 
   // The basis is stated, with the spread's real source.
