@@ -181,11 +181,14 @@ import {
 // its weeks through js/who-to-start.js, configured below on this page's weeks.
 import {
   configure as configureWeeks, spanWeeks as gridWeeks, leagueSlots as gridSlots,
+  weeklyFills as gridFills, isPlayoff as gridPlayoff, cardAttr as gridCardAttr, withCard as gridWithCard,
 } from './who-to-start.js';
 import {
   configure as configureProjAvg, gridHtml, keyItems, keyHtml, heatBandsHtml,
-  projAvgWeeks, projAvgSeasonOver,
+  projAvgWeeks, projAvgSeasonOver, standingFoot,
 } from './proj-avg-grid.js';
+// DEPTH (Tim, 2026-10-22), the grid's first number column: js/depth.js.
+import { teamDepth } from './depth.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('trade');
@@ -3116,6 +3119,46 @@ configureWeeks({
 });
 configureProjAvg({ floors: () => state.floors });
 
+// DEPTH (Tim, 2026-10-22): "could you add a column on the left titled "depth"
+// that is the combined current value of the players on that team that start
+// less than 20% of the remaining games of the season?" Right after Team. A man
+// "starts" in a week when he is in that week's best legal lineup — the very
+// fills the slot columns average — over the regular-season weeks still to come
+// (`projAvgWeeks`); his Value is the one on his card (`valueLookup`). The
+// arithmetic is js/depth.js. A dash until the Value lines are in.
+function depthColumn(teams, rows, slots, weeks) {
+  const ahead = projAvgWeeks(weeks).filter((w) => !gridPlayoff(w));
+  const fills = gridFills(rows, slots, weeks);
+  const lookup = typeof valueLookup === 'function' ? valueLookup : null;
+  const byTeam = new Map(teams.map((t) => [t.id, teamDepth(t.players || [], fills, ahead, t.id, lookup)]));
+  const scale = heatScale(teams.map((t) => { const d = byTeam.get(t.id); return d ? d.value : null; }));
+  const head = `<th class="depth" data-sort title="The Value of this squad's men who start in ` +
+    `fewer than 20% of the regular-season weeks still to come.">Depth</th>`;
+  const cell = (t) => {
+    const d = byTeam.get(t.id);
+    if (!d || d.value === null) {
+      return `<td class="depth muted" title="${esc(d ? 'No Value lines read yet.' : 'No week read yet.')}">—</td>`;
+    }
+    const h = heatOf(d.value, scale, { what: 'the other squads’ depth' });
+    const names = d.men.map((m) => m.name).join(', ');
+    const says = `${t.name}'s depth is ${fmt(d.value)} of Value: ` +
+      (d.men.length ? `${names}${names.endsWith('.') ? '' : '.'}` : 'nobody, every man starts in 20% of the weeks or more.');
+    const spec = {
+      title: t.name,
+      sub: `Depth · started in under 20% of ${d.weeks} week${d.weeks === 1 ? '' : 's'}`,
+      rows: d.men.map((m) => ({ label: m.name, note: `${m.starts}/${d.weeks}`, value: m.value })),
+      total: { label: 'Depth', value: d.value },
+      foot: standingFoot(h),
+      href: teamHref(t.id),
+      hrefLabel: 'Open roster',
+    };
+    return gridWithCard(`<td class="depth${h ? ` ${h.cls}` : ''}" data-v="${d.value}" ` +
+      `title="${esc(says + (h ? ` ${h.words}` : ''))}">${fmt(d.value)}${heatMarkHtml(h)}</td>`,
+    gridCardAttr(spec, 'pa', false));
+  };
+  return { head, cell, band: ['Depth', scale] };
+}
+
 let projAvgShape = null;
 function renderProjAvg() {
   const table = $('projAvgTable');
@@ -3149,14 +3192,16 @@ function renderProjAvg() {
     // other table this page draws.
     rowClass: (t) => (t.id === state.myTeamId ? 'me' : ''),
     prefix: 'pa',
+    lead: depthColumn(teams, rows, slots, weeks),
   });
   table.querySelector('thead').innerHTML = g.head;
   bodyOf(table).innerHTML = g.body;
   // Opened on its Total, best first, as on the Analysis page; after that a
-  // column the reader picked is kept across repaints.
+  // column the reader picked is kept across repaints. Total sits after Team,
+  // Depth and the slots.
   const shape = `pa:${rows.length}`;
   enableSort(table); // once; a no-op after the first call
-  if (projAvgShape !== shape) { projAvgShape = shape; sortBy(table, rows.length + 1, false); } else resort(table);
+  if (projAvgShape !== shape) { projAvgShape = shape; sortBy(table, rows.length + 2, false); } else resort(table);
 
   $('projAvgLegend').innerHTML = keyHtml(keyItems(bodyOf(table), g.bandCols),
     'Tap or hover a number for who fills that slot');

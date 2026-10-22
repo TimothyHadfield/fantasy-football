@@ -5256,8 +5256,9 @@ if (!fresh.boot) {
   ok('exactly one row is marked as yours',
     fresh.grid.rows.filter((r) => r.me).length === 1,
     `${fresh.grid.rows.filter((r) => r.me).length} marked`);
-  eq(fresh.grid.heads.join(','), 'Team,QB,RB1,RB2,WR1,WR2,TE,FLEX,D/ST,K,Total',
-    'one column per lineup slot the league starts, then the Total — the Analysis grid’s columns');
+  // Depth after Team (Tim, 2026-10-22), Trade only; tests/tr-depth-check.mjs.
+  eq(fresh.grid.heads.join(','), 'Team,Depth,QB,RB1,RB2,WR1,WR2,TE,FLEX,D/ST,K,Total',
+    'Depth, then one column per lineup slot the league starts, then the Total — the Analysis grid’s columns');
   ok('every slot cell prints a number', fresh.grid.rows.every((r) =>
     r.cells.length === 9 && r.cells.every((c) => c.v !== null && c.v !== '' && /^\d/.test(c.text))),
     JSON.stringify(fresh.grid.rows[0]));
@@ -7051,7 +7052,9 @@ if (!live.boot) {
     const right = teMean(unplayed);
     const wrong = teMean(withPlayed);
     const cyRow = live.after.grid.rows.find((r) => r.team === 'Cy');
-    const teAt = live.after.grid.heads.indexOf('TE') - 1;
+    // `cells` are the slot cells only: counted from the first slot (QB), not
+    // from Team, since Depth sits between them (2026-10-22).
+    const teAt = live.after.grid.heads.indexOf('TE') - live.after.grid.heads.indexOf('QB');
     const shown = cyRow && teAt >= 0 ? Number(cyRow.cells[teAt].v) : NaN;
     ok('ALL TEAMS: Cy’s TE slot is averaged over the weeks still to come',
       Number.isFinite(shown) && right !== null && Math.abs(shown - right) <= 0.05,

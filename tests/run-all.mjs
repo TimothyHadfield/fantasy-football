@@ -149,6 +149,8 @@ const SUITES = [
   ['tr-send-after-check.mjs', 'Trade: Send now / after week N in the custom box — the weeks up to N unchanged, every figure over the weeks after it, kept on a saved trade'],
   ['tr-fixes-check.mjs', 'Trade: Ask AI offers let go on repaint, focus back on what opened the pop-up, Enter on a saved row (sweep 2026-10-16 rows 5, 15, 16)'],
   ['tr-value-check.mjs','Trade: the Proj | Value switch on the custom lists, the season boxes and the assumed trade, and Value on its player cards'],
+  ['test-depth.mjs', 'Depth on the Trade grid: men who start in under 20% of the weeks left (exactly 20% is not), their Values added'],
+  ['tr-depth-check.mjs', 'Trade: the All teams grid’s Depth column after Team, its totals by hand from the stub, a dash with no Value lines'],
   ['tr-yes-check.mjs', 'Trade: will he say yes as a word (likely / maybe / unlikely) on every row, the pop-up and the custom box, its preview adding up, his lineup input flat'],
   ['test-notify-trades.mjs', 'Trade keeps its best deals for Notifications: both printed gains above zero, the page’s order, three at most, written when the list is final and never for demo, an earlier season or another squad'],
   ['decisions-check.mjs', 'the decisions review page: a squad’s decisions, the weekly totals and the flipped matchup with one undone, the three charts beside their hypotheticals, noise, a what-if trade'],
