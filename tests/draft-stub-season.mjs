@@ -20,6 +20,10 @@ import { DEFAULT_PPR } from '../js/proj-trend.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FX = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-players-1241838-2026.json'), 'utf8'));
 
+// DR_UNDRAFTED=1: the squads also carry the men nobody drafted (draft-stub-undrafted.mjs).
+const { UNDRAFTED } = await import('./draft-stub-undrafted.mjs');
+const MEN = process.env.DR_UNDRAFTED === '1' ? { ...FX.players, ...UNDRAFTED } : FX.players;
+
 const calls = (globalThis.__dr = globalThis.__dr || { draft: 0, players: 0, playerIds: 0, schedule: 0, squads: 0, byes: 0 });
 const CLOUD = process.env.DR_CLOUD === '1';
 const FINISHED = new Set(FX.finished);
@@ -58,7 +62,7 @@ const season = (p) => Object.values(p.weeks).reduce((a, [proj]) => a + (proj || 
 
 function squads(week) {
   return FX.teams.map((t) => {
-    const mine = Object.entries(FX.players).filter(([, p]) => p.onTeamId === t.id)
+    const mine = Object.entries(MEN).filter(([, p]) => p.onTeamId === t.id)
       .map(([id, p]) => ({ id: Number(id), p })).sort((a, b) => season(b.p) - season(a.p));
     const slotOf = new Map();
     for (const [pos, slot, n] of LINEUP) mine.filter((m) => m.p.position === pos).slice(0, n).forEach((m) => slotOf.set(m.id, slot));

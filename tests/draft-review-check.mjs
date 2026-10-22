@@ -118,6 +118,24 @@ async function boot({ store = {}, stubs = true } = {}) {
       // The box the board sits in, and the panel that box is in (its height is the stylesheet's).
       boardBox: [board.parentNode.className, board.parentNode.parentNode.id],
       ownPids: [...board.querySelectorAll('tbody td.dr-own')].map((td) => (td.querySelector('.dr-why') ? td.querySelector('.dr-why').dataset.pid : null)),
+      // NOT DRAFTED ("Own now" only): its label row, and each of its rows' cells, empty ones as null.
+      und: (() => {
+        const head = board.querySelector('tbody tr.dr-und-head');
+        const trs = [...board.querySelectorAll('tbody tr.dr-und-row')];
+        const all = [...board.querySelectorAll('tbody tr')];
+        return {
+          head: head ? { index: all.indexOf(head), label: text(head.querySelector('.dr-und-label')), span: head.querySelector('.dr-und-label').getAttribute('colspan') } : null,
+          rows: trs.map((tr) => ({
+            index: all.indexOf(tr), rd: text(tr.querySelector('.dr-rd')), avg: text(tr.querySelector('.dr-avg')),
+            cells: [...tr.querySelectorAll('td.dr-cell')].map((td) => (td.querySelector('.dr-why') ? {
+              team: td.dataset.team, pid: td.querySelector('.dr-why').dataset.pid, went: text(td.querySelector('.dr-went')),
+              d: text(td.querySelector('.dr-d')).replace(/[▲▼\s]/g, ''), name: text(td.querySelector('.dr-name')),
+              heat: (td.className.match(/heat-(?:up|dn)-\d|heat-0/) || [''])[0],
+              card: td.querySelector('.dr-name').hasAttribute('data-tip'), own: td.classList.contains('dr-own'),
+            } : { team: td.dataset.team, empty: true })),
+          })),
+        };
+      })(),
       ownOther: board.querySelectorAll('.dr-own:not(td.dr-cell)').length,
       boardOwn: board.classList.contains('dr-own-on'),
       // Every cell of the board as drawn, the box classes left out: flipping the switch must change none of it.
@@ -562,6 +580,43 @@ const CHILDREN = {
     };
   },
 
+  // THE TOTALS FOLLOW THE BOX AND THE VIEW, and the men nobody drafted sit
+  // under the last round on "Own now" (Tim, 2026-10-22). DR_UNDRAFTED=1 puts
+  // them on the squads. Team 3 picked; every view in both boxes.
+  async totals() {
+    const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live', 'draft.team.1241838-2026': 3 }, 'ff.connection': CONN } });
+    const ok = await p.settle('live');
+    const click = (sel) => p.fire(p.document.querySelector(sel), 'click');
+    const pages = {};
+    for (const box of ['drafted', 'own']) {
+      click(`#boxToggle button[data-box="${box}"]`);
+      for (const k of ['now', 'exp', 'val', 'pre']) {
+        click(`#compareToggle button[data-compare="${k}"]`);
+        pages[`${box}.${k}`] = p.read();
+      }
+    }
+    // On Own now, Value now: an undrafted man's number and his name open their cards.
+    click('#compareToggle button[data-compare="now"]');
+    const und = p.document.querySelector('#draftBoard td.dr-und .dr-why');
+    const undPid = und ? und.dataset.pid : null;
+    let undPop = null;
+    let undCard = null;
+    if (und) {
+      p.fire(und, 'mouseover');
+      undPop = p.read().pop;
+      p.fire(und, 'mouseout');
+      const name = und.closest('td').querySelector('.dr-name');
+      p.fire(name, 'mouseover');
+      const c = p.$('tipCard');
+      undCard = c && !c.hidden ? text(c.querySelector('.tc-value')) : null;
+      p.fire(name, 'mouseout');
+    }
+    // Back to Drafted: the block is gone again.
+    click('#boxToggle button[data-box="drafted"]');
+    const back = p.read();
+    return { ok, pages, undPid, undPop, undCard, back, calls: p.calls(), fetches: p.fetchCalls.filter((u) => /espn/i.test(u)), errors: p.errors };
+  },
+
   // …AND REMEMBERED: a page opened with the choice stored.
   async ownKept() {
     const p = await boot({ store: { 'ff.prefs': { 'draft.source': 'live', 'draft.team.1241838-2026': 3, 'draft.box': 'own' }, 'ff.connection': CONN } });
@@ -679,9 +734,11 @@ function checkAvg(page, name, figure, said, rounds) {
   const scale = HEAT.heatScale(means);
   eq(a.rows.map((c) => c && c.heat), means.map((m) => heatCls(m === null ? null : HEAT.heatOf(m, scale))), `${name}: coloured against the other rounds’ averages`);
   if (page.totalRow) {
-    const totals = page.totalRow.cells.map((c) => Number(c.v));
+    // (On Value difference the totals are differences, signed as its cells are: 2026-10-22.)
+    const totals = page.totalRow.cells.map((c) => Number(c.v.replace('−', '-').replace('+', '')));
+    const mean = r1(totals.reduce((s, v) => s + v, 0) / totals.length);
     eq(a.total && [a.total.index, a.total.v, a.total.heat, a.total.boxed, a.total.team],
-      [1, r1(totals.reduce((s, v) => s + v, 0) / totals.length).toFixed(1), '', false, false], `${name}: in the totals row it is the mean of the team totals`);
+      [1, said === 'tenthSigned' ? sv(mean) : mean.toFixed(1), '', false, false], `${name}: in the totals row it is the mean of the team totals`);
   } else {
     eq(a.total, null, `${name}: no totals row, so nothing of Avg in one`);
   }
@@ -724,7 +781,7 @@ function checkAvg(page, name, figure, said, rounds) {
     ok(new Set(f.cells.map((c) => c.heat)).size >= 5 && f.cells.every((c) => c.heat), 'demo: the board is on the heat scale, in several steps');
     const tot = f.totalRow;
     eq(tot && [tot.index, tot.label, tot.cells.map((c) => c.team)], [0, 'Value', f.teams.map((t) => t[0])], 'demo: the row of team totals is the first under the headings, a number a team');
-    ok(tot && tot.cells.every((c) => /^\d+\.\d$/.test(c.v) && Number(c.v) > 0), 'demo: each a Value', tot && tot.cells.map((c) => c.v).join(' '));
+    ok(tot && tot.cells.every((c) => /^[+−]?\d+\.\d$/.test(c.v)), 'demo: each a Value difference, signed', tot && tot.cells.map((c) => c.v).join(' '));
     ok(tot && new Set(tot.cells.map((c) => c.heat)).size >= 3, 'demo: coloured against the other teams', tot && tot.cells.map((c) => c.heat).join(' '));
     eq([f.team, f.mineHead, f.mineTeams, f.mineCells], [f.teams[0][0], [f.teams[0][0]], [f.teams[0][0]], 17], 'demo: the first team is picked and its column marked, its total with it');
     checkAvg(f, 'demo, Avg', printed, 'tenthSigned', 16);
@@ -1014,7 +1071,10 @@ function checkAvg(page, name, figure, said, rounds) {
   const players = new Map(plain.rv.rows.map((x) => [x.playerId, { name: x.name, position: x.position, soFar: x.soFar, rest: x.rest, total: x.total }]));
   const rv = R.reviewDraft({ draft, players, slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: VAL.WORTH });
   const byId = new Map(rv.rows.map((x) => [String(x.playerId), x]));
-  const totals = R.teamValues(rv.rows);
+  // On Value difference the totals add up the differences (Tim, 2026-10-22:
+  // "change what number is being added up depending if it's on value
+  // difference, expected value, or value now").
+  const totals = R.teamValues(rv.rows, 'valueDiff');
   const achane = rv.rows.find((x) => x.name === "De'Von Achane");
   const gibbs = rv.rows.find((x) => x.name === 'Jahmyr Gibbs');
   const r = run('value', { FF_VALUE: JSON.stringify(VAL.VALUES), DR_CARDS: `${gibbs.playerId},${achane.playerId}` });
@@ -1040,7 +1100,7 @@ function checkAvg(page, name, figure, said, rounds) {
     const tot = f.totalRow;
     eq(tot && [tot.index, tot.label], [0, 'Value'], 'value: the totals are the first row under the team names');
     eq(f.boardRows, 18, 'value: one row more than the seventeen rounds');
-    eq(tot && tot.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), totals.get(id).toFixed(1)]), 'value: each team’s total is the Value today of the seventeen men it drafted');
+    eq(tot && tot.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), sv(totals.get(id))]), 'value: each team’s total is the sum of the seventeen differences it drafted, signed as they are');
     eq(f.cells.slice(0, 10).map((c) => c.team), draft.order.map(String), 'value: and round one comes straight after it');
     const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
     const heatOfTeam = (id) => tot.cells.find((c) => c.team === String(id)).heat;
@@ -1311,6 +1371,9 @@ function checkAvg(page, name, figure, said, rounds) {
 {
   const VAL = await import('./draft-stub-value.mjs');
   const draft = R.parseDraft(RAW);
+  const RKo = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const plainO = expected(RAW);
+  const rvV = R.reviewDraft({ draft, players: new Map(plainO.rv.rows.map((x) => [x.playerId, x])), slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RKo, worth: VAL.WORTH });
   const draftedBy = (id) => draft.picks.filter((p) => p.teamId === id).map((p) => String(p.playerId));
   const ownedBy = (id) => draft.picks.filter((p) => FX.players[p.playerId] && FX.players[p.playerId].onTeamId === id).map((p) => String(p.playerId));
   const sortS = (a) => [...a].sort();
@@ -1341,13 +1404,22 @@ function checkAvg(page, name, figure, said, rounds) {
     ok(gone.every((pid) => !o.ownPids.includes(pid)), 'own, Own now: and not the three it dropped nor the two now on other squads', gone);
     eq([o.mineCells, o.mineTeams, o.ownOther, o.boardOwn], [0, [], 0, true], 'own, Own now: the column is not boxed, nor its total, nor an empty cell');
     eq([o.mineHead, o.team], [['3'], '3'], 'own, Own now: the team’s heading keeps its mark, and it is still the team picked');
-    // NOTHING ELSE CHANGES.
+    // THE PICKS DO NOT CHANGE; the row of totals does (Tim, 2026-10-22), and
+    // with no man on a squad whom nobody drafted there is no block under them.
+    // (Drawn again, each name's card is registered again under a new number.)
+    const lessTotals = (h) => h.replace(/<tr class="dr-total">[\s\S]*?<\/tr>/, '').replace(/data-tip="dr:\d+"/g, 'data-tip');
     eq(o.cells, d.cells, 'own: every cell’s text and colour is the same in the two states');
-    eq(o.boardHtml === d.boardHtml, true, 'own: the board is the same board to the letter, the box classes apart');
+    eq(lessTotals(o.boardHtml) === lessTotals(d.boardHtml), true, 'own: the board is the same board to the letter, the box classes and the totals apart');
+    eq([o.und.head, o.und.rows], [null, []], 'own: (no undrafted man on a squad here, so no Not drafted block)');
     eq([o.avg.rows.length, [...o.avg.rows, ...d.avg.rows, o.avg.total, d.avg.total, o.avg.head, d.avg.head].filter((c) => !c || c.boxed).length],
       [17, 0], 'own: the Avg column is there and boxed in neither state');
-    eq([o.totalRow.cells.map((c) => [c.team, c.v, c.heat]), o.table, o.tiles, o.note, o.sub],
-      [d.totalRow.cells.map((c) => [c.team, c.v, c.heat]), d.table, d.tiles, d.note, d.sub], 'own: the totals, the team’s table, its tiles and the words are untouched');
+    eq([o.table, o.tiles, o.sub], [d.table, d.tiles, d.sub], 'own: the team’s table, its tiles and the line under the heading are untouched');
+    const sumBy = (team, key, ownNow) => sv(Math.round(rvV.rows.filter((x) => (ownNow ? FX.players[x.playerId].onTeamId : x.teamId) === team)
+      .reduce((a, x) => a + x[key], 0) * 10) / 10);
+    eq(d.totalRow.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), sumBy(id, 'valueDiff', false)]), 'own, Drafted: each total adds up the differences of the men a team drafted');
+    eq(o.totalRow.cells.map((c) => [c.team, c.v]), draft.order.map((id) => [String(id), sumBy(id, 'valueDiff', true)]), 'own, Own now: each total adds up the differences of the men a team holds today');
+    ok(o.totalRow.cells.some((c, i) => c.v !== d.totalRow.cells[i].v), 'own: (which are not the drafted totals)');
+    ok(/adds up \+\/− for every player a team has now\./.test(o.note) && /adds up \+\/− for every player a team drafted\./.test(d.note), 'own: how it works says whose players the totals add up', o.note);
     eq([r.afterSwitch, r.warm.draft, r.warm.players, r.warm.ranks], [r.cold, r.cold.draft, r.cold.players, r.cold.ranks], 'own: the switch asks nothing of anybody, and nor does the rest');
     eq(r.prefsOwn['draft.box'], 'own', 'own: the choice is remembered');
 
@@ -1357,8 +1429,11 @@ function checkAvg(page, name, figure, said, rounds) {
     eq([r.three.team, sortS(r.three.ownPids)], ['3', sortS(own3)], 'own: a heading on the board picks its team, boxes and all');
     eq([sortS(r.pre.ownPids), r.pre.mineCells, r.pre.box.on], [sortS(own3), 0, ['own']], 'own: the other comparison redraws the board with the same men boxed');
     // (The sample's squads change hands too: by week 14 a team holds some of its sixteen picks, not all.)
-    ok(r.sample.box.on[0] === 'own' && r.sample.ownPids.length > 0 && r.sample.ownPids.length < 16 && r.sample.mineCells === 0,
-      'own: on the sample, the men its picked team still holds', [r.sample.box.on, r.sample.ownPids.length, r.sample.mineCells]);
+    // (The sample's own pickups, if any, are boxed too, under the last round: they are not its picks.)
+    const sampleUnd = r.sample.und.rows.flatMap((row) => row.cells.filter((c) => !c.empty).map((c) => c.pid));
+    const sampleDrafted = r.sample.ownPids.filter((pid) => !sampleUnd.includes(pid));
+    ok(r.sample.box.on[0] === 'own' && sampleDrafted.length > 0 && sampleDrafted.length < 16 && r.sample.mineCells === 0,
+      'own: on the sample, the men its picked team still holds', [r.sample.box.on, sampleDrafted.length, r.sample.mineCells]);
     eq([sortS(r.again.ownPids), r.again.box.on, r.again.mineCells], [sortS(own3), ['own'], 0], 'own: and back on the league it is still Own now');
     eq([r.back.box.on, r.back.ownPids, r.back.mineCells, r.back.mineTeams, r.back.boardOwn], [['drafted'], [], 18, ['3'], false], 'own: Drafted puts the column’s box back');
     eq(r.prefsBack['draft.box'], undefined, 'own: which is not stored, being the default');
@@ -1374,6 +1449,104 @@ function checkAvg(page, name, figure, said, rounds) {
   if (!e.boot) {
     eq([e.ok, e.errors, e.page.status, e.page.mainHidden, e.compareHidden], [true, [], 'No draft yet.', true, true], 'empty: a league that has not drafted shows no draft');
     eq(e.page.box && e.page.box.hidden, true, 'empty: and no box switch');
+  }
+}
+
+// ------------------------------------- the totals, and the men nobody drafted
+// Tim, 2026-10-22: "make sure that if the selection is on drafted, then it
+// calculates the total value of the players the user drafted, but if it's on
+// own now, it calculates the total value of the players that the user
+// currently owns. Also change what number is being added up depending if it's
+// on value difference, expected value, or value now. also because the players
+// that user currently owns might've been undrafted, list them at the very
+// bottom under that user's collumn bellow the last round of the draft."
+{
+  const VAL = await import('./draft-stub-value.mjs');
+  const { UNDRAFTED } = await import('./draft-stub-undrafted.mjs');
+  const VV = await import(moduleUrl('js/value.js'));
+  const RK = JSON.parse(readFileSync(path.join(HERE, 'fixtures/draft-ranks-1241838-2026.json'), 'utf8')).ranks;
+  const draft = R.parseDraft(RAW);
+  const plain = expected(RAW);
+  const rv = R.reviewDraft({ draft, players: new Map(plain.rv.rows.map((x) => [x.playerId, x])), slots: [0, 2, 2, 4, 4, 4, 6, 16, 17, 23], teams: 10, ranks: RK, worth: VAL.WORTH });
+  const r1x = (v) => Math.round(v * 10) / 10;
+  // The men nobody drafted, worked out here: nothing was expected of them.
+  const und = Object.entries(UNDRAFTED).map(([id, p]) => {
+    const now = VAL.VALUES_UNDRAFTED.players[id].value;
+    return { playerId: Number(id), teamId: p.onTeamId, name: p.name, position: p.position, valueNow: now, expected: 0, valueDiff: r1x(now), valuePre: VV.valueOf(VAL.BASE, p.position, VAL.preOf(Number(id))) };
+  });
+  const ownerOf = (x) => (x.playerId in UNDRAFTED ? UNDRAFTED[x.playerId].onTeamId : FX.players[x.playerId].onTeamId);
+  /** A team's total of one figure, added up here man by man. */
+  const sum = (team, key, own) => r1x((own ? [...rv.rows, ...und].filter((x) => ownerOf(x) === team) : rv.rows.filter((x) => x.teamId === team))
+    .reduce((a, x) => a + (x[key] ?? 0), 0));
+  const KEY = { now: 'valueDiff', exp: 'expected', val: 'valueNow', pre: 'valuePre' };
+  const said = (k, v) => (k === 'now' ? sv(v) : v.toFixed(1));
+
+  ok(und.length === 20 && und.some((x) => x.valueNow > 1) && und.every((x) => typeof x.valuePre === 'number'), 'totals: (20 men nobody drafted, some worth something today, each with a preseason Value)',
+    und.map((x) => `${x.name} ${x.valueNow}`).join(', '));
+  const r = run('totals', { FF_VALUE: JSON.stringify(VAL.VALUES_UNDRAFTED), DR_UNDRAFTED: '1' });
+  ok(!r.boot, 'totals: boots', r.boot);
+  if (!r.boot) {
+    ok(r.ok, 'totals: settles on the league');
+    eq([r.errors, r.fetches], [[], []], 'totals: no errors, and nothing went to ESPN around the stubs');
+    eq([r.calls.draft, r.calls.players, r.calls.ranks], [1, 17, 1], 'totals: no more reads than before — the men nobody drafted come off the squads already read');
+
+    // EVERY VIEW IN BOTH BOXES: each team's total is its own men's figure, added up.
+    for (const box of ['drafted', 'own']) {
+      for (const k of ['now', 'exp', 'val', 'pre']) {
+        const f = r.pages[`${box}.${k}`];
+        const want = draft.order.map((id) => [String(id), said(k, sum(id, KEY[k], box === 'own'))]);
+        eq(f.totalRow && f.totalRow.cells.map((c) => [c.team, c.v]), want, `totals, ${box}, ${k}: each team’s total is the ${KEY[k]} of the men it ${box === 'own' ? 'holds today, drafted or not' : 'drafted'}`);
+        const ranked = [...want].sort((a, b) => Number(b[1].replace('−', '-')) - Number(a[1].replace('−', '-')));
+        const heat = (id) => f.totalRow.cells.find((c) => c.team === id).heat;
+        ok(/^heat-up/.test(heat(ranked[0][0])) && /^heat-dn/.test(heat(ranked[9][0])), `totals, ${box}, ${k}: the best of those totals green, the worst red`, f.totalRow.cells.map((c) => c.heat).join(' '));
+      }
+    }
+    // The four views add up four different figures, and the two boxes differ.
+    for (const box of ['drafted', 'own']) {
+      const rows = ['now', 'exp', 'val', 'pre'].map((k) => r.pages[`${box}.${k}`].totalRow.cells.map((c) => c.v).join(' '));
+      eq(new Set(rows).size, 4, `totals, ${box}: a different row of totals in each view`);
+    }
+    for (const k of ['now', 'exp', 'val', 'pre']) {
+      ok(r.pages[`own.${k}`].totalRow.cells.some((c, i) => c.v !== r.pages[`drafted.${k}`].totalRow.cells[i].v), `totals, ${k}: Own now is not the drafted total`);
+    }
+    // (Team 7 holds 9 of its drafted men and 8 nobody drafted: the gap shows.)
+    ok(sum(7, 'valueNow', true) !== sum(7, 'valueNow', false), 'totals: (team 7’s two totals differ)');
+
+    // NOT DRAFTED: under the last round, on Own now only.
+    const o = r.pages['own.val'];
+    const d = r.pages['drafted.val'];
+    eq([d.und.head, d.und.rows.length, r.back.und.head], [null, 0, null], 'not drafted: no block on Drafted');
+    const lastRound = 1 + 17; // the totals row, then seventeen rounds
+    eq(o.und.head && [o.und.head.index, o.und.head.label, o.und.head.span], [lastRound, 'Not drafted', '10'], 'not drafted: a labelled row straight under the last round, across the ten teams');
+    const perTeam = (id) => und.filter((x) => x.teamId === id).sort((a, b) => b.valueNow - a.valueNow || a.name.localeCompare(b.name));
+    const depth = Math.max(...draft.order.map((id) => perTeam(id).length));
+    eq([depth, o.und.rows.length, o.und.rows.map((x) => x.index)], [8, 8, Array.from({ length: 8 }, (_, i) => lastRound + 1 + i)], 'not drafted: as many rows as the most any team has (team 7’s eight), then the board ends');
+    const shownCols = draft.order.map((id, c) => o.und.rows.map((row) => row.cells[c]).filter((x) => !x.empty));
+    eq(shownCols.map((col) => col.map((x) => x.pid)), draft.order.map((id) => perTeam(id).map((x) => String(x.playerId))), 'not drafted: each man under the team that holds him, highest Value today first');
+    eq(o.und.rows.flatMap((row) => row.cells.filter((x) => !x.empty && x.team !== String(UNDRAFTED[x.pid].onTeamId))), [], 'not drafted: every cell in its holder’s column');
+    const all = shownCols.flat();
+    eq(all.filter((x) => x.d !== VAL.VALUES_UNDRAFTED.players[x.pid].value.toFixed(1)).slice(0, 3), [], 'not drafted, Value now: each prints his Value today');
+    eq(all.filter((x) => x.went !== ({ DST: 'D/ST' }[UNDRAFTED[x.pid].position] || UNDRAFTED[x.pid].position)), [], 'not drafted: no pick or price, his position only');
+    ok(all.every((x) => x.card && x.name && x.heat), 'not drafted: every name opens his card, and every number is on the heat scale');
+    eq(o.und.rows.map((x) => [x.rd, x.avg]), Array(8).fill(['', '']), 'not drafted: no round number and no average');
+    // Boxed for the picked team (3): its four, as well as its drafted men it holds.
+    const three = perTeam(3).map((x) => String(x.playerId));
+    eq([all.filter((x) => x.own).map((x) => x.pid).sort(), three.every((pid) => o.ownPids.includes(pid))], [[...three].sort(), true], 'not drafted: the picked team’s own are boxed with the rest of its men');
+    // Each view's own figure: Value difference is his Value today (nothing was expected), Expected 0.0.
+    const col = (k) => r.pages[`own.${k}`].und.rows.flatMap((row) => row.cells.filter((x) => !x.empty));
+    eq(col('now').filter((x) => x.d !== sv(r1x(VAL.VALUES_UNDRAFTED.players[x.pid].value))).slice(0, 3), [], 'not drafted, Value difference: his Value today, signed — nothing was expected of him');
+    eq(col('exp').filter((x) => x.d !== '0.0'), [], 'not drafted, Expected value: 0.0');
+    eq(col('pre').filter((x) => x.d !== '—'), [], 'not drafted, Rank difference: a dash (no pick, no rank among the drafted)');
+    ok(/Players nobody drafted are listed under the last round, with an expected value of 0\./.test(r.pages['own.now'].note) && !/nobody drafted/.test(r.pages['drafted.now'].note),
+      'not drafted: how it works says where they are, on Own now only', r.pages['own.now'].note);
+    // THE CARDS.
+    const u = und.find((x) => String(x.playerId) === r.undPid);
+    eq(r.undPop && r.undPop.rows, u && [['Drafted', 'No'], ['Expected value', '0.0'], ['Value now', u.valueNow.toFixed(1)],
+      ...(u.valueDiff ? [[u.valueDiff > 0 ? 'Steal' : 'Miss', sv(u.valueDiff)]] : [['Even', sv(0)]])], 'not drafted: his number opens not drafted, expected 0, Value now and the difference');
+    eq(r.undCard, u && `Value ${u.valueNow.toFixed(1)}`, 'not drafted: his name opens his card, with his Value');
+    eq(r.undPop && r.undPop.foot, '', 'not drafted: and no "of 170 picks" under it, not being one');
+    // The picks above are untouched by the block.
+    eq(o.cells.filter((c) => !all.some((x) => x.pid === c.pid)), d.cells, 'not drafted: every pick’s cell is as it is on Drafted');
   }
 }
 

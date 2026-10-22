@@ -1196,6 +1196,8 @@ const isPlain = () => view() === 'exp' || view() === 'val';
 /** The figure on show, how it is printed, and the scale it is coloured on. */
 const diffKey = () => (isPre() ? 'preDiff' : view() === 'exp' ? 'expected' : view() === 'val' ? 'valueNow' : onValue() ? 'valueDiff' : 'diff');
 const dOf = (r) => r[diffKey()];
+/** What the board's row of totals adds up in the view on show (see `assemble`). */
+const totalKey = () => (isPre() ? 'valuePre' : view() === 'exp' ? 'expected' : view() === 'val' ? 'valueNow' : 'valueDiff');
 const dSaid = (d) => (isPlain() ? valueText(d) : onValue() ? signedValue(d) : signed(d));
 const scaleOf = (w) => (isPre() ? w.preScale : view() === 'exp' ? w.expScale : view() === 'val' ? w.nowScale : onValue() ? w.valueScale : w.scale);
 /** A team's two ends on the figure on show (js/draft-review.js). */
@@ -1257,6 +1259,10 @@ function weeksOf(data) {
 function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, values = null, preOf = null }) {
   const { weeks, poWeeks, finished, currentWeek } = weeksOf(data);
   const drafted = new Set(draft.picks.map((p) => p.playerId));
+  // THE MEN ON A SQUAD TODAY WHOM NOBODY DRAFTED ("Own now"): read off the same
+  // squads as the drafted men, for the weeks they were on one. No extra reads.
+  const undrafted = draftReview.undraftedOwned(rosters.get(currentWeek) || [], draft.picks);
+  const tracked = new Set([...drafted, ...undrafted.map((u) => u.playerId)]);
   const men = new Map();
   const man = (id) => {
     if (!men.has(id)) men.set(id, { playerId: id, name: '', position: '', proTeamId: null, injuryStatus: null, glance: null, byWeek: {} });
@@ -1268,7 +1274,7 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
     const on = new Set();
     for (const t of rosters.get(w) || []) {
       for (const p of t.players || []) {
-        if (!drafted.has(p.playerId) || on.has(p.playerId)) continue;
+        if (!tracked.has(p.playerId) || on.has(p.playerId)) continue;
         on.add(p.playerId);
         const m = man(p.playerId);
         m.name = p.name || m.name;
@@ -1326,20 +1332,43 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
   const worth = base && preOf ? { base, now: valueNow, pre: preOf } : null;
   const rv = draftReview.reviewDraft({ draft, players, slots, teams: data.teams.length || null, ranks, worth });
   const valued = Boolean(rv.curve);
-  const teamTotals = valued ? draftReview.teamValues(rv.rows) : new Map();
-  // The same row in "vs preseason rank": each man's OWN preseason Value added
-  // up (Tim, 2026-10-09: "put the value at the top … as what it was proj to be
-  // based on preseason predictions (which is different than the preseason
-  // expected value we talked about before)").
-  const teamTotalsPre = valued ? draftReview.teamValues(rv.rows, 'valuePre') : new Map();
-  // …and in "Expected value": the line read at each of its picks, added up.
-  const teamTotalsExp = valued ? draftReview.teamValues(rv.rows, 'expected') : new Map();
 
-  // WHO HOLDS EACH DRAFTED MAN TODAY: the squads of the week in play, which
-  // this page has already read. A man on nobody's squad has no entry.
+  // WHO HOLDS EACH MAN TODAY: the squads of the week in play, which this page
+  // has already read. A man on nobody's squad has no entry.
   const ownerNow = new Map();
   for (const t of rosters.get(currentWeek) || []) {
-    for (const p of t.players || []) if (drafted.has(p.playerId)) ownerNow.set(p.playerId, t.id);
+    for (const p of t.players || []) if (tracked.has(p.playerId)) ownerNow.set(p.playerId, t.id);
+  }
+
+  // THE MEN NOBODY DRAFTED, as rows of the review: nothing was expected of
+  // them (js/draft-review.js `undraftedRow`).
+  const readPre = (id) => (typeof preOf === 'function' ? preOf(id) : preOf instanceof Map ? preOf.get(id) : null);
+  const extra = undrafted.map(({ teamId, playerId }) => {
+    const m = men.get(playerId) || {};
+    const p = players.get(playerId) || {};
+    return draftReview.undraftedRow({
+      teamId, playerId, name: m.name || '', position: m.position || '',
+      soFar: p.soFar, rest: p.rest, total: p.total, valued,
+      valueNow: valueNow.has(playerId) ? valueNow.get(playerId) : null,
+      valuePre: worth && m.position ? valueOf(base, m.position, finite(readPre(playerId))) : null,
+    });
+  });
+
+  // THE BOARD'S ROW OF TOTALS, one per figure and per box (Tim, 2026-10-22:
+  // "if the selection is on drafted, then it calculates the total value of the
+  // players the user drafted, but if it's on own now, it calculates the total
+  // value of the players that the user currently owns. Also change what number
+  // is being added up depending if it's on value difference, expected value,
+  // or value now."). 'drafted': every man a team drafted, wherever he is now;
+  // 'own': every man on its squad today, drafted by anybody or by nobody.
+  // valueDiff (Value difference), expected (Expected value), valueNow (Value
+  // now), valuePre (Rank difference: each man's own preseason Value).
+  const totals = { drafted: {}, own: {} };
+  for (const key of ['valueDiff', 'expected', 'valueNow', 'valuePre']) {
+    const d = valued ? draftReview.teamValues(rv.rows, key) : new Map();
+    const o = valued ? draftReview.teamValues([...rv.rows, ...extra], key, ownerNow) : new Map();
+    totals.drafted[key] = { map: d, scale: heatScale([...d.values()]) };
+    totals.own[key] = { map: o, scale: heatScale([...o.values()]) };
   }
 
   // A TEAM'S CARD (the board's headings): its record and average off the games
@@ -1375,14 +1404,11 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
     // On Value: the differences, and each team's total against the other teams'.
     valued, valueNow, held, lookup: values && base ? values.lookup : null,
     valueScale: heatScale(rv.rows.map((r) => r.valueDiff)),
-    teamTotals, totalScale: heatScale([...teamTotals.values()]),
-    teamTotalsPre, totalScalePre: heatScale([...teamTotalsPre.values()]),
+    totals,
     // "Expected value" and "Value now": each figure against every pick's.
-    // ("Value now" adds up `teamTotals`, as Value difference does.)
     expScale: heatScale(rv.rows.map((r) => r.expected)),
     nowScale: heatScale(rv.rows.map((r) => r.valueNow)),
-    teamTotalsExp, totalScaleExp: heatScale([...teamTotalsExp.values()]),
-    ownerNow,
+    ownerNow, extra,
   };
 }
 
@@ -1638,6 +1664,12 @@ function renderReview() {
   $('teamTable').classList.toggle('dr-plain', isPlain());
   $('teamTable').querySelector('th.dr-paid').hidden = !auction;
 
+  // Whose men the row of totals adds up, and who a player counts for: the box's.
+  const own = boxOwn();
+  const whose = own ? 'has now' : 'drafted';
+  const nobody = '<p>Players nobody drafted are listed under the last round' +
+    (w.valued && !isPre() ? ', with an expected value of 0' : '') + '.</p>';
+  const counts = own ? nobody : '<p>A player counts for the team that drafted him, wherever he is now.</p>';
   $('drNote').innerHTML = (isPre()
     ? '<p><strong>Pre</strong> is where ESPN ranked a player before the season, counted among the players drafted: ' +
     'the best-ranked player drafted is 1.</p>' +
@@ -1646,7 +1678,9 @@ function renderReview() {
       : '') +
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Pre. Above zero he went later than he was ranked, below zero earlier. ` +
     'Green and red compare it with every pick in the draft.</p>' +
-    (w.valued ? '<p><strong>Value</strong> on the board adds up each drafted player’s preseason Value.</p>' : '')
+    (w.valued ? (own ? '<p><strong>Value</strong> on the board adds up the preseason Value of every player a team has now.</p>'
+      : '<p><strong>Value</strong> on the board adds up each drafted player’s preseason Value.</p>') : '') +
+    (own ? counts : '')
     : isPlain()
       ? '<p><strong>Now</strong> is his Value today, in points a week.' +
       (view() === 'val' ? ' Green and red compare it with every pick in the draft.' : '') + '</p>' +
@@ -1657,8 +1691,8 @@ function renderReview() {
       (auction
         ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
         : '') +
-      `<p><strong>Value</strong> on the board adds up ${view() === 'exp' ? 'expected value' : 'Now'} for every player a team drafted.</p>` +
-      '<p>A player counts for the team that drafted him, wherever he is now.</p>'
+      `<p><strong>Value</strong> on the board adds up ${view() === 'exp' ? 'expected value' : 'Now'} for every player a team ${whose}.</p>` +
+      counts
     : onValue()
       ? '<p><strong>Now</strong> is his Value today, in points a week.</p>' +
       '<p><strong>Expected value</strong> starts from the players drafted, in ESPN preseason-rank order. ' +
@@ -1669,8 +1703,8 @@ function renderReview() {
         : '') +
       '<p><strong>+/−</strong> is Now minus expected value. Above zero is a steal, below zero a miss. ' +
       'Green and red compare it with every pick in the draft.</p>' +
-      '<p><strong>Value</strong> on the board adds up Now for every player a team drafted.</p>' +
-      '<p>A player counts for the team that drafted him, wherever he is now.</p>'
+      `<p><strong>Value</strong> on the board adds up +/− for every player a team ${whose}.</p>` +
+      counts
       : '<p><strong>Now</strong> is where a player would go if the same players were drafted again today: ' +
     'points so far plus ESPN’s projection for every week left, measured against a typical bench player at his position.</p>' +
     (auction
@@ -1678,7 +1712,8 @@ function renderReview() {
       : '') +
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Now. Above zero is a steal, below zero a miss. ` +
     'Green and red compare it with every pick in the draft.</p>' +
-    '<p>A player counts for the team that drafted him, wherever he is now.</p>') +
+    // (No totals without Value: a player still counts for his drafter in the team's table.)
+    '<p>A player counts for the team that drafted him, wherever he is now.</p>' + (own ? nobody : '')) +
     // The board's Avg column, whichever view is on.
     '<p><strong>Avg</strong> is each round’s average across teams.</p>';
 
@@ -1693,10 +1728,13 @@ function drawBoard() {
   const { teamIds, rows } = w.board;
   const byId = new Map(w.rv.rows.map((r) => [r.playerId, r]));
   // (Which cells are boxed is `paintBox`'s, once the board is drawn.)
-  // In "vs preseason rank" the totals are of the preseason Values, coloured on those.
-  // In "Expected value" they are of the expected values, coloured the same way.
-  const totals = isPre() ? w.teamTotalsPre : view() === 'exp' ? w.teamTotalsExp : w.teamTotals;
-  const totalScale = isPre() ? w.totalScalePre : view() === 'exp' ? w.totalScaleExp : w.totalScale;
+  // The totals add up the figure on show — Value difference, Expected value or
+  // Value now; in "Rank difference" each man's own preseason Value — over the
+  // men a team drafted, or on "Own now" the men it holds today. Coloured on
+  // the ten totals shown.
+  const { map: totals, scale: totalScale } = w.totals[boxOwn() ? 'own' : 'drafted'][totalKey()];
+  // A total of differences is printed as a difference, signed, as its cells are.
+  const totSaid = (v) => (totalKey() === 'valueDiff' ? signedValue(v) : valueText(v));
   const table = $('draftBoard');
   // How many columns the stylesheet keeps at a readable width (css/app.css, `.dr-board`).
   table.setAttribute('style', `--dr-cols: ${teamIds.length}`);
@@ -1724,24 +1762,47 @@ function drawBoard() {
   // below their name"). Only when Value is known; both views — Value today in
   // "vs worth now", each man's own preseason Value in "vs preseason rank".
   const totalRow = !w.valued ? '' : '<tr class="dr-total"><td class="dr-rd">Value</td>' +
-    `<td class="dr-avg">${valueText(totalAvg === null ? null : Math.round(totalAvg * 10) / 10)}</td>` + teamIds.map((id) => {
+    `<td class="dr-avg">${totSaid(totalAvg === null ? null : Math.round(totalAvg * 10) / 10)}</td>` + teamIds.map((id) => {
     const total = totals.has(id) ? totals.get(id) : null;
     const h = total === null ? null : heatOf(total, totalScale);
-    return `<td class="dr-tot${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">${valueText(total)}${heatMarkHtml(h)}</td>`;
+    return `<td class="dr-tot${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">${totSaid(total)}${heatMarkHtml(h)}</td>`;
   }).join('') + '</tr>';
+  /** One man's cell: where he went (an undrafted man: his position only), the figure on show, his name. */
+  const cell = (r, id, cls = '') => {
+    const d = dOf(r);
+    const h = d === null || d === undefined ? null : heatOf(d, scaleOf(w));
+    const went = r.undrafted ? '' : esc(wentFor(r));
+    const pos = r.position ? esc(posSaid(r.position)) : '';
+    return `<td class="dr-cell${cls}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
+      whyHtml(r, `<span class="dr-went">${[went, pos].filter(Boolean).join(' ')}</span>` +
+        `<span class="dr-d">${dSaid(d ?? null)}${heatMarkHtml(h)}</span>`, 'dr-top') +
+      `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
+      '</td>';
+  };
+  // NOT DRAFTED (Tim, 2026-10-22: "because the players that user currently owns
+  // might've been undrafted, list them at the very bottom under that user's
+  // collumn bellow the last round of the draft"). On "Own now" only: under the
+  // last round, a labelled row, then each team's men nobody drafted down its
+  // own column, the highest Value today first.
+  let undraftedRows = '';
+  if (boxOwn() && w.extra.length) {
+    const cols = teamIds.map((id) => w.extra.filter((r) => same(r.teamId, id))
+      .sort((a, b) => (b.valueNow ?? -Infinity) - (a.valueNow ?? -Infinity) || nameOf(a).localeCompare(nameOf(b))));
+    const depth = Math.max(0, ...cols.map((c) => c.length));
+    if (depth) {
+      undraftedRows = `<tr class="dr-und-head"><td class="dr-rd"></td><td class="dr-avg"></td>` +
+        `<td class="dr-und-label" colspan="${teamIds.length}">Not drafted</td></tr>` +
+        Array.from({ length: depth }, (_, k) => '<tr class="dr-und-row"><td class="dr-rd"></td><td class="dr-avg"></td>' +
+          cols.map((c, i) => (c[k] ? cell(c[k], teamIds[i], ' dr-und')
+            : `<td class="dr-cell dr-none dr-und" data-team="${esc(teamIds[i])}"></td>`)).join('') + '</tr>').join('');
+    }
+  }
   table.querySelector('tbody').innerHTML = totalRow + rows.map((row, i) =>
     `<tr><td class="dr-rd">${i + 1}</td>${avgCell(avgs[i])}` + row.map((pk, c) => {
       const id = teamIds[c];
       if (!pk) return `<td class="dr-cell dr-none" data-team="${esc(id)}"></td>`;
-      const r = byId.get(pk.playerId);
-      const d = dOf(r);
-      const h = d === null ? null : heatOf(d, scaleOf(w));
-      return `<td class="dr-cell${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
-        whyHtml(r, `<span class="dr-went">${esc(wentFor(r))}${r.position ? ` ${esc(posSaid(r.position))}` : ''}</span>` +
-          `<span class="dr-d">${dSaid(d)}${heatMarkHtml(h)}</span>`, 'dr-top') +
-        `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
-        '</td>';
-    }).join('') + '</tr>').join('');
+      return cell(byId.get(pk.playerId), id);
+    }).join('') + '</tr>').join('') + undraftedRows;
   paintBox();
 }
 
@@ -1838,10 +1899,10 @@ function closePop() {
 /** A pick's difference: what he has scored, what is left, where he went and where he would go now. */
 function whySpec(pid) {
   const w = review.world;
-  const r = w && !w.empty && w.rv.rows.find((x) => same(x.playerId, pid));
+  const r = w && !w.empty && (w.rv.rows.find((x) => same(x.playerId, pid)) || w.extra.find((x) => same(x.playerId, pid)));
   if (!r) return null;
   const auction = w.draft.type === 'auction';
-  const went = [
+  const went = r.undrafted ? [{ label: 'Drafted', value: 'No' }] : [
     ...(auction
       ? [{ label: 'Paid', value: `$${r.bid}` }, { label: 'Price rank', value: String(r.at) }]
       : [{ label: 'Drafted', value: `Pick ${r.at}` }]),
@@ -1878,7 +1939,8 @@ function whySpec(pid) {
         { label: 'Value now', value: valueText(r.valueNow) },
       ],
       total: word ? { label: word, value: signedValue(d) } : null,
-      foot: hv ? `${hv.standing} picks` : '',
+      // (A man nobody drafted is not one of the picks it stands among.)
+      foot: hv && !r.undrafted ? `${hv.standing} picks` : '',
     };
   }
   const said = r.diff === null ? '' : r.diff > 0 ? 'Steal' : r.diff < 0 ? 'Miss' : 'Even';
@@ -2021,9 +2083,9 @@ function initReview() {
     if (!btn || btn.dataset.box === review.box) return;
     review.box = btn.dataset.box === 'own' ? 'own' : 'drafted';
     prefs.set('box', boxOwn() ? 'own' : null);
-    for (const b of $('boxToggle').querySelectorAll('button')) b.classList.toggle('on', b.dataset.box === review.box);
-    // Classes only: the board keeps every cell it has.
-    paintBox();
+    // The totals, the men nobody drafted and the words follow the box (Tim,
+    // 2026-10-22), so the board is drawn again; the men in it are the same.
+    renderReview();
   });
   $('draftBoard').addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('button.dr-pick-team');
