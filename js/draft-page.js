@@ -1731,7 +1731,7 @@ function renderReview() {
     (w.valued && !isPre() ? ', with an expected value of 0' : '') + '.</p>';
   const counts = own ? nobody : perf
     ? '<p><strong>Perfect draft</strong>: at each of its picks, the selected team takes the player with the highest ' +
-      `${w.valued ? 'Value now' : 'worth now'} from that pick up to its next one; the players in between each move one pick later. ` +
+      `${w.valued ? 'Value now' : 'worth now'} from that pick up to and including its next one; the players in between each move one pick later. ` +
       'No other team changes its picks, and every player keeps his numbers.</p>'
     : '<p>A player counts for the team that drafted him, wherever he is now.</p>';
   $('drNote').innerHTML = (isPre()

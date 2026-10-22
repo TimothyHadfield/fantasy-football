@@ -648,13 +648,35 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
     const i = p.overall - 1;
     const next = snakePicks.findIndex((q, j) => j > i && q.teamId === 7);
     const end = next < 0 ? 40 : next;
+    // (Not counting his next pick's own man, who is in his window but may slide there.)
     return w7.slice(i + 1, end).every((q) => wild(q.playerId) <= wild(p.playerId));
   }), 'perfect: each of its picks is worth at least anyone left in its window when it picks');
 
-  // Only his window: a man taken at 27 (his next pick) is not his to take at 14.
-  const later = (id) => (id === 1027 ? 150 : falling(id));
-  eq(R.perfectOrder(snakePicks, later, 7)[13].playerId, 1014, 'perfect: the man at his next pick (27) is outside his window at 14');
-  eq(R.perfectOrder(snakePicks, later, 7)[26].playerId, 1027, 'perfect: and he is his at 27');
+  // HIS NEXT PICK IS IN THE WINDOW (Tim, 2026-10-22: "include youre next draft
+  // position as a potential selection"): "Jenty" at 27, worth most, is his at 14.
+  const jenty = (id) => (id === 1027 ? 150 : falling(id));
+  const j = R.perfectOrder(snakePicks, jenty, 7);
+  eq([j[13].playerId, j[13].teamId], [1027, 7], 'perfect: the man at his next pick (27), worth most, is his at 14');
+  eq(ids(j).slice(14, 27), Array.from({ length: 13 }, (_, i) => 14 + i), 'perfect: and 14-26 slide to 15-27');
+  eq(j[26].playerId, 1026, 'perfect: at 27 the man who slid there is the best left in 27-34');
+  // One past his next pick is not his: a man taken 28th waits for pick 27.
+  const past = (id) => (id === 1028 ? 150 : falling(id));
+  const pz = R.perfectOrder(snakePicks, past, 7);
+  eq([pz[13].playerId, pz[26].playerId, ids(pz).slice(27, 28)], [1014, 1028, [27]], 'perfect: a man one past his next pick is not his at 14, but is at 27');
+
+  // THE TRAP Tim named: back-to-back picks. Team 10 picks 10 and 11, then 30.
+  // The man taken 11th is worth more than the one taken 10th: he is taken at
+  // 10, and the 10th man, slid to 11, is still in play there.
+  const turn = (id) => (id === 1011 ? 95 : id === 1010 ? 94 : falling(id));
+  const b = R.perfectOrder(snakePicks, turn, 10);
+  eq([b[9].playerId, b[10].playerId, b[9].teamId, b[10].teamId], [1011, 1010, 10, 10], 'perfect (back to back): the better man at 10, and the one slid to 11 kept there as best of 11-30');
+  const turn2 = (id) => (id === 1011 ? 95 : id === 1010 ? 94 : id === 1025 ? 99 : falling(id));
+  const b2 = R.perfectOrder(snakePicks, turn2, 10);
+  eq([b2[9].playerId, b2[10].playerId], [1011, 1025], 'perfect (back to back): at 11 the window runs to 30, so a better man there beats the one slid to 11');
+  eq(ids(b2).slice(11, 26), [10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26], 'perfect (back to back): the men between slide one later');
+  // Team 9 picks 9 then 12: his window 9-12 reaches over team 10's turn.
+  const t9 = R.perfectOrder(snakePicks, (id) => (id === 1011 ? 95 : falling(id)), 9);
+  eq([ids(t9).slice(8, 12), t9[8].teamId, t9[9].teamId, t9[10].teamId], [[11, 9, 10, 12], 9, 10, 10], 'perfect: team 9 takes 11 at 9; team 10 keeps its picks and gets the men who slid');
 
   // The last pick looks to the end of the draft: team 10's last is 31.
   const last = (id) => (id === 1040 ? 150 : falling(id));
@@ -669,7 +691,8 @@ const neverRises = (c) => c.y.every((v, i) => i === 0 || v <= c.y[i - 1] + 1e-12
   eq(ids(R.perfectOrder(snakePicks, walker, 99)), upTo40, 'perfect: a team that is not in the draft moves nothing');
 
   // Equals: the earlier man is kept.
-  const tie = (id) => (id === 1014 || id === 1020 ? 150 : falling(id));
+  // (1008 is worth most so pick 7, whose window now reaches 14, takes him and not 1014.)
+  const tie = (id) => (id === 1008 ? 200 : id === 1014 || id === 1020 ? 150 : falling(id));
   eq(R.perfectOrder(snakePicks, tie, 7)[13].playerId, 1014, 'perfect: of two equal, the earlier man is kept (no move)');
   const tie2 = (id) => (id === 1018 || id === 1020 ? 150 : falling(id));
   eq(R.perfectOrder(snakePicks, tie2, 7)[13].playerId, 1018, 'perfect: of two equal, the earlier taken comes up');

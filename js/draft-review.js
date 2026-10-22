@@ -598,8 +598,11 @@ export function teamReview(rows, teamId, key = 'diff', { plain = false } = {}) {
 // the draft that they were actually in, what would their team look like?"):
 //
 // ONLY THE SELECTED TEAM picks. Its own picks are walked in order. At its pick
-// P its window is the men on the board at picks P … (its next pick − 1) — to
-// the end of the draft for its last pick. It takes the one worth most today;
+// P its window is the men on the board at picks P … its next pick, that pick
+// included — to the end of the draft for its last pick. (Tim, 2026-10-22:
+// "include youre next draft position as a potential selection. This will
+// hopefully remove "traps" where the user picks twice in a row so the
+// calculation just keeps the origional first pick.") It takes the one worth most today;
 // he moves to P and the men from P to where he stood each slide one pick
 // later, so every slot stays filled and the others keep their order. Other
 // teams' slots just get whoever slides into them. Of equals the earlier man is
@@ -628,10 +631,11 @@ export function perfectOrder(picks, worthOf, teamId) {
   const men = slots.map((p) => p.playerId);
   for (let i = 0; i < slots.length; i++) {
     if (String(slots[i].teamId) !== String(teamId)) continue;
-    let next = slots.length;
-    for (let j = i + 1; j < slots.length; j++) if (slots[j].teamId === slots[i].teamId) { next = j; break; }
+    // The window runs to its next pick AND INCLUDES IT (the last pick: to the end).
+    let end = slots.length - 1;
+    for (let j = i + 1; j < slots.length; j++) if (slots[j].teamId === slots[i].teamId) { end = j; break; }
     let best = i;
-    for (let k = i + 1; k < next; k++) if (worth(men[k]) > worth(men[best])) best = k;
+    for (let k = i + 1; k <= end; k++) if (worth(men[k]) > worth(men[best])) best = k;
     if (best !== i) men.splice(i, 0, men.splice(best, 1)[0]);
   }
   return slots.map((p, i) => ({ ...p, playerId: men[i], from: from.get(men[i]) }));

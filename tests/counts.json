@@ -318,7 +318,7 @@
       "assertions": 164
     },
     "test-draft-review.mjs": {
-      "assertions": 236
+      "assertions": 242
     },
     "draft-review-check.mjs": {
       "assertions": 485
