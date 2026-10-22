@@ -163,3 +163,9 @@ export async function fetchPendingTrades() {
   log(['offers']);
   return cfg().offers || [];
 }
+
+/** The one read js/notify-load.js prefers: offers, claims, and (2026-10-22) your sent offers that ended. */
+export async function fetchPendingMoves() {
+  log(['offers']);
+  return { offers: cfg().offers || [], claims: cfg().claims || [], ended: cfg().ended || [] };
+}

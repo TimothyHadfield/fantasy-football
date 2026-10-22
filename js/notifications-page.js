@@ -21,12 +21,15 @@
 // goes only when ESPN shows the change. Everywhere else — a phone, the switch
 // off, any failure — the button is a plain link to ESPN's own lineup screen.
 //
-// A line disappears when its cause does: no dismiss, no read mark.
+// A line disappears when its cause does: no read mark. An offer of yours that
+// ended (2026-10-22) has two buttons instead of one: Follow up (saved as a
+// trade, opened in the Trade page's builder) and Dismiss; either is remembered.
 
 import * as bridge from './bridge.js';
 import { onConnection, savedConfig } from './connection.js';
-import { load } from './notify-load.js';
+import { load, forgetEnded } from './notify-load.js';
 import { LEVELS } from './notify.js';
+import { scope } from './prefs.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -53,12 +56,20 @@ const view = {
   failed: new Set(),
   /** `leagueId|season|teamId` of the run on screen, so the bar's hello does not start a second one. */
   key: null,
+  /** Lines dismissed or followed up on this visit (their ids). */
+  gone: new Set(),
 };
 
 const outside = (href) => /^https?:/i.test(String(href || ''));
 
 function buttonHtml(note) {
   const a = note.action || {};
+  // An offer of yours that ended (2026-10-22): Follow up and Dismiss, one above the other.
+  if (note.dismiss) {
+    return `<span class="nt-acts">` +
+      `<a class="nt-go" href="${esc(a.href || 'trade.html')}" data-follow="${esc(note.id)}">${esc(a.label || 'Follow up')}</a>` +
+      `<button type="button" class="nt-go nt-dismiss" data-dismiss="${esc(note.id)}">Dismiss</button></span>`;
+  }
   const lineup = a.lineup && view.canWrite && !view.failed.has(note.id) ? a.lineup : null;
   if (lineup) {
     const busy = view.working === note.id;
@@ -100,8 +111,17 @@ function draw() {
 
   const notes = s.notes || [];
   let html = '';
+  // A list of your team's (live or the sample league) always shows Pending,
+  // even empty, so it can be seen that it was checked (Tim, 2026-10-22: "also
+  // in the notifications setting show pending trades aswell").
+  const listed = s.status === 'live' || s.status === 'demo';
   for (const level of LEVELS) {
     const mine = notes.filter((n) => n.level === level);
+    if (!mine.length && level === 'pending' && listed) {
+      html += `<div class="nt-group" data-level="pending">${HEADINGS.pending}</div>` +
+        '<div class="nt-row nt-wait nt-none" data-empty="pending">No pending trades or claims right now.</div>';
+      continue;
+    }
     if (!mine.length) continue;
     html += `<div class="nt-group" data-level="${level}">${HEADINGS[level]}</div>` + mine.map(rowHtml).join('');
   }
@@ -115,7 +135,10 @@ function draw() {
 const keyOf = (c) => (c ? `${c.leagueId}|${c.season}|${c.teamId ?? ''}` : 'demo');
 
 function show(state) {
-  view.state = state;
+  // A line dismissed or followed up while a run was still in the air stays gone.
+  view.state = state && view.gone.size
+    ? { ...state, notes: (state.notes || []).filter((n) => !view.gone.has(n.id)) }
+    : state;
   draw();
 }
 
@@ -156,9 +179,63 @@ async function changeLineup(id) {
   draw();
 }
 
+/**
+ * FOLLOW UP an offer of yours that ended: keep the deal as a saved trade on the
+ * Trade page (`ff.prefs` → `trade.custom`, the entry its Save button writes),
+ * then open it there in the builder (the link's with/get/send), and the line
+ * goes for good. The same deal already saved is not saved twice.
+ */
+export function saveFollowUp(f) {
+  if (!f || !Number.isFinite(f.a) || !Number.isFinite(f.b) || f.a === f.b) return false;
+  const sendA = (f.sendA || []).map(String);
+  const sendB = (f.sendB || []).map(String);
+  if (!sendA.length && !sendB.length) return false;
+  const p = scope('trade');
+  const list = Array.isArray(p.get('custom', [])) ? p.get('custom', []).slice() : [];
+  const key = (e) => `${e.a}|${e.b}|${[...(e.sendA || [])].map(String).sort()}|${[...(e.sendB || [])].map(String).sort()}`;
+  const entry = { a: f.a, b: f.b, sendA, sendB };
+  if (!list.some((e) => e && key(e) === key(entry))) {
+    list.push(entry);
+    p.set('custom', list);
+  }
+  return true;
+}
+
+function noteById(id) {
+  const s = view.state;
+  return s ? (s.notes || []).find((n) => n.id === id) || null : null;
+}
+
+/** Off the list on screen at once (it is remembered by `forgetEnded`). */
+function dropNote(id) {
+  view.gone.add(id);
+  if (!view.state) return;
+  view.state = { ...view.state, notes: (view.state.notes || []).filter((n) => n.id !== id) };
+  draw();
+}
+
 $('ntList').addEventListener('click', (e) => {
-  const btn = e.target && e.target.closest ? e.target.closest('[data-lineup]') : null;
-  if (btn) changeLineup(btn.getAttribute('data-lineup'));
+  const at = (sel) => (e.target && e.target.closest ? e.target.closest(sel) : null);
+  const btn = at('[data-lineup]');
+  if (btn) { changeLineup(btn.getAttribute('data-lineup')); return; }
+  const dismiss = at('[data-dismiss]');
+  if (dismiss) {
+    const note = noteById(dismiss.getAttribute('data-dismiss'));
+    if (!note) return;
+    dropNote(note.id);
+    forgetEnded(note.dismiss).catch(() => {});
+    return;
+  }
+  const follow = at('[data-follow]');
+  if (follow) {
+    const note = noteById(follow.getAttribute('data-follow'));
+    if (!note) return;
+    e.preventDefault();
+    const href = follow.getAttribute('href') || 'trade.html';
+    try { saveFollowUp(note.action && note.action.followUp); } catch { /* the link still opens it */ }
+    dropNote(note.id);
+    forgetEnded(note.dismiss).catch(() => false).then(() => { window.location.assign(href); });
+  }
 });
 
 // The bar's league, your team, or the season changed: work it out again. What

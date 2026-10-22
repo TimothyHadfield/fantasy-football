@@ -565,9 +565,24 @@ if (process.argv[2]) {
       for (const t of demoMod.generateDemoWeekRosters(demoWeek).teams) {
         for (const p of t.players) realIds.add(String(p.playerId));
       }
+      // THE WEEK RECAP (moved to Home 2026-10-19) is about OTHER weeks: the
+      // finished week it shows, and for "Up while out" the weeks an injured man
+      // is out, whose teammates may sit on that week's wire (demo week 13: Donovan
+      // Larkin 1082 and Marquel Ocampo 1176 are free agents, rostered in weeks
+      // 3–9). Its links are checked against every id the demo generator gives in
+      // ANY week, rosters or wire — still real ids only; a name, an index or a
+      // made-up number fails as before. Every other link keeps this week's rosters.
+      const anyWeekIds = new Set();
+      for (let w = 1; w <= 18; w++) {
+        for (const t of demoMod.generateDemoWeekRosters(w).teams) {
+          for (const p of t.players) anyWeekIds.add(String(p.playerId));
+        }
+        for (const p of demoMod.generateDemoFreeAgents(w) || []) anyWeekIds.add(String(p.playerId));
+      }
       const strangers = demoLinks
-        .map((a) => (a.getAttribute('href') || '').replace('waivers.html?player=', ''))
-        .filter((id) => !realIds.has(id));
+        .map((a) => ({ id: (a.getAttribute('href') || '').replace('waivers.html?player=', ''), recap: !!a.closest('#recapBody') }))
+        .filter(({ id, recap }) => !(recap ? anyWeekIds : realIds).has(id))
+        .map(({ id }) => id);
       if (strangers.length) {
         problems.push(`demo: ${strangers.length} link(s) point at ids no roster carries: ${JSON.stringify(strangers.slice(0, 3))}`);
       }

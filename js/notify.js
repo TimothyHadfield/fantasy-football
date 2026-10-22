@@ -36,7 +36,12 @@
 //           lineupSlotIds (bench 20) and `href` is the fallback: ESPN's lineup
 //           screen for that team and week.
 //
-// A line disappears when its cause does: there is no dismiss and no read mark.
+//   ended      season.fetchPendingMoves().ended  an offer you sent that ended
+//                                               without going through
+//
+// A line disappears when its cause does: there is no read mark. The one
+// exception is `ended` (2026-10-22): it carries `dismiss` and goes when you
+// dismiss it or follow it up (js/trade-outcome.js remembers that).
 //
 // Pure: no DOM, no clock (`now` comes in), no request, no storage. See
 // tests/test-notify.mjs.
@@ -48,7 +53,7 @@ import { gainBase, gainOf } from './waiver-gain.js';
 import { INJURY_RANK } from './injury.js';
 import { playerHref, positionHref, dealHref, espnLineupHref } from './links.js';
 import { describeAge } from './store.js';
-import { offerDeadline, claimWhat, claimTitle, claimDetail } from './pending-view.js';
+import { offerDeadline, claimWhat, claimTitle, claimDetail, whenText } from './pending-view.js';
 
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
@@ -424,14 +429,17 @@ function offerNotes({ offers, teams, offersAt, now }) {
     // Its clock (2026-10-22): when it lapses, or when an accepted one goes through.
     const clock = offerDeadline(o, now);
     const review = o.review === true;
+    // Who sent it, in the Trade page's own words (its Saved trades row).
+    const sent = review ? 'Accepted' : o.fromMe ? 'Sent by you' : 'Sent to you';
     out.push({
       id: `offer-${has(o.id) ? o.id : `${o.withTeamId}-${(o.get || []).join('.')}-${(o.send || []).join('.')}`}`,
       kind: 'offer',
-      // An offer to you waits on YOUR answer; your own is waiting on him, and
-      // an accepted one on the league's review: both pending moves.
-      level: review || o.fromMe ? 'pending' : 'now',
+      // EVERY TRADE WAITING ON ESPN is a pending move, whichever way it was
+      // sent (Tim, 2026-10-22: "also in the notifications setting show pending
+      // trades aswell"): one Pending section, matching Trade's Saved trades.
+      level: 'pending',
       title: review ? `Trade with ${who} accepted` : o.fromMe ? `Your offer to ${who}` : `Trade offer from ${who}`,
-      detail: deal + (clock ? ` · ${clock}` : '') + age,
+      detail: `${sent} · ${deal}` + (clock ? ` · ${clock}` : '') + age,
       // No verdict is worked out here (that is the Trade page's own search).
       // Your own offer waits on him: there is nothing for you to do.
       suggest: review || o.fromMe ? null : `Check it on Trade before it expires${expiryDay(o.expiresAt, now)}`,
@@ -439,6 +447,70 @@ function offerNotes({ offers, teams, offersAt, now }) {
         label: 'Open it',
         href: dealHref({ with: o.withTeamId, get: o.get, send: o.send }) || 'trade.html',
       },
+    });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ ended
+
+/** "Declined", "Expired", … per reason (js/trade-outcome.js). */
+const ENDED_TITLE = {
+  declined: (who) => `${who} declined your offer`,
+  expired: (who) => `Your offer to ${who} expired`,
+  vetoed: (who) => `Your trade with ${who} was vetoed`,
+  gone: (who) => `Your offer to ${who} is no longer pending`,
+};
+
+/**
+ * YOUR SENT OFFERS THAT ENDED WITHOUT GOING THROUGH (Tim, 2026-10-22: "If a
+ * sent trade is either expired or denied, put it in the notifications section
+ * where it asks the user if they want to follow up or not, or dismiss it").
+ * One 'pending' line each, from `season.fetchPendingMoves().ended`: who it went
+ * to, the deal, why and when it ended. Two buttons: Follow up (the deal back in
+ * the Trade page's builder, kept as a saved trade) and Dismiss.
+ *
+ * `action` `{ label: 'Follow up', href, followUp: { id, a, b, sendA, sendB } }`
+ * (a = your team, b = his; the men each side sends, as the Trade page saves
+ * them) and `dismiss: id`.
+ */
+export function endedNotes({ ended, teams, teamId, now = Date.now() } = {}) {
+  const nameOf = new Map();
+  const teamName = new Map();
+  for (const t of teams || []) {
+    teamName.set(String(t.id), t.name);
+    for (const p of t.players || []) if (has(p.playerId)) nameOf.set(String(p.playerId), p.name);
+  }
+  const names = (ids, kept) => (ids || [])
+    .map((id, i) => nameOf.get(String(id)) || (kept && kept[i]) || '')
+    .filter(Boolean).join(', ');
+  const out = [];
+  for (const e of Array.isArray(ended) ? ended : []) {
+    if (!e || !has(e.id) || !has(e.withTeamId) || !ENDED_TITLE[e.reason]) continue;
+    const who = teamName.get(String(e.withTeamId)) || 'another team';
+    const get = names(e.get, e.getNames);
+    const send = names(e.send, e.sendNames);
+    const deal = get && send ? `Get ${get} for ${send}` : get ? `Get ${get}` : send ? `Send ${send}` : 'The deal';
+    const when = whenText(e.at, now);
+    out.push({
+      id: `ended-${e.id}`,
+      kind: 'ended',
+      level: 'pending',
+      title: ENDED_TITLE[e.reason](who),
+      detail: deal + (when ? ` · ${e.reason === 'gone' ? 'noticed' : 'ended'} ${when}` : ''),
+      suggest: 'Follow up to change it and send again, or dismiss it',
+      action: {
+        label: 'Follow up',
+        href: dealHref({ with: e.withTeamId, get: e.get, send: e.send }) || 'trade.html',
+        followUp: {
+          id: String(e.id),
+          a: Number(teamId),
+          b: Number(e.withTeamId),
+          sendA: (e.send || []).map(String),
+          sendB: (e.get || []).map(String),
+        },
+      },
+      dismiss: String(e.id),
     });
   }
   return out;
@@ -593,6 +665,7 @@ export function sendLaterNotes({ later = [], teamId, teams = [], week } = {}) {
  * @param {Array} [o.offers]    `season.fetchPendingTrades()`
  * @param {number|null} [o.offersAt]  when the offers were read, if that is not now (a synced copy)
  * @param {Array} [o.claims]    `season.fetchPendingMoves().claims` (read with the offers)
+ * @param {Array} [o.ended]     `season.fetchPendingMoves().ended` (see `endedNotes`)
  * @param {Object|null} [o.saved]  the Trade page's saved deals
  * @param {Array} [o.later]     the Trade page's saved custom trades (see `sendLaterNotes`)
  * @param {number} [o.now]      epoch ms, for the ages
@@ -603,7 +676,7 @@ export function sendLaterNotes({ later = [], teamId, teams = [], week } = {}) {
 export function buildNotes({
   week, teamId, league = null, team = null, teams = [], slots = [],
   isLocked = hasPlayed, byes = null, coming = [], wire = null, fill = null,
-  offers = [], offersAt = null, claims = [], saved = null, later = [], now = Date.now(),
+  offers = [], offersAt = null, claims = [], ended = [], saved = null, later = [], now = Date.now(),
 } = {}) {
   if (!team) return [];
   const start = startNotes({ week, teamId, league, team, slots, isLocked });
@@ -612,6 +685,8 @@ export function buildNotes({
     ...badStartNotes({ week, team, isLocked, byes, benched: start.benched }),
     ...holeNotes({ coming, slots, byes, fill }),
     ...pickupNotes({ team, slots, wire }),
+    // Ended offers first among the pending lines: they are the ones that ask something.
+    ...endedNotes({ ended, teams, teamId, now }),
     ...offerNotes({ offers, teams, offersAt, now }),
     ...claimNotes({ claims, claimsAt: offersAt, now }),
     ...sendLaterNotes({ later, teamId, teams, week }),

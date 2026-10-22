@@ -38,6 +38,7 @@ import * as value from './value.js';
 // The trade offers waiting on ESPN: the decoding is pure and lives there; this
 // file asks. See "THE TRADE OFFERS WAITING" below.
 import * as pending from './pending.js';
+import * as outcome from './trade-outcome.js';
 // ESPN's injury classes, read one way across the site. See "WHO IS OUT FOR THE
 // SEASON" below.
 import { healthy, injuryClass } from './injury.js';
@@ -2734,7 +2735,7 @@ async function nameClaims(claims) {
 
 /** The one place both answers are read. See `fetchPendingTrades` / `fetchPendingMoves`. */
 async function readPending(opts, { names }) {
-  const none = { offers: [], claims: [] };
+  const none = { offers: [], claims: [], ended: [] };
   try {
     const cfg = storable();
     if (!cfg || pastSeason()) return none;
@@ -2750,6 +2751,9 @@ async function readPending(opts, { names }) {
       const synced = typeof down.syncedAt === 'string' ? Date.parse(down.syncedAt) : NaN;
       const asOf = Number.isFinite(at) && at > 0 ? at : (Number.isFinite(synced) && synced > 0 ? synced : null);
       const now = Date.now();
+      // Your sent offers that ended, as the computer saw them; minus the ones
+      // this browser dismissed or followed up.
+      const handled = outcome.readSent(cfg.leagueId, cfg.season, team).handled;
       return {
         offers: pending.cleanOffers(kept.offers)
           .filter((o) => !pending.expired(o, now))
@@ -2758,15 +2762,67 @@ async function readPending(opts, { names }) {
         claims: pending.cleanClaims(kept.claims)
           .filter((c) => !pending.claimDone(c, now))
           .map((c) => ({ ...c, asOf })),
+        ended: names ? outcome.activeEnded(kept.ended, handled) : [],
       };
     }
 
     const raw = await espn.fetchPendingTransactions();
     const offers = pending.pendingTrades(raw, team, { now: Date.now() });
     const claims = names ? await nameClaims(pending.pendingClaims(raw, team)) : [];
-    return { offers, claims };
+    const ended = names ? await trackSent(cfg, team, offers, raw) : [];
+    return { offers, claims, ended };
   } catch {
     return none;
+  }
+}
+
+/**
+ * YOUR SENT OFFERS THAT ENDED WITHOUT GOING THROUGH (Tim, 2026-10-22: "If a
+ * sent trade is either expired or denied, put it in the notifications section
+ * …"). js/trade-outcome.js says how; this is where it is asked. The offers you
+ * sent are remembered at each read of the waiting list; when one is missing,
+ * ONE read of ESPN's history with the rosters (`mTransactions2` + `mRoster` +
+ * `mTeam`) says why, or that it went through. Only a read that could have
+ * listed it counts: through the bridge (a login), or an answer that carries the
+ * list at all. Read without one, nothing is judged and the remembered ended
+ * offers are handed back as they are. Never throws.
+ */
+async function trackSent(cfg, team, offers, raw) {
+  try {
+    const rec = outcome.readSent(cfg.leagueId, cfg.season, team);
+    const listed = raw && typeof raw === 'object' && Array.isArray(raw.pendingTransactions);
+    const checked = listed || (raw && typeof raw === 'object' && bridge.isAvailable());
+    if (!checked) return outcome.activeEnded(rec.ended, rec.handled);
+    const now = Date.now();
+    const { missing } = outcome.judge({ seen: rec.seen, offers, myTeamId: team, now });
+    let resolved = null;
+    let holders = null;
+    let names = null;
+    if (missing.length) {
+      try {
+        const hist = await espn.fetchLeague(['mTransactions2', 'mRoster', 'mTeam']);
+        const records = [
+          ...(Array.isArray(hist && hist.transactions) ? hist.transactions : []),
+          ...(listed ? raw.pendingTransactions : []),
+        ];
+        resolved = outcome.resolutions(records, { myTeamId: team, owners: outcome.ownersOf(hist && hist.teams) });
+        holders = outcome.holdersOf(hist && hist.teams);
+        names = outcome.rosterNames(hist && hist.teams);
+      } catch { /* the history would not answer: the missing ones wait for next time */ }
+    }
+    const next = outcome.advance(rec, { offers, resolved, holders, myTeamId: team, now, names });
+    // The men's names, for a phone that may no longer find them on a roster.
+    if (names && names.size) {
+      next.ended = next.ended.map((e) => (e.getNames || e.sendNames ? e : {
+        ...e,
+        getNames: e.get.map((id) => names.get(Number(id)) || ''),
+        sendNames: e.send.map((id) => names.get(Number(id)) || ''),
+      }));
+    }
+    outcome.writeSent(cfg.leagueId, cfg.season, next);
+    return outcome.activeEnded(next.ended, next.handled);
+  } catch {
+    return [];
   }
 }
 
@@ -2787,10 +2843,20 @@ async function pendingForSync() {
   try {
     claims = pending.cleanClaims(await nameClaims(pending.pendingClaims(raw, team)));
   } catch { claims = []; }
-  if (!offers.length && !claims.length) return null;
-  // `claims` absent, not empty, when there are none: the copy is then exactly
-  // what it was before claims rode it.
-  return claims.length ? { teamId: team, at, offers, claims } : { teamId: team, at, offers };
+  // Your sent offers that ended without going through (js/trade-outcome.js),
+  // judged on this read, so the phone shows them too. Dismissed here: not sent.
+  let ended = [];
+  try {
+    ended = outcome.cleanEnded(await trackSent(cfg, team, pending.pendingTrades(raw, team, { now: at }), raw));
+  } catch { ended = []; }
+  if (!offers.length && !claims.length && !ended.length) return null;
+  // `claims` / `ended` absent, not empty, when there are none: the copy is then
+  // exactly what it was before they rode it.
+  return {
+    teamId: team, at, offers,
+    ...(claims.length ? { claims } : {}),
+    ...(ended.length ? { ended } : {}),
+  };
 }
 
 // ===========================================================================

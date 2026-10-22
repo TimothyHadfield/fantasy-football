@@ -1912,8 +1912,15 @@ SCENARIOS['pending-sync'] = async () => {
   const gone = await sync();
   ok('the next sync went up', gone.res.ok, gone.res.reason);
   eq(asked.length, 1, '(ESPN was asked)');
-  ok('with none waiting the schedule carries no pendingTrades — absent, not empty', !('pendingTrades' in gone.payload.schedule));
-  eq(await inCloud(), undefined, 'and they are gone from the cloud\'s schedule');
+  // Nothing waits any more, so no offer goes up; but the offer YOU sent left the
+  // list without a known end, so it rides as ended (2026-10-22: "If a sent
+  // trade is either expired or denied, put it in the notifications section").
+  const left = gone.payload.schedule.pendingTrades;
+  ok('with none waiting no offer goes up', left && same(left.offers, []), JSON.stringify(left));
+  ok('only the offer you sent comes back, as no longer pending',
+    left && same((left.ended || []).map((e) => [e.id, e.reason]), [['offer-by-me', 'gone']]), JSON.stringify(left && left.ended));
+  const upNow = await inCloud();
+  ok('and the cloud\'s schedule holds no offer, only that ended one', upNow && same(upNow.offers, []) && (upNow.ended || []).length === 1, JSON.stringify(upNow));
   season.forgetCloud();
   ok('so the phone is told none', same(await season.fetchPendingTrades(), []));
 
@@ -2036,6 +2043,111 @@ SCENARIOS['pending-moves'] = async () => {
   ok('a claim with no offer still rides', !!onlyClaim.payload.schedule.pendingTrades
     && same(onlyClaim.payload.schedule.pendingTrades.offers, []) && onlyClaim.payload.schedule.pendingTrades.claims.length === 1,
     JSON.stringify(onlyClaim.payload.schedule.pendingTrades));
+};
+
+// ---------------------------------------------------------- trade-outcome
+//
+// Tim, 2026-10-22: "If a sent trade is either expired or denied, put it in the
+// notifications section …". The computer remembers the offers I sent; when one
+// is no longer on ESPN's waiting list, ONE history read says why (or that it
+// went through); the sync carries the ended ones; the phone shows them with no
+// request, and a dismiss there is remembered there. I am team 1.
+
+/** ESPN as before; the history read (`mTransactions2`) carries `transactions`. Returns those reads. */
+function answerHistory(transactions) {
+  const inner = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    const res = await inner(url, opts);
+    if (!/mTransactions2/.test(u)) return res;
+    asked.push(u);
+    const body = { ...(await res.json()), transactions };
+    return { ok: true, status: 200, async json() { return body; } };
+  };
+  return asked;
+}
+
+SCENARIOS['trade-outcome'] = async () => {
+  const map = installStorage();
+  const cloud = await import(moduleUrl('js/cloud.js'));
+  const espn = await import(moduleUrl('js/espn.js'));
+  const season = await import(moduleUrl('js/season.js'));
+  const outcome = await import(moduleUrl('js/trade-outcome.js'));
+  const fake = makeFake();
+  espn.configure({ leagueId: LEAGUE_ID, season: SEASON });
+  cloud.configure({ transport: fake });
+  map.set(WAITING_KEY, JSON.stringify({ leagueId: LEAGUE_ID, season: SEASON, teamId: 1 }));
+  const reads = (calls) => calls.filter((u) => /mTransactions2/.test(u)).length;
+  const deq = (a, b, msg) => ok(msg, same(a, b), `got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
+
+  // Read 1: three of mine waiting and one to me. Nothing ended, no history read.
+  const OFFERS = [
+    offerRecord('mine-declined', 1, [[102, 1, 2], [201, 2, 1]]),
+    offerRecord('mine-quiet', 1, [[103, 1, 3], [301, 3, 1]]),
+    offerRecord('mine-accepted', 1, [[104, 1, 2], [202, 2, 1]]),
+    offerRecord('to-me', 3, [[302, 3, 1], [105, 1, 3]]),
+  ];
+  let calls = installFetch(CLOUD.scale, CLOUD.name);
+  answerPending(OFFERS);
+  let hist = answerHistory([]);
+  const first = await season.fetchPendingMoves();
+  deq(first.ended, [],'while they wait, nothing has ended');
+  eq(hist.length + reads(calls), 0, 'and ESPN\'s history is not asked');
+
+  // Read 2: the list is empty. The history: a decline, an accept, nothing on the third.
+  espn.clearReadCache();
+  calls = installFetch(CLOUD.scale, CLOUD.name);
+  answerPending([]);
+  hist = answerHistory([
+    { id: 'dec', type: 'TRADE_DECLINE', status: 'EXECUTED', relatedTransactionId: 'mine-declined', processDate: Date.now() - 60 * 1000 },
+    { id: 'acc', type: 'TRADE_ACCEPT', status: 'EXECUTED', relatedTransactionId: 'mine-accepted', processDate: Date.now() - 60 * 1000 },
+  ]);
+  const second = await season.fetchPendingMoves();
+  eq(hist.length, 1, 'gone from the list: ONE history read');
+  ok('declined, and "no longer pending" for the one nothing explains',
+    same(second.ended.map((e) => [e.id, e.reason]), [['mine-declined', 'declined'], ['mine-quiet', 'gone']]), JSON.stringify(second.ended));
+  ok('the accepted one is never listed; nor the one sent TO me', !second.ended.some((e) => /accepted|to-me/.test(e.id)));
+
+  // Read 3: nothing new missing: no history read, the ended ones still there.
+  espn.clearReadCache();
+  calls = installFetch(CLOUD.scale, CLOUD.name);
+  answerPending([]);
+  hist = answerHistory([]);
+  const third = await season.fetchPendingMoves();
+  eq(hist.length, 0, 'the next read asks the history nothing');
+  deq(third.ended.map((e) => e.id), ['mine-declined', 'mine-quiet'], 'and still lists them until handled');
+
+  // A read that could not have listed anything (no list in the answer, no bridge) judges nothing.
+  espn.clearReadCache();
+  installFetch(CLOUD.scale, CLOUD.name);
+  answerPending(null);
+  deq((await season.fetchPendingMoves()).ended.map((e) => e.id), ['mine-declined', 'mine-quiet'], 'an answer with no list changes nothing');
+
+  // The sync carries them.
+  espn.clearReadCache();
+  installFetch(CLOUD.scale, CLOUD.name);
+  answerPending([]);
+  answerHistory([]);
+  const payload = await season.buildCloudPayload();
+  const res = await cloud.syncUp(LEAGUE_ID, SEASON, payload, {});
+  ok('the sync went up', res.ok, res.reason);
+  const up = payload.schedule.pendingTrades;
+  ok('the schedule carries the ended offers, though nothing is waiting',
+    !!up && same(up.offers, []) && same((up.ended || []).map((e) => [e.id, e.reason]), [['mine-declined', 'declined'], ['mine-quiet', 'gone']]),
+    JSON.stringify(up));
+
+  // The phone: a browser of its own (nothing remembered), zero ESPN requests.
+  season.forgetCloud();
+  espn.clearReadCache();
+  for (const k of [...map.keys()]) if (k.startsWith('ff.trades.sent.')) map.delete(k);
+  const phoneCalls = installFetch(LIVE.scale, LIVE.name);
+  const onPhone = await season.fetchPendingMoves();
+  eq(phoneCalls.length, 0, 'the phone made ZERO ESPN requests');
+  deq(onPhone.ended.map((e) => [e.id, e.reason]), [['mine-declined', 'declined'], ['mine-quiet', 'gone']], 'and shows both ended offers');
+  outcome.markHandled(LEAGUE_ID, SEASON, 1, 'mine-declined');
+  deq((await season.fetchPendingMoves()).ended.map((e) => e.id), ['mine-quiet'], 'dismissed on the phone: gone there');
+  eq(phoneCalls.length, 0, 'still no request');
 };
 
 // ---------------------------------------------------------- out-for-season

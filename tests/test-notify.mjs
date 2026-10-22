@@ -340,29 +340,29 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   // The clock in the detail (2026-10-22), in this machine's own zone.
   const exp = `expires ${PV.whenText(NOW + 40 * HOUR, NOW)}`;
   eq(ns, [
-    { id: 'offer-abc', kind: 'offer', level: 'now', title: 'Trade offer from Team Three',
-      detail: `Get Quin Ashby for Eli Ward, Jon Ross · ${exp}`,
+    { id: 'offer-abc', kind: 'offer', level: 'pending', title: 'Trade offer from Team Three',
+      detail: `Sent to you · Get Quin Ashby for Eli Ward, Jon Ross · ${exp}`,
       suggest: 'Check it on Trade before it expires Saturday',
       action: { label: 'Open it', href: 'trade.html?with=3&get=301&send=105,110' } },
     { id: 'offer-def', kind: 'offer', level: 'pending', title: 'Your offer to Team Seven',
-      detail: `Get Sol Vance for Lou Thorn · ${exp}`,
+      detail: `Sent by you · Get Sol Vance for Lou Thorn · ${exp}`,
       suggest: null,
       action: { label: 'Open it', href: 'trade.html?with=7&get=701&send=112' } },
-  ], 'offer: one line per offer, theirs this week (with the day it expires) and yours a pending move with nothing to do, each with its clock, opening that deal on Trade');
+  ], 'offer: one line per offer, sent to you or by you, both under Pending (Tim, 2026-10-22), each with its clock, opening that deal on Trade');
   ok(/^expires (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2}:\d\d (AM|PM)$/.test(exp), 'offer: the clock reads as a day and a time', exp);
   // An accepted trade in the league's review: pending, with when it goes through.
   const review = kind(notes({ team, offers: [{ ...offers[0], expiresAt: null, review: true, processAt: NOW + 20 * HOUR }] }), 'offer')[0];
   eq([review.level, review.title, review.detail, review.suggest],
-    ['pending', 'Trade with Team Three accepted', `Get Quin Ashby for Eli Ward, Jon Ross · processes ${PV.whenText(NOW + 20 * HOUR, NOW)}`, null],
+    ['pending', 'Trade with Team Three accepted', `Accepted · Get Quin Ashby for Eli Ward, Jon Ross · processes ${PV.whenText(NOW + 20 * HOUR, NOW)}`, null],
     'offer: an accepted trade in review is a pending line saying when it processes');
   const when = (expiresAt) => kind(notes({ team, offers: [{ ...offers[0], expiresAt }] }), 'offer').map((n) => n.suggest);
   eq([when(null), when(NOW - HOUR), when(NOW + 9 * 24 * HOUR)].flat(),
     Array(3).fill('Check it on Trade before it expires'), 'offer: no expiry known, one already past, or one over six days off: no day is named');
   // On the synced copy the offer is as old as the sync.
   const old = kind(notes({ team, offers: [offers[0]], offersAt: NOW - 2 * HOUR }), 'offer');
-  eq(old[0] && old[0].detail, `Get Quin Ashby for Eli Ward, Jon Ross · ${exp} · as of 2 hours ago`, 'offer: a synced copy says how old it is');
+  eq(old[0] && old[0].detail, `Sent to you · Get Quin Ashby for Eli Ward, Jon Ross · ${exp} · as of 2 hours ago`, 'offer: a synced copy says how old it is');
   eq(kind(notes({ team, offers: [{ ...offers[0], expiresAt: NOW - HOUR }] }), 'offer')[0].detail,
-    'Get Quin Ashby for Eli Ward, Jon Ross', 'offer: a clock already gone is not printed');
+    'Sent to you · Get Quin Ashby for Eli Ward, Jon Ross', 'offer: a clock already gone is not printed');
   eq(kind(notes({ team, offers: [] }), 'offer'), [], 'offer: none waiting, no line');
   eq(kind(notes({ team, offers: null }), 'offer'), [], 'offer: a read that gave nothing is no line');
   eq(kind(notes({ team, offers: [{ id: 'x' }] }), 'offer'), [], 'offer: an offer with no other team is dropped');
@@ -453,9 +453,9 @@ const ESPN = 'https://fantasy.espn.com/football/team?leagueId=99&seasonId=2026&t
   const held = new Map(list(s).map((p) => [p.playerId, p.projected]));
   const wire = { weeks: [5, 6, 7], pool, projFor: (p) => (held.has(p.playerId) ? held.get(p.playerId) : 12), floors: null };
   const ns = notes({ team, coming, offers, wire, byes: { 4: 6 } });
-  eq(ns.map((n) => `${n.level}:${n.kind}`), ['now:start', 'now:offer', 'soon:hole', 'idea:pickup', 'idea:trade'],
-    'order: this week, then the coming weeks, then ideas');
-  eq(countNotes(ns), { now: 2, pending: 0, soon: 1, idea: 2 }, 'counts: how many stand at each level');
+  eq(ns.map((n) => `${n.level}:${n.kind}`), ['now:start', 'pending:offer', 'soon:hole', 'idea:pickup', 'idea:trade'],
+    'order: this week, then pending, then the coming weeks, then ideas');
+  eq(countNotes(ns), { now: 1, pending: 1, soon: 1, idea: 2 }, 'counts: how many stand at each level');
   eq(new Set(ns.map((n) => n.id)).size, ns.length, 'every line has its own id');
   ok(ns.every((n) => n.title && n.detail && n.action && n.action.label && n.action.href), 'every line has a title, a detail and one button with somewhere to go');
   ok(ns.every((n) => n.title.split(/\s+/).length <= 8 && n.action.label.split(/\s+/).length <= 2), 'a line is a few words and its button one or two');
