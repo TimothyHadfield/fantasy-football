@@ -34,7 +34,7 @@ const NAV_LINKS = ((readFileSync(path.join(REPO, 'index.html'), 'utf8')
   .match(/<header class="site">[\s\S]*?<nav>([\s\S]*?)<\/nav>/) || ['', ''])[1].match(/<a\s/g) || []).length;
 const LEAGUE = '99';
 const ME = 4;
-const SCENARIOS = ['demo', 'live', 'farHoles', 'lineupOk', 'lineupStale', 'lineupRefused', 'synced', 'syncedHeld', 'past', 'noTeam', 'over'];
+const SCENARIOS = ['demo', 'live', 'farHoles', 'lineupOk', 'lineupStale', 'lineupRefused', 'synced', 'syncedHeld', 'past', 'noTeam', 'over', 'ended'];
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -91,7 +91,7 @@ async function boot({ conn = null, stub = {}, store = {} } = {}) {
     const go = [...el.querySelectorAll('a, button')];
     return {
       el, id: el.getAttribute('data-note'), kind: el.getAttribute('data-kind'),
-      level: ((el.getAttribute('class') || '').split(/\s+/).find((c) => /^nt-(now|soon|idea)$/.test(c)) || '').slice(3),
+      level: ((el.getAttribute('class') || '').split(/\s+/).find((c) => /^nt-(now|pending|soon|idea)$/.test(c)) || '').slice(3),
       title: text(el.querySelector('.nt-title')), detail: text(el.querySelector('.nt-detail')),
       // The suggested action: '' when the line has none. `parts` is the order the line is drawn in.
       suggest: text(el.querySelector('.nt-suggest')), suggests: el.querySelectorAll('.nt-suggest').length,
@@ -142,9 +142,17 @@ if (process.argv[2]) {
       ok(r.every((x) => x.controls === 1), 'every line has exactly ONE button', r.map((x) => x.controls));
       ok(r.every((x) => x.title && x.title.split(' ').length <= 8), 'every line is a few words', r.map((x) => x.title));
       const heads = p.order().filter((s) => s.startsWith('['));
-      ok(heads.length >= 1 && heads.join() === ['[This week]', '[Coming weeks]', '[Ideas]'].filter((h) => heads.includes(h)).join(), 'the headings are in order: This week, Coming weeks, Ideas', heads);
-      const levels = r.map((x) => ['now', 'soon', 'idea'].indexOf(x.level));
+      ok(heads.length >= 1 && heads.join() === ['[This week]', '[Pending]', '[Coming weeks]', '[Ideas]'].filter((h) => heads.includes(h)).join(), 'the headings are in order: This week, Pending, Coming weeks, Ideas', heads);
+      const levels = r.map((x) => ['now', 'pending', 'soon', 'idea'].indexOf(x.level));
       ok(levels.every((v, i) => v >= 0 && (i === 0 || levels[i - 1] <= v)), 'the lines are most urgent first', levels);
+      // PENDING TRADES on the sample league too (Tim, 2026-10-22: "also in the
+      // notifications setting show pending trades aswell"): one sent to you, one sent by you.
+      const offers = r.filter((x) => x.kind === 'offer');
+      ok(heads.includes('[Pending]') && offers.length >= 2 && offers.every((x) => x.level === 'pending'), 'demo: pending trades under Pending', offers.map((x) => `${x.level} ${x.title}`));
+      ok(offers.some((x) => /^Sent to you · Get .+ for .+ · expires /.test(x.detail)) && offers.some((x) => /^Sent by you · Get .+ for .+ · expires /.test(x.detail)),
+        'demo: each says who sent it, what for what, and its deadline', offers.map((x) => x.detail));
+      ok(offers.every((x) => x.label === 'Open it' && /^trade\.html\?with=\d+&get=\d+&send=\d+$/.test(x.href)), 'demo: each opens that deal on Trade', offers.map((x) => `${x.label} ${x.href}`));
+      eq(p.document.querySelectorAll('[data-empty="pending"]').length, 0, 'demo: no empty line when there are pending trades');
       ok(r.every((x) => x.tag === 'A' && !x.lineup && !/^https?:/.test(x.href || '')), 'no lineup button and no ESPN link: the sample league is nobody’s', r.map((x) => `${x.tag} ${x.href}`));
       const pick = r.filter((x) => x.kind === 'pickup');
       ok(pick.length >= 1 && pick.length <= 3 && pick.every((x) => /^waivers\.html\?player=\d+$/.test(x.href)), 'up to three pick-ups, each opening that man on Players', pick.map((x) => x.href));
@@ -173,8 +181,8 @@ if (process.argv[2]) {
       const stubbed = await import('./notify-stub-season.mjs');
       ok(p.settled(), 'the list finishes');
       eq(p.badge(), 'Live', 'the badge says Live');
-      eq(p.order(), ['[This week]', 'start', 'bad-start', 'offer', '[Coming weeks]', 'hole', '[Ideas]', 'pickup', 'pickup', 'trade'],
-        'one list: three headings, every kind of line, most urgent first');
+      eq(p.order(), ['[This week]', 'start', 'bad-start', '[Pending]', 'offer', '[Coming weeks]', 'hole', '[Ideas]', 'pickup', 'pickup', 'trade'],
+        'one list: four headings, every kind of line, most urgent first, the offer sent to you under Pending');
       const r = p.rows();
       const by = (id) => r.find((x) => x.id === id) || {};
       ok(r.every((x) => x.controls === 1), 'every line has exactly ONE button', r.map((x) => x.controls));
@@ -189,7 +197,7 @@ if (process.argv[2]) {
         ['T4 Man 05 is out', 'In your lineup at TE', 'See him', 'waivers.html?player=405'], 'bad-start: the starter ruled out, and a link to him');
       // offer
       eq([by('offer-abc').title, by('offer-abc').detail, by('offer-abc').label, by('offer-abc').href],
-        ['Trade offer from Team 3', 'Get T3 Man 03 for T4 Man 04, T4 Man 10', 'Open it', 'trade.html?with=3&get=303&send=404,410'],
+        ['Trade offer from Team 3', 'Sent to you · Get T3 Man 03 for T4 Man 04, T4 Man 10', 'Open it', 'trade.html?with=3&get=303&send=404,410'],
         'offer: who, what for what, and the deal opened on Trade');
       // hole
       eq([by('hole-6-17').title, by('hole-6-17').detail, by('hole-6-17').label, by('hole-6-17').href],
@@ -228,9 +236,9 @@ if (process.argv[2]) {
 
       // THE COUNT: this file is its only writer.
       const rec = p.saved(season);
-      eq(rec && [rec.v, rec.team, rec.week, rec.now, rec.soon, rec.idea], [1, ME, 5, 3, 1, 3], 'the count is saved under the league’s own key: 3 this week, 1 coming, 3 ideas');
+      eq(rec && [rec.v, rec.team, rec.week, rec.now, rec.pending, rec.soon, rec.idea], [1, ME, 5, 2, 1, 1, 3], 'the count is saved under the league’s own key: 2 this week, 1 pending, 1 coming, 3 ideas');
       ok(rec && Math.abs(rec.at - Date.now()) < 60000 && rec.until === stubbed.KICKOFF, 'with when it was worked out and the next kickoff', rec);
-      eq(mod.savedCount(), { now: 3, pending: 0, soon: 1, idea: 3, fresh: true }, 'savedCount: the bell’s numbers, fresh');
+      eq(mod.savedCount(), { now: 2, pending: 1, soon: 1, idea: 3, fresh: true }, 'savedCount: the bell’s numbers, fresh (the offer counted as pending)');
       eq(mod.savedCount(Date.now() + mod.FRESH_MS + 1000).fresh, false, 'savedCount: stale after three hours');
       // A kickoff an hour off: fresh until it, stale after — well inside the three hours.
       const key = `ff.notes.${LEAGUE}-${season}`;
@@ -340,7 +348,7 @@ if (process.argv[2]) {
       const r = p.rows();
       ok(r.some((x) => x.id === 'hole-6-17' && x.detail === 'T4 Man 08 is on bye'), 'the bye is still known, off the copy', r.map((x) => x.detail));
       const offer = r.find((x) => x.kind === 'offer') || {};
-      eq(offer.detail, 'Get T3 Man 03 for T4 Man 04, T4 Man 10 · as of 2 hours ago', 'an offer says how old the copy is');
+      eq(offer.detail, 'Sent to you · Get T3 Man 03 for T4 Man 04, T4 Man 10 · as of 2 hours ago', 'an offer says how old the copy is');
       eq(r.find((x) => x.kind === 'start') && r.find((x) => x.kind === 'start').tag, 'A', 'the lineup button is the link');
       const rec = p.saved(season);
       ok(rec && rec.until === null, 'the count is saved, with no kickoff to end it', rec);
@@ -380,6 +388,61 @@ if (process.argv[2]) {
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }
 
+    if (scenario === 'ended') {
+      // Tim, 2026-10-22: "If a sent trade is either expired or denied, put it in
+      // the notifications section where it asks the user if they want to follow
+      // up or not, or dismiss it".
+      const HOUR = 3600 * 1000;
+      const ENDED = [
+        { id: 'e-dec', withTeamId: 3, get: [303], send: [404], reason: 'declined', at: Date.now() - 2 * HOUR },
+        { id: 'e-exp', withTeamId: 2, get: [203], send: [406, 407], reason: 'expired', at: Date.now() - HOUR },
+      ];
+      const p = await boot({ conn, stub: { ended: ENDED } });
+      const mod = await import(moduleUrl('js/notify-load.js'));
+      ok(p.settled(), 'the list finishes');
+      const order = p.order();
+      ok(order.indexOf('[Pending]') >= 0 && order[order.indexOf('[Pending]') + 1] === 'ended' && order[order.indexOf('[Pending]') + 2] === 'ended',
+        'both ended offers sit under Pending, first there', order);
+      const ended = () => p.rows().filter((x) => x.kind === 'ended');
+      const r = ended();
+      eq(r.map((x) => x.title), ['Team 3 declined your offer', 'Your offer to Team 2 expired'], 'who, and why it ended');
+      ok(/^Get T3 Man 03 for T4 Man 04 · ended /.test(r[0].detail), 'what was offered for what, and when', r[0].detail);
+      ok(/^Get T2 Man 03 for T4 Man 06, T4 Man 07 · ended /.test(r[1].detail), 'every man named', r[1].detail);
+      ok(r.every((x) => x.controls === 2), 'two buttons each', r.map((x) => x.controls));
+      const labels = (x) => [...x.el.querySelectorAll('a, button')].map((b) => text(b));
+      eq(labels(r[0]), ['Follow up', 'Dismiss'], 'Follow up, then Dismiss');
+      eq(r[0].href, 'trade.html?with=3&get=303&send=404', 'Follow up opens the same deal on Trade');
+      ok(r.every((x) => x.suggest), 'with a line asking which', r.map((x) => x.suggest));
+      eq(mod.savedCount().pending, 2, 'the bell counts both');
+
+      // DISMISS: gone at once, remembered, and off the bell's count.
+      const sentKey = `ff.trades.sent.${LEAGUE}-${season}`;
+      p.fire(r[0].el.querySelector('[data-dismiss]'), 'click');
+      await tick(120);
+      eq(ended().map((x) => x.id), ['ended-e-exp'], 'Dismiss takes the line off the list');
+      const rec = JSON.parse(p.map.get(sentKey) || 'null');
+      ok(rec && rec.handled.includes('e-dec'), 'and remembers it for good', JSON.stringify(rec));
+      eq(mod.savedCount().pending, 1, 'and the bell counts one less');
+
+      // FOLLOW UP: kept as a saved trade (the entry Trade's Save writes), opened there.
+      const went = [];
+      p.window.location.assign = (h) => went.push(h);
+      p.fire(ended()[0].el.querySelector('[data-follow]'), 'click');
+      await tick(150);
+      const prefs = JSON.parse(p.map.get('ff.prefs') || '{}');
+      ok(JSON.stringify(prefs['trade.custom']) === JSON.stringify([{ a: ME, b: 2, sendA: ['406', '407'], sendB: ['203'] }]),
+        'Follow up saves the deal as a custom trade: you, him, the men each side sends', JSON.stringify(prefs['trade.custom']));
+      eq(went, ['trade.html?with=2&get=203&send=406,407'], 'and opens it in the Trade page\'s builder');
+      const rec2 = JSON.parse(p.map.get(sentKey) || 'null');
+      ok(rec2 && rec2.handled.includes('e-exp'), 'and the line is handled for good too', JSON.stringify(rec2));
+      eq(mod.savedCount().pending, 0, 'nothing left on the bell');
+      // Nothing pending now, but Pending still shows, with a plain line saying so.
+      const none = [...p.document.querySelectorAll('[data-empty="pending"]')];
+      ok(p.order().includes('[Pending]') && none.length === 1 && text(none[0]) === 'No pending trades or claims right now.',
+        'Pending stays, with a plain line when nothing is pending', `${p.order()} | ${none.map(text)}`);
+      ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
+    }
+
     if (scenario === 'noTeam') {
       const p = await boot({ conn: { leagueId: LEAGUE, season } });
       const mod = await import(moduleUrl('js/notify-load.js'));
@@ -387,6 +450,7 @@ if (process.argv[2]) {
       eq(p.rows().length, 0, 'nobody set as you: no list');
       ok(/You are/.test(p.sentence()) && p.sentence().split(/\s+/).length <= 12, 'one sentence pointing at "You are"', p.sentence());
       eq(p.badge(), 'Live', 'the league is still the real one');
+      eq(p.document.querySelectorAll('[data-empty="pending"]').length, 0, 'no Pending line without a team');
       eq(p.calls('weeks').length + p.calls('wire').length, 0, 'no coming weeks and no wire are read for nobody');
       eq(mod.savedCount(), { now: 0, pending: 0, soon: 0, idea: 0, fresh: true }, 'savedCount: nothing to count');
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));

@@ -87,6 +87,24 @@ export function savedCount(now = Date.now()) {
   return { now: n(rec.now), pending: n(rec.pending), soon: n(rec.soon), idea: n(rec.idea), fresh };
 }
 
+/**
+ * An ended offer of yours (js/trade-outcome.js) was dismissed or followed up:
+ * remember it for good in this browser, and take it off the bell's saved count
+ * (this file being that count's only writer). Returns true when remembered.
+ */
+export async function forgetEnded(id) {
+  const cfg = savedConfig();
+  if (!cfg || cfg.teamId === null || cfg.teamId === undefined) return false;
+  const { markHandled } = await import('./trade-outcome.js');
+  const done = markHandled(cfg.leagueId, cfg.season, cfg.teamId, id);
+  const key = countKey(cfg.leagueId, cfg.season);
+  const rec = readJson(key);
+  if (done && rec && rec.v === 1 && String(rec.team) === String(cfg.teamId) && Number(rec.pending) > 0) {
+    writeJson(key, { ...rec, pending: Math.floor(Number(rec.pending)) - 1 });
+  }
+  return done;
+}
+
 /** The week being played next: the first with a game not yet final (Home's rule), or null. */
 function currentWeek(schedule) {
   const pending = (schedule.weeks || []).find((w) =>
@@ -188,6 +206,26 @@ function modules() {
 
 const slotsOf = (m, teams) => m.trade.slotsForLeague(m.projection.slotCountsFromLineups(teams));
 
+/**
+ * The sample league's two trades waiting, so its Pending section shows what one
+ * looks like (2026-10-22): one sent to you, one you sent, each a man off a real
+ * sample roster for one of yours. Made up, like the rest of the sample league.
+ */
+export function demoOffers(teams, team, now = Date.now()) {
+  const others = (teams || []).filter((t) => team && t.id !== team.id);
+  const mine = ((team && team.players) || []).filter((p) => p && p.playerId !== null && p.playerId !== undefined && p.slot !== 'IR');
+  const out = [];
+  [[others[0], 1, 3, false, 30], [others[1], 2, 4, true, 54]].forEach(([t, his, my, fromMe, hours], i) => {
+    const men = ((t && t.players) || []).filter((p) => p && p.playerId !== null && p.playerId !== undefined && p.slot !== 'IR');
+    if (!t || !men[his] || !mine[my]) return;
+    out.push({
+      id: `demo-offer-${i + 1}`, withTeamId: t.id, get: [men[his].playerId], send: [mine[my].playerId],
+      proposedAt: now - 6 * 60 * 60 * 1000, expiresAt: now + hours * 60 * 60 * 1000, fromMe,
+    });
+  });
+  return out;
+}
+
 /** The sample league: no league is connected, so nothing is read and nothing is saved. */
 async function runDemo(emit) {
   const m = await modules();
@@ -197,13 +235,15 @@ async function runDemo(emit) {
   const teams = demo.generateDemoWeekRosters(week).teams;
   // The sample league has no owner: the first squad stands in, as on Players.
   const team = teams[0] || null;
+  const now = Date.now();
   const base = {
     week, teamId: team ? team.id : null, league: null, team, teams,
     slots: slotsOf(m, teams),
     // Every sample week carries its scores; the sample is PRETENDED to be at
     // this week, so nobody has kicked off in it.
     isLocked: () => false,
-    saved: null, now: Date.now(),
+    offers: demoOffers(teams, team, now),
+    saved: null, now,
   };
   const state = { status: 'demo', isDemo: true, week, teamId: base.teamId, league: null };
   emit({ ...state, notes: m.engine.buildNotes(base), pending: true });
@@ -278,17 +318,20 @@ async function runLive(cfg, emit, { fresh = false } = {}) {
   // `[]` when the read is not there yet, or fails. One read for both.
   let offers = [];
   let claims = [];
+  let ended = [];
   try {
     if (has('fetchPendingMoves')) {
       const got = (await season.fetchPendingMoves()) || {};
       offers = Array.isArray(got.offers) ? got.offers : [];
       claims = Array.isArray(got.claims) ? got.claims : [];
+      // Your sent offers that ended without going through (js/trade-outcome.js).
+      ended = Array.isArray(got.ended) ? got.ended : [];
     } else if (has('fetchPendingTrades')) offers = (await season.fetchPendingTrades()) || [];
-  } catch { offers = []; claims = []; }
+  } catch { offers = []; claims = []; ended = []; }
 
   const base = {
     week, teamId: cfg.teamId, league, team, teams, slots: slotsOf(m, teams), isLocked, byes,
-    offers, claims,
+    offers, claims, ended,
     // On the synced copy an offer is as old as the sync that carried it.
     offersAt: cloud && has('weekReadAt') ? season.weekReadAt(week) : null,
     saved: readJson(tradesKey(cfg.leagueId, cfg.season)),

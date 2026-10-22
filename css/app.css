@@ -2202,6 +2202,9 @@ body.nt-page > footer.site-stamp { flex: none; width: 100%; max-width: 1600px; m
 .nt-title { grid-area: title; min-width: 0; font-weight: 600; }
 .nt-detail { grid-area: detail; min-width: 0; font-size: 13px; color: var(--dim); }
 .nt-title, .nt-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A trade's detail (who sent it, what for what, its deadline) wraps rather
+ * than being cut, so the deal can be read on a phone (2026-10-22). */
+.nt-row[data-kind="offer"] .nt-detail, .nt-row[data-kind="ended"] .nt-detail { white-space: normal; }
 /* The suggested action (Tim, 2026-10-11: "show a suggested action underneath
  * it"): its own line under the title and detail, in the site's green behind a
  * small arrow. A line with nothing to suggest has no second line. */
@@ -2236,6 +2239,8 @@ a.nt-go {
   text-decoration: none;
 }
 a.nt-go:hover { background: #2b3140; }
+/* An offer of yours that ended (2026-10-22): Follow up over Dismiss, in the button's column. */
+.nt-acts { grid-area: go; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 @media (max-width: 760px) {
   body.nt-page { padding-bottom: 8px; }
   .nt-wrap > h1 { margin-bottom: 8px; }
