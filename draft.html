@@ -231,6 +231,56 @@
       </section>
     </div>
 
+    <!-- Tim, 2026-10-26: "Add a "what if" box underneath the draft board that
+         shows each user's record, avg scoring, etc." A tap on one of the picked
+         team's picks opens the list of men drafted after it (#wiSheet); the
+         season below is played again with the swaps (js/draft-review.js). -->
+    <section class="panel" id="whatIfPanel" hidden>
+      <div class="dr-team-head">
+        <h2>What if</h2>
+        <div class="wi-actions">
+          <button type="button" class="wi-btn" id="wiUndo" hidden>Undo</button>
+          <button type="button" class="wi-btn" id="wiReset" hidden>Back to normal</button>
+        </div>
+      </div>
+      <p class="lede" id="wiLede"></p>
+      <div class="table-scroll" id="wiWrap" hidden>
+        <table id="wiTable" class="wi-table">
+          <thead><tr>
+            <th class="name">Team</th>
+            <th>Record</th>
+            <th>+/&minus;</th>
+            <th>Avg</th>
+            <th>+/&minus;</th>
+            <th>PF</th>
+            <th>PA</th>
+            <th>Best</th>
+            <th>Worst</th>
+            <th>Rank</th>
+            <th>+/&minus;</th>
+            <th>Playoffs</th>
+            <th>+/&minus;</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="panel-note" id="wiKey" hidden></p>
+      <details class="explain" id="wiExplain" hidden>
+        <summary>How this works</summary>
+        <div class="panel-note" id="wiNote"></div>
+      </details>
+    </section>
+
+    <!-- The men who can be taken at the pick tapped: everyone drafted after it. -->
+    <div class="wi-sheet" id="wiSheet" role="dialog" aria-labelledby="wiSheetTitle" hidden>
+      <div class="wi-sheet-head">
+        <div class="wi-sheet-title" id="wiSheetTitle"></div>
+        <button type="button" class="wi-btn" id="wiClose">Close</button>
+      </div>
+      <div class="segmented seg-sm wi-pos" id="wiPos"></div>
+      <div class="wi-list" id="wiList"></div>
+    </div>
+
     <details class="explain" id="drExplain" hidden>
       <summary>How this works</summary>
       <div class="panel-note" id="drNote"></div>

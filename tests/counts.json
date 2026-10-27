@@ -323,6 +323,12 @@
     "draft-review-check.mjs": {
       "assertions": 485
     },
+    "test-draft-whatif.mjs": {
+      "assertions": 58
+    },
+    "draft-whatif-check.mjs": {
+      "assertions": 60
+    },
     "pop-check.mjs": {
       "assertions": 139
     },
