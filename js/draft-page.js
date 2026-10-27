@@ -29,7 +29,7 @@ import * as draftReview from './draft-review.js';
 import { generateDemoSchedule, generateDemoWeekRosters } from './demo-rosters.js';
 import { heatScale, heatOf, heatMarkHtml } from './heat.js';
 import {
-  weekRun, registerRun, tipAttr, clearRuns, wireTips, byeWeekOf, setValueSource,
+  weekRun, registerRun, tipAttr, clearRuns, wireTips, byeWeekOf, setValueSource, hideTip,
 } from './player-card.js';
 // Player Value (docs/value-plan.md): the arithmetic, and ESPN's preseason
 // projection re-scored under the league's rules.
@@ -1183,19 +1183,28 @@ const review = {
   box: ['own', 'perfect'].includes(prefs.get('box')) ? prefs.get('box') : 'drafted',
   /** ESPN reads this page load asked for, by kind — printed nowhere, read by tests and by hand. */
   reads: { draft: 0, players: 0, squads: 0, ranks: 0 },
+  // WHAT IF (Tim, 2026-10-26): the swaps made, in order — `{overall, playerId}`
+  // each (js/draft-review.js `whatIfOrder`). Not remembered: a what-if is one visit.
+  whatIf: { swaps: [] },
 };
 const isPre = () => review.compare === 'pre';
-const boxOwn = () => review.box === 'own';
+/** A what-if can be made here: a snake, with picks and a schedule. */
+const wiAllowed = () => Boolean(review.world && !review.world.empty && review.world.whatIf);
+/** A what-if is on the board. While it is, the board is the what-if's and the box is Drafted. */
+const wiOn = () => wiAllowed() && review.whatIf.swaps.length > 0;
+const boxOwn = () => !wiOn() && review.box === 'own';
 /** The perfect draft is on show (and there is one: a snake with picks). */
-const boxPerfect = () => review.box === 'perfect' && Boolean(review.world && review.world.perfectFor);
+const boxPerfect = () => !wiOn() && review.box === 'perfect' && Boolean(review.world && review.world.perfectFor);
 /** The box the switch shows lit. */
 const boxOn = () => (boxPerfect() ? 'perfect' : boxOwn() ? 'own' : 'drafted');
 /**
  * The world as the board and the team's panel draw it: on Perfect draft the
  * picked team's perfect draft — its board, rows (every man's numbers as they
- * are) and team totals; everything else is the same world's.
+ * are) and team totals; with a what-if on, the what-if's; everything else is
+ * the same world's.
  */
-const shown = () => (boxPerfect() ? { ...review.world, ...review.world.perfectFor(review.teamId) } : review.world);
+const shown = () => (wiOn() ? { ...review.world, ...wiBoard() }
+  : boxPerfect() ? { ...review.world, ...review.world.perfectFor(review.teamId) } : review.world);
 // "VS WORTH NOW" ON VALUE (Tim, 2026-10-09: "Instead of basing the "vs worth
 // now" on position in the draft, base it off of their current value - their
 // expected value based on their rank in the draft."). Only when the league's
@@ -1409,25 +1418,46 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
   // when it is first shown, then kept. A snake only: an auction's picks are the
   // order men were put up, not an order anybody chose from.
   let perfectFor = null;
+  // A board in another order — the perfect draft's, or the what-if's (below):
+  // its rows (every man's numbers as they are), its board and its team totals.
+  const reboard = (order) => {
+    const rows = draftReview.perfectRows(rv, order);
+    const perKey = {};
+    for (const k of ['valueDiff', 'expected', 'valueNow', 'valuePre']) {
+      const m = valued ? draftReview.teamValues(rows, k) : new Map();
+      perKey[k] = { map: m, scale: heatScale([...m.values()]) };
+    }
+    // (The box is never Own now here: these are the 'drafted' totals.)
+    return { rv: { ...rv, rows }, board: draftReview.boardOf({ ...draft, picks: rows }), totals: { drafted: perKey, own: perKey } };
+  };
   if (draft.type !== 'auction' && rv.rows.length) {
     const worthNow = new Map(rv.rows.map((r) => [r.playerId, valued ? r.valueNow : r.value]));
     const made = new Map();
     perfectFor = (teamId) => {
       const key = String(teamId);
       if (made.has(key)) return made.get(key);
-      const order = draftReview.perfectOrder(draft.picks, (id) => worthNow.get(id), teamId);
-      const rows = draftReview.perfectRows(rv, order);
-      const perKey = {};
-      for (const k of ['valueDiff', 'expected', 'valueNow', 'valuePre']) {
-        const m = valued ? draftReview.teamValues(rows, k) : new Map();
-        perKey[k] = { map: m, scale: heatScale([...m.values()]) };
-      }
-      // (The box is never Own now here: these are the 'drafted' totals.)
-      const p = { rv: { ...rv, rows }, board: draftReview.boardOf({ ...draft, picks: rows }), totals: { drafted: perKey, own: perKey } };
+      const p = reboard(draftReview.perfectOrder(draft.picks, (id) => worthNow.get(id), teamId));
       made.set(key, p);
       return p;
     };
   }
+
+  // WHAT IF (Tim, 2026-10-26; js/draft-review.js "what if"): the season again
+  // off the real schedule and every week's real squads, which this page has
+  // already read. The regular season's games, each marked decided or not; the
+  // league's spread for the playoff chance, as Schedule learns it (each played
+  // game's score against what its started lineup was projected).
+  const lastRegular = capture.regularSeasonLastWeek(data);
+  const wiGames = (data.games || []).filter((g) => g.week <= lastRegular)
+    .map((g) => ({ ...g, final: capture.gameState(g) === 'final' }));
+  let sigma = null;
+  try {
+    sigma = capture.leagueSpread(data, () => true, capture.startedProjections(rosters, [...finished])).sigma;
+  } catch { sigma = null; }
+  const whatIf = draft.type !== 'auction' && rv.rows.length && wiGames.length ? {
+    reboard, games: wiGames, rosters, sigma,
+    playoff: { teams: capture.playoffTeams(data), weeks: poWeeks },
+  } : null;
 
   // A TEAM'S CARD (the board's headings): its record and average off the games
   // that are final, and what its lineup is projected for in the week in play.
@@ -1466,7 +1496,7 @@ function assemble({ draft, data, rosters, gapOf, byes, isDemo, ranks = null, val
     // "Expected value" and "Value now": each figure against every pick's.
     expScale: heatScale(rv.rows.map((r) => r.expected)),
     nowScale: heatScale(rv.rows.map((r) => r.valueNow)),
-    ownerNow, extra, ownRows, perfectFor,
+    ownerNow, extra, ownRows, perfectFor, whatIf,
   };
 }
 
@@ -1620,6 +1650,9 @@ async function loadReview(src) {
   }
 
   review.world = world;
+  // A what-if belongs to the draft it was made on.
+  review.whatIf.swaps = [];
+  closePicker();
   // A card's Value: a man on a squad is looked up when his card opens.
   setValueSource(world.lookup || null);
   review.leagueKey = leagueKey;
@@ -1710,7 +1743,7 @@ function renderReview() {
   }
   $('drMain').hidden = !any;
   $('drExplain').hidden = !any;
-  if (!any) { $('pageSub').textContent = w.name || ''; return; }
+  if (!any) { $('pageSub').textContent = w.name || ''; drawWhatIf(); return; }
 
   const auction = w.draft.type === 'auction';
   const played = w.weeks.filter((wk) => w.finished.has(wk)).length;
@@ -1736,7 +1769,9 @@ function renderReview() {
     ? '<p><strong>Perfect draft</strong>: at each of its picks, the selected team takes the player with the highest ' +
       `${w.valued ? 'Value now' : 'worth now'} from that pick up to and including its next one; the players in between each move one pick later. ` +
       'No other team changes its picks, and every player keeps his numbers.</p>'
-    : '<p>A player counts for the team that drafted him, wherever he is now.</p>';
+    : wiOn()
+      ? '<p><strong>What if</strong>: a player counts for the team whose pick he sits at, and keeps his numbers.</p>'
+      : '<p>A player counts for the team that drafted him, wherever he is now.</p>';
   $('drNote').innerHTML = (isPre()
     ? '<p><strong>Pre</strong> is where ESPN ranked a player before the season, counted among the players drafted: ' +
     'the best-ranked player drafted is 1.</p>' +
@@ -1780,7 +1815,7 @@ function renderReview() {
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Now. Above zero is a steal, below zero a miss. ` +
     'Green and red compare it with every pick in the draft.</p>' +
     // (No totals without Value: a player still counts for his drafter in the team's table.)
-    (perf ? counts : '<p>A player counts for the team that drafted him, wherever he is now.</p>') + (own ? nobody : '')) +
+    (perf || wiOn() ? counts : '<p>A player counts for the team that drafted him, wherever he is now.</p>') + (own ? nobody : '')) +
     // The board's Avg column, whichever view is on.
     '<p><strong>Avg</strong> is each round’s average across teams.</p>';
 
@@ -1788,6 +1823,7 @@ function renderReview() {
   w.cards = new Map();
   drawBoard();
   drawTeam();
+  drawWhatIf();
 }
 
 function drawBoard() {
@@ -1835,13 +1871,18 @@ function drawBoard() {
     const h = total === null ? null : heatOf(total, totalScale);
     return `<td class="dr-tot${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">${totSaid(total)}${heatMarkHtml(h)}</td>`;
   }).join('') + '</tr>';
+  // WHAT IF: the men the reader chose, each at the pick he was chosen for.
+  const chosen = wiOn() ? new Set(review.whatIf.swaps.map((s) => `${s.overall}:${s.playerId}`)) : null;
   /** One man's cell: where he went (an undrafted man: his position only), the figure on show, his name. */
   const cell = (r, id, cls = '') => {
     const d = dOf(r);
     const h = d === null || d === undefined ? null : heatOf(d, scaleOf(w));
     const went = r.undrafted ? '' : esc(wentFor(r));
     const pos = r.position ? esc(posSaid(r.position)) : '';
-    return `<td class="dr-cell${cls}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}">` +
+    const mark = chosen && chosen.has(`${r.overall}:${r.playerId}`) ? ' wi-in' : '';
+    // (`data-ov`: the pick the cell is, for the what-if's tap.)
+    return `<td class="dr-cell${cls}${mark}${h ? ` ${h.cls}` : ''}" data-team="${esc(id)}"` +
+      `${r.undrafted || r.overall === null || r.overall === undefined ? '' : ` data-ov="${esc(r.overall)}"`}>` +
       whyHtml(r, `<span class="dr-went">${[went, pos].filter(Boolean).join(' ')}</span>` +
         `<span class="dr-d">${dSaid(d ?? null)}${heatMarkHtml(h)}</span>`, 'dr-top') +
       `<span class="dr-name"${cardAttr(r)}>${esc(shortName({ name: nameOf(r), position: r.position }))}</span>` +
@@ -1953,7 +1994,9 @@ function pickTeam(id) {
   // On Perfect draft the board is the picked team's own, so it is drawn again
   // (and any card on it closed); otherwise it keeps its cells.
   if (boxPerfect()) { closePop(); drawBoard(); } else if (!(on && on.classList && on.classList.contains('dr-pick-team'))) closePop();
+  closePicker();
   drawTeam();
+  drawWhatIf();
 }
 
 // ------------------------------------------- where a difference comes from
@@ -1978,7 +2021,7 @@ function whySpec(pid) {
     ...(auction
       ? [{ label: 'Paid', value: `$${r.bid}` }, { label: 'Price rank', value: String(r.at) }]
       : perfectAt
-        ? [{ label: 'Perfect draft', value: `Pick ${r.overall}` }, { label: 'Drafted', value: `Pick ${r.from}` }]
+        ? [{ label: wiOn() ? 'What if' : 'Perfect draft', value: `Pick ${r.overall}` }, { label: 'Drafted', value: `Pick ${r.from}` }]
         : [{ label: 'Drafted', value: `Pick ${r.at}` }]),
     ...(r.keeper ? [{ label: 'Keeper', value: 'Yes' }] : []),
   ];
@@ -2076,6 +2119,485 @@ function wirePop(root) {
   popCard.wirePops(root, { selector: 'button.dr-pick-team', card: (el) => teamSpec(el.dataset.team) });
 }
 
+// ------------------------------------------------------------------- what if
+//
+// Tim, 2026-10-26: "add a "what if" feature in the draft section where you can
+// click on a single player while a user is selected, and then you can replace
+// that player with any other player that was drafted after that player … Do
+// this as [an] animation so all the players visibly shift downwards as you
+// hypothetically drafted another player. allow the user to keep switching their
+// draft picks with other players as much as they want. When they're done allow
+// the player to go back to normal aswell. Add as many details as you can to the
+// simulated season in the what if box. add previews in appropriate places aswell."
+//
+// A click (a tap) on one of the PICKED team's picks on the board opens the men
+// drafted after it (#wiSheet); choosing one makes the swap (js/draft-review.js
+// `whatIfOrder`, the perfect draft's own shift) and the board's cells slide to
+// their new picks (FLIP: each cell starts where it was and is let go). The
+// season under the board (#whatIfPanel) is played again with every swap made
+// (`whatIfSeason`). Undo drops the last swap; Back to normal drops them all.
+// The other teams' picks keep their previews.
+
+/** The season simulation's size and seed for the playoff chance (both ways the same). */
+const WI_RUNS = 4000;
+const WI_SEED = 1;
+/** How long the board's cells take to slide. */
+const WI_MS = 550;
+const WI_POS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
+
+let wiMemo = { world: null, key: null, order: null, board: null, season: null };
+
+/** The what-if's order for the swaps made, kept until they change. */
+function wiState() {
+  const w = review.world;
+  const key = JSON.stringify(review.whatIf.swaps);
+  if (wiMemo.world !== w || wiMemo.key !== key) {
+    wiMemo = { world: w, key, order: draftReview.whatIfOrder(w.draft.picks, review.whatIf.swaps), board: null, season: null };
+  }
+  return wiMemo;
+}
+
+/** The what-if's board, rows and totals (`assemble`'s `reboard`). */
+function wiBoard() {
+  const m = wiState();
+  if (!m.board) m.board = review.world.whatIf.reboard(m.order);
+  return m.board;
+}
+
+/** The season played again with the swaps (js/draft-review.js `whatIfSeason`). */
+function wiSeason() {
+  const m = wiState();
+  if (!m.season) {
+    const w = review.world;
+    m.season = draftReview.whatIfSeason({
+      teamIds: (w.teams || []).map((t) => t.id),
+      games: w.whatIf.games,
+      rosters: w.whatIf.rosters,
+      slots: w.slots,
+      changes: draftReview.whatIfChanges(w.draft.picks, m.order),
+      manOf: (id) => w.men.get(id) || w.men.get(Number(id)) || null,
+      playoff: w.whatIf.playoff,
+      sigma: w.whatIf.sigma,
+      runs: WI_RUNS,
+      seed: WI_SEED,
+    });
+  }
+  return m.season;
+}
+
+if (typeof window !== 'undefined') window.ffWhatIf = { season: () => (wiOn() ? wiSeason() : null), swaps: () => review.whatIf.swaps.slice() };
+
+const rowById = (pid) => (review.world.rv.rows || []).find((r) => same(r.playerId, pid)) || null;
+const manName = (pid) => {
+  const r = rowById(pid);
+  return r ? shortName({ name: nameOf(r), position: r.position }) : `Player ${pid}`;
+};
+/** The figure a man is weighed by in the list: Value now on Value, else his place by worth now. */
+const wiFig = (r) => (review.world.valued ? r.valueNow : r.now);
+
+// ----------------------------------------------------------------- the list
+
+let picker = null;   // { overall, pos } while #wiSheet is open
+
+function closePicker() {
+  picker = null;
+  const s = $('wiSheet');
+  if (s) s.hidden = true;
+}
+
+function openPicker(overall) {
+  const m = wiState();
+  if (!m.order.some((p) => p.overall === overall)) return;
+  picker = { overall, pos: picker && picker.overall === overall ? picker.pos : 'ALL' };
+  hideCards();
+  hideTip();   // (the man's own card, which the tap's hover opened under the list)
+  drawPicker();
+  const s = $('wiSheet');
+  s.hidden = false;
+  s.classList.toggle('sheet', coarsePointer());
+  const list = $('wiList');
+  if (list) list.scrollTop = 0;
+}
+
+function drawPicker() {
+  if (!picker) return;
+  const w = review.world;
+  const m = wiState();
+  const slot = m.order.find((p) => p.overall === picker.overall);
+  const cur = rowById(slot.playerId);
+  const all = draftReview.whatIfCandidates(m.order, picker.overall)
+    .map((p) => ({ p, r: rowById(p.playerId) })).filter((x) => x.r);
+  const there = new Set(all.map((x) => x.r.position));
+  const pos = WI_POS.filter((x) => there.has(x));
+  if (picker.pos !== 'ALL' && !pos.includes(picker.pos)) picker.pos = 'ALL';
+  $('wiSheetTitle').innerHTML = `Pick ${esc(picker.overall)} · ${esc(teamName(slot.teamId))}` +
+    `<span class="muted"> · instead of ${esc(cur ? shortName({ name: nameOf(cur), position: cur.position }) : '—')}</span>`;
+  $('wiPos').innerHTML = ['ALL', ...pos].map((x) =>
+    `<button type="button" data-pos="${x}"${x === picker.pos ? ' class="on"' : ''}>${x === 'ALL' ? 'All' : esc(posSaid(x))}</button>`).join('');
+  const valued = w.valued;
+  // Best first: the highest Value now, or the best place by worth now; then the earlier pick.
+  const key = (x) => {
+    const v = wiFig(x.r);
+    return v === null || v === undefined ? Infinity : valued ? -v : v;
+  };
+  const list = all.filter((x) => picker.pos === 'ALL' || x.r.position === picker.pos)
+    .sort((a, b) => key(a) - key(b) || a.p.overall - b.p.overall);
+  const curFig = cur ? wiFig(cur) : null;
+  const vs = (r) => {
+    const v = wiFig(r);
+    if (v === null || v === undefined || curFig === null || curFig === undefined) return '—';
+    // A printed difference is its two printed ends subtracted (rounded first, then signed).
+    return valued ? signedValue(Math.round(v * 10) / 10 - Math.round(curFig * 10) / 10) : signed(curFig - v);
+  };
+  $('wiList').innerHTML = `<div class="wi-cand wi-cand-head" aria-hidden="true"><span class="wi-c-at">Pick</span>` +
+    `<span class="wi-c-name">Player</span><span class="wi-c-v">${valued ? 'Value' : 'Now'}</span><span class="wi-c-d">+/−</span></div>` +
+    (list.length ? list.map(({ p, r }) => `<button type="button" class="wi-cand" data-pid="${esc(p.playerId)}">` +
+      `<span class="wi-c-at">${esc(p.overall)}</span>` +
+      `<span class="wi-c-name">${esc(shortName({ name: nameOf(r), position: r.position }))} <span class="muted">${esc(posSaid(r.position))}</span></span>` +
+      `<span class="wi-c-v">${wiFig(r) === null || wiFig(r) === undefined ? '—' : valued ? valueText(wiFig(r)) : esc(wiFig(r))}</span>` +
+      `<span class="wi-c-d">${esc(vs(r))}</span></button>`).join('')
+      : '<p class="panel-note">Nobody was drafted after this pick.</p>');
+}
+
+/** A man in the list: where he is now, where he would go, and who slides. */
+function candSpec(pid) {
+  if (!picker) return null;
+  const m = wiState();
+  const at = m.order.find((p) => same(p.playerId, pid));
+  const slot = m.order.find((p) => p.overall === picker.overall);
+  const r = rowById(pid);
+  const cur = slot ? rowById(slot.playerId) : null;
+  if (!at || !slot || !r) return null;
+  const valued = review.world.valued;
+  const fig = (x) => (wiFig(x) === null || wiFig(x) === undefined ? '—' : valued ? valueText(wiFig(x)) : `Pick ${wiFig(x)}`);
+  const slide = at.overall - slot.overall;
+  return {
+    title: nameOf(r),
+    sub: posSaid(r.position),
+    rows: [
+      { label: 'Now at', value: `Pick ${at.overall}` },
+      { label: 'Moves to', value: `Pick ${slot.overall}` },
+      { label: 'Slide one pick later', note: `picks ${slot.overall}–${at.overall - 1}`, value: `${slide} player${slide === 1 ? '' : 's'}` },
+      { label: valued ? 'Value now' : 'Worth now', value: fig(r) },
+      ...(cur ? [{ label: shortName({ name: nameOf(cur), position: cur.position }), note: 'there now', value: fig(cur) }] : []),
+    ],
+  };
+}
+
+// ---------------------------------------------------------------- the swaps
+
+/** Where each man's cell is on the board now, for the slide. */
+function boardRects() {
+  const out = new Map();
+  const board = $('draftBoard');
+  for (const td of board.querySelectorAll('td.dr-cell[data-ov]')) {
+    const why = td.querySelector('.dr-why');
+    if (why && typeof td.getBoundingClientRect === 'function') out.set(why.dataset.pid, td.getBoundingClientRect());
+  }
+  return out;
+}
+
+const reduceMotion = () => {
+  try { return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
+};
+
+/**
+ * THE SLIDE (FLIP): each cell drawn at its new pick is put back where it was
+ * with a transform, then let go, so it glides to its new place. Nothing is
+ * resized; only the cells that moved move. Off for a reader who asked for less motion.
+ */
+function slide(before) {
+  if (!before || !before.size || reduceMotion() || typeof requestAnimationFrame !== 'function') return;
+  const moving = [];
+  for (const td of $('draftBoard').querySelectorAll('td.dr-cell[data-ov]')) {
+    const why = td.querySelector('.dr-why');
+    const a = why ? before.get(why.dataset.pid) : null;
+    if (!a) continue;
+    const b = td.getBoundingClientRect();
+    const dx = a.left - b.left;
+    const dy = a.top - b.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    td.style.transition = 'none';
+    td.style.transform = `translate(${Math.round(dx)}px, ${Math.round(dy)}px)`;
+    td.classList.add('wi-moving');
+    moving.push(td);
+  }
+  if (!moving.length) return;
+  void $('draftBoard').offsetWidth;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    for (const td of moving) {
+      td.style.transition = `transform ${WI_MS}ms cubic-bezier(.25, .8, .25, 1)`;
+      td.style.transform = '';
+    }
+  }));
+  setTimeout(() => {
+    for (const td of moving) {
+      td.style.transition = '';
+      td.style.transform = '';
+      td.classList.remove('wi-moving');
+    }
+  }, WI_MS + 120);
+}
+
+/** Make the swaps these are, and slide the board to them. */
+function setSwaps(swaps) {
+  const w = review.world;
+  const before = boardRects();
+  review.whatIf.swaps = draftReview.whatIfApplied(w.draft.picks, swaps);
+  closePicker();
+  closePop();
+  hideTip();
+  renderReview();
+  slide(before);
+}
+
+function chooseMan(pid) {
+  if (!picker) return;
+  const m = wiState();
+  const man = m.order.find((p) => same(p.playerId, pid));
+  if (!man) return;
+  setSwaps([...review.whatIf.swaps, { overall: picker.overall, playerId: man.playerId }]);
+}
+
+// ------------------------------------------------------------------ the box
+
+const pct0 = (p) => (p === null || p === undefined ? null : Math.round(p * 100));
+const wins = (s) => s.w + s.t / 2;
+const recSaid = (s) => `${s.w}-${s.l}${s.t ? `-${s.t}` : ''}`;
+const r1 = (v) => (v === null || v === undefined ? null : Math.round(v * 10) / 10);
+/** A difference cell, coloured on the league's differences (js/heat.js). */
+const diffCell = (d, scale, said, pop = '') => {
+  const h = d === null || d === undefined ? null : heatOf(d, scale);
+  return `<td class="wi-d${h ? ` ${h.cls}` : ''}"${pop}>${said}${heatMarkHtml(h)}</td>`;
+};
+
+function drawWhatIf() {
+  const panel = $('whatIfPanel');
+  if (!panel) return;
+  const can = wiAllowed();
+  panel.hidden = !can;
+  if (typeof popCard.clearPops === 'function') popCard.clearPops('wi');
+  if (!can) return;
+  const w = review.world;
+  const on = wiOn();
+  $('wiUndo').hidden = !on;
+  $('wiReset').hidden = !on;
+  $('wiWrap').hidden = !on;
+  $('wiKey').hidden = !on;
+  $('wiExplain').hidden = !on;
+  if (!on) {
+    $('wiLede').textContent = `${coarsePointer() ? 'Tap' : 'Click'} one of ${teamName(review.teamId)}’s picks on the board to draft someone else there.`;
+    $('wiTable').querySelector('tbody').innerHTML = '';
+    return;
+  }
+
+  // THE SWAPS, the last one in words.
+  const sw = review.whatIf.swaps;
+  const last = sw[sw.length - 1];
+  const beforeLast = draftReview.whatIfOrder(w.draft.picks, sw.slice(0, -1)).find((p) => p.overall === last.overall);
+  $('wiLede').textContent = `${teamName(beforeLast.teamId)} takes ${manName(last.playerId)} at pick ${last.overall} instead of ` +
+    `${manName(beforeLast.playerId)}${sw.length > 1 ? ` · ${sw.length} swaps` : ''}.`;
+
+  const s = wiSeason();
+  const card = (spec) => (typeof popCard.statCard === 'function' ? popCard.statCard(spec, { prefix: 'wi' }) : '');
+  const res = (x) => (x.res ? `${x.res} ${x.pts.toFixed(1)}–${x.opp.toFixed(1)}` : '—');
+  const rows = s.teams.slice().sort((a, b) => a.whatIf.rank - b.whatIf.rank);
+  const winD = new Map(rows.map((t) => [t.teamId, wins(t.whatIf) - wins(t.real)]));
+  const avgD = new Map(rows.map((t) => [t.teamId, t.whatIf.avg === null ? null : r1(r1(t.whatIf.avg) - r1(t.real.avg))]));
+  const rankD = new Map(rows.map((t) => [t.teamId, t.real.rank - t.whatIf.rank]));
+  const poD = new Map(rows.map((t) => [t.teamId, pct0(t.whatIf.pPlayoffs) === null ? null : pct0(t.whatIf.pPlayoffs) - pct0(t.real.pPlayoffs)]));
+  const scales = {
+    win: heatScale([...winD.values()]), avg: heatScale([...avgD.values()]),
+    rank: heatScale([...rankD.values()]), po: heatScale([...poD.values()]),
+  };
+  const done = s.left === 0;
+  const poSaid = (p) => (p === null ? '—' : done ? (p >= 0.5 ? 'In' : 'Out') : `${pct0(p)}%`);
+  const nameIn = (list) => list.map((x) => manName(x.playerId)).join(', ');
+
+  $('wiTable').querySelector('tbody').innerHTML = rows.map((t) => {
+    const a = t.whatIf;
+    const b = t.real;
+    const played = t.weeks.filter((x) => x.final);
+    const opp = (x) => teamName(x.oppId);
+    // Record: every played week, as the what-if has it; a changed result says what it really was.
+    const recPop = card({
+      title: teamName(t.teamId), sub: 'What-if record',
+      rows: played.map((x) => ({
+        lead: x.week, label: `vs ${opp(x)}`,
+        note: x.whatIf.res !== x.real.res ? `was ${x.real.res}` : '',
+        value: res(x.whatIf),
+      })),
+      total: { label: 'Record', value: recSaid(a) },
+    });
+    const winPop = card({
+      title: teamName(t.teamId), sub: 'Wins',
+      rows: [{ label: 'What if', value: recSaid(a) }, { label: 'Real', value: recSaid(b) },
+        ...played.filter((x) => x.whatIf.res !== x.real.res).map((x) => ({ lead: x.week, label: `vs ${opp(x)}`, value: `${x.real.res} → ${x.whatIf.res}` }))],
+      total: { label: 'Difference', value: signedWins(winD.get(t.teamId)) },
+    });
+    const avgPop = card({
+      title: teamName(t.teamId), sub: 'Points a week',
+      rows: played.map((x) => ({
+        lead: x.week, label: `vs ${opp(x)}`,
+        note: Math.abs(x.delta) > 1e-9 ? `real ${x.real.pts.toFixed(1)}` : '', value: x.whatIf.pts,
+      })),
+      total: { label: 'Avg', value: a.avg },
+    });
+    const changedWeeks = played.filter((x) => Math.abs(x.delta) > 1e-9);
+    const sumD = played.reduce((acc, x) => acc + x.delta, 0);
+    const swapPop = card({
+      title: teamName(t.teamId), sub: 'What the swaps changed',
+      rows: changedWeeks.length ? changedWeeks.map((x) => ({
+        lead: x.week,
+        // (A man who only moved between two of the team's own picks is neither in nor out.)
+        label: nameIn(x.ins.filter((p) => p.start && !x.outs.some((o) => same(o.playerId, p.playerId)))) || 'Lineup',
+        note: x.outs.some((p) => p.start && !x.ins.some((o) => same(o.playerId, p.playerId)))
+          ? `for ${nameIn(x.outs.filter((p) => p.start && !x.ins.some((o) => same(o.playerId, p.playerId))))}` : '',
+        html: signedValue(r1(x.delta)),
+      })) : [{ label: 'No week changed', value: '' }],
+      total: { label: `Over ${played.length} weeks`, html: signedValue(r1(sumD)) },
+      foot: `Avg ${valueText(r1(b.avg))} → ${valueText(r1(a.avg))}`,
+    });
+    const paPop = card({
+      title: teamName(t.teamId), sub: 'Points against',
+      rows: played.map((x) => ({
+        lead: x.week, label: opp(x),
+        note: Math.abs(x.whatIf.opp - x.real.opp) > 1e-9 ? `real ${x.real.opp.toFixed(1)}` : '', value: x.whatIf.opp,
+      })),
+      total: { label: 'PA', value: a.pa },
+    });
+    const pfPop = card({
+      title: teamName(t.teamId), sub: 'Points for',
+      rows: [{ label: 'What if', value: a.pf }, { label: 'Real', value: b.pf }],
+      total: { label: 'Difference', html: signedValue(r1(r1(a.pf) - r1(b.pf))) },
+    });
+    const poPop = card({
+      title: teamName(t.teamId), sub: done ? 'Playoffs' : 'Playoff chance, our model',
+      rows: [{ label: 'What if', value: poSaid(a.pPlayoffs) }, { label: 'Real', value: poSaid(b.pPlayoffs) }],
+      foot: done ? 'Top of the final standings.' : `${WI_RUNS.toLocaleString('en-US')} simulated seasons each way.`,
+    });
+    const rankPop = card({
+      title: teamName(t.teamId), sub: 'Standing',
+      rows: [{ label: 'What if', value: `${ordinal(a.rank)} · ${recSaid(a)}` }, { label: 'Real', value: `${ordinal(b.rank)} · ${recSaid(b)}` }],
+    });
+    const week = (x) => (x ? `${x.pts.toFixed(1)} <span class="muted">wk ${esc(x.week)}</span>` : '—');
+    const mine = same(t.teamId, review.teamId);
+    return `<tr class="${mine ? 'wi-me' : ''}${s.changed.has(String(t.teamId)) ? ' wi-changed' : ''}">` +
+      `<td class="name">${esc(teamName(t.teamId))}</td>` +
+      `<td${recPop}>${recSaid(a)}</td>` +
+      diffCell(winD.get(t.teamId), scales.win, signedWins(winD.get(t.teamId)), winPop) +
+      `<td${avgPop}>${a.avg === null ? '—' : valueText(r1(a.avg))}</td>` +
+      diffCell(avgD.get(t.teamId), scales.avg, avgD.get(t.teamId) === null ? '—' : signedValue(avgD.get(t.teamId)), swapPop) +
+      `<td${pfPop}>${valueText(r1(a.pf))}</td>` +
+      `<td${paPop}>${valueText(r1(a.pa))}</td>` +
+      `<td>${week(a.best)}</td>` +
+      `<td>${week(a.worst)}</td>` +
+      `<td${rankPop}>${a.rank}</td>` +
+      diffCell(rankD.get(t.teamId), scales.rank, signed(rankD.get(t.teamId))) +
+      `<td${poPop}>${poSaid(a.pPlayoffs)}</td>` +
+      // (A finished season: in or out, so a change says what it was.)
+      diffCell(poD.get(t.teamId), scales.po, poD.get(t.teamId) === null ? '—'
+        : done ? (poD.get(t.teamId) ? `was ${poSaid(b.pPlayoffs)}` : '0') : signed(poD.get(t.teamId))) +
+      '</tr>';
+  }).join('');
+
+  $('wiKey').textContent = done
+    ? 'Played weeks only. +/− is the what-if minus the real season.'
+    : 'Played weeks only; Playoffs is our model’s chance. +/− is the what-if minus the real season.';
+  const auctionless = s.simulated ? '' : ' (not enough of a schedule to play it out)';
+  $('wiNote').innerHTML =
+    '<p><strong>The board</strong>: at the pick you chose, its team takes the player; everyone drafted between the two picks moves one pick later. ' +
+    'Swaps stack in the order you make them. Every player keeps his numbers.</p>' +
+    '<p><strong>Rosters</strong>: each team’s real roster every week, with the player it drafted at a changed pick swapped for the what-if player — ' +
+    'only in weeks it still had him, and only when the new player was on no other roster that week (or was leaving one through a swap).</p>' +
+    '<p><strong>A played week</strong>: the real score, plus what the swap does to the lineup. ESPN’s projections pick the best lineup with and without the swap; ' +
+    'the difference in what those two lineups actually scored is added. A team with no swap keeps its real scores, so its record only moves when an opponent’s score does. ' +
+    'Injured reserve is left out.</p>' +
+    '<p><strong>Record, Avg, PF, PA, Best, Worst</strong> count played weeks only. <strong>Rank</strong> is win percentage, then points for.</p>' +
+    (done
+      ? '<p><strong>Playoffs</strong>: In or Out by the final standings.</p>'
+      : `<p><strong>Playoffs</strong> is our model, not ESPN’s: the site’s season simulation (${WI_RUNS.toLocaleString('en-US')} seasons, same seed both ways) ` +
+        'plays each week still to come off the best lineup’s projection, with and without the swaps' + auctionless + '.</p>') +
+    '<p><strong>+/−</strong> is the what-if minus the real season, each figure as printed. Green and red compare the teams.</p>';
+}
+
+/** A change in wins, signed: a tie is half a win. */
+function signedWins(d) {
+  if (d === null || d === undefined) return '—';
+  const a = Math.abs(d);
+  return `${d > 0 ? '+' : d < 0 ? '−' : ''}${Number.isInteger(a) ? a : a.toFixed(1)}`;
+}
+
+function wireWhatIf() {
+  const board = $('draftBoard');
+  // THE TAP that opens the list: a pick of the picked team. Caught before the
+  // cell's own previews and its link, which the other teams' picks keep.
+  const opener = (e) => {
+    if (!wiAllowed()) return null;
+    const td = e.target.closest && e.target.closest('td.dr-cell[data-ov]');
+    return td && same(td.dataset.team, review.teamId) ? td : null;
+  };
+  const open = (td) => {
+    const ov = Number(td.dataset.ov);
+    // The what-if is made on the draft as drafted.
+    if (!wiOn() && review.box !== 'drafted') {
+      review.box = 'drafted';
+      prefs.set('box', null);
+      renderReview();
+    }
+    openPicker(ov);
+  };
+  board.addEventListener('click', (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button > 0) return;
+    const td = opener(e);
+    if (!td) return;
+    e.preventDefault();
+    e.stopPropagation();
+    open(td);
+  }, true);
+  board.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const td = opener(e);
+    if (!td) return;
+    e.preventDefault();
+    e.stopPropagation();
+    open(td);
+  }, true);
+
+  $('wiPos').addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('button[data-pos]');
+    if (!b || !picker) return;
+    e.stopPropagation();
+    picker.pos = b.dataset.pos;
+    hideCards();
+    drawPicker();
+  });
+  $('wiList').addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('button.wi-cand[data-pid]');
+    if (!b) return;
+    // (Before the list's preview: a tap here chooses him.)
+    e.stopPropagation();
+    hideCards();
+    chooseMan(b.dataset.pid);
+  });
+  $('wiClose').addEventListener('click', (e) => { e.stopPropagation(); closePicker(); });
+  $('wiUndo').addEventListener('click', () => setSwaps(review.whatIf.swaps.slice(0, -1)));
+  $('wiReset').addEventListener('click', () => setSwaps([]));
+  if (typeof popCard.wirePops === 'function') {
+    // The list's previews: with a mouse only (a tap chooses).
+    popCard.wirePops($('wiSheet'), { selector: 'button.wi-cand[data-pid]', card: (el) => (coarsePointer() ? null : candSpec(el.dataset.pid)) });
+    popCard.wirePops($('whatIfPanel'));
+  }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && picker) closePicker(); });
+  // A tap or click outside the list closes it.
+  document.addEventListener('click', (e) => {
+    if (!picker) return;
+    const s = $('wiSheet');
+    if (s && typeof s.contains === 'function' && s.contains(e.target)) return;
+    closePicker();
+  });
+}
+
 // ------------------------------------------------------------------- controls
 
 /** "Our draft" or the draft room. Remembered when picked on the switch, so a refresh mid-draft stays in the room. */
@@ -2154,13 +2676,16 @@ function initReview() {
   });
   $('boxToggle').addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('button[data-box]');
-    if (!btn || btn.dataset.box === review.box) return;
+    if (!btn || btn.dataset.box === boxOn()) return;
+    // Own now and Perfect draft are the real draft's: they end a what-if.
+    if (wiOn()) { review.whatIf.swaps = []; closePicker(); }
     review.box = ['own', 'perfect'].includes(btn.dataset.box) ? btn.dataset.box : 'drafted';
     prefs.set('box', review.box === 'drafted' ? null : review.box);
     // The totals, the men nobody drafted and the words follow the box (Tim,
     // 2026-10-22), so the board is drawn again; the men in it are the same.
     renderReview();
   });
+  wireWhatIf();
   $('draftBoard').addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('button.dr-pick-team');
     if (!btn) return;

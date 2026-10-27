@@ -343,3 +343,91 @@ td.neg-edge { color: #b91c1c; font-weight: 600; }
      enough to hit under time pressure, not enough to halve the board. */
   td .mark { padding: 7px 11px; }
 }
+
+/* ==========================================================================
+ * WHAT IF (js/draft-page.js "what if"): the list of men drafted after a pick,
+ * the board's slide, and the box under the board.
+ * ========================================================================== */
+
+/* Undo and Back to normal: the size of the small switches (.seg-sm). */
+.wi-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.wi-actions[hidden], .wi-btn[hidden] { display: none; }
+.wi-btn { padding: 6px 12px; font-size: 13px; }
+
+/* The pick that was swapped: a dashed ring, so it reads as hypothetical. */
+.dr-board td.dr-cell.wi-in { box-shadow: inset 0 0 0 2px var(--accent); outline: 1px dashed var(--accent); outline-offset: -5px; }
+/* A cell on its way to its new pick rides over its neighbours. */
+.dr-board td.dr-cell.wi-moving { position: relative; z-index: 2; background: var(--panel-2); will-change: transform; }
+
+/* The list: a sheet from the bottom on a phone, a panel at the bottom right on a laptop. */
+.wi-sheet {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 61;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-4);
+  box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.75);
+  color: var(--text);
+  font-size: 13px;
+}
+.wi-sheet[hidden] { display: none; }
+.wi-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.wi-sheet-head h3, #wiSheetTitle { margin: 0; font-size: 14px; font-weight: 600; min-width: 0; }
+.wi-sheet-head button { padding: 5px 12px; font-size: 13px; flex: none; }
+.wi-sheet-head, .wi-pos { flex: none; }
+.wi-pos { align-self: flex-start; flex-wrap: wrap; }
+.wi-list { overflow-y: auto; min-height: 0; flex: 1 1 auto; margin: 0 -4px; }
+.wi-cand {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 52px 52px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 6px;
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+button.wi-cand:hover, button.wi-cand:focus-visible { background: var(--panel-3); }
+.wi-cand-head { border-top: none; color: var(--dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 2px; }
+.wi-c-at, .wi-c-v, .wi-c-d { text-align: right; font-variant-numeric: tabular-nums; }
+.wi-c-at { color: var(--dim); }
+.wi-c-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The box's table: numbers right-aligned, the picked team in bold. */
+.wi-table th, .wi-table td { white-space: nowrap; }
+.wi-table th:not(.name), .wi-table td:not(.name) { text-align: right; font-variant-numeric: tabular-nums; }
+.wi-table tr.wi-me td.name { font-weight: 600; }
+
+@media (max-width: 640px) {
+  .wi-sheet {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-width: none;
+    max-height: 70vh;
+    padding: 14px 16px 16px;
+    border-width: 1px 0 0;
+    border-radius: var(--r-4) var(--r-4) 0 0;
+    box-shadow: 0 -14px 34px -10px rgba(0, 0, 0, 0.8);
+  }
+  .wi-cand { padding: 10px 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dr-board td.dr-cell.wi-moving { transition: none !important; transform: none !important; }
+}

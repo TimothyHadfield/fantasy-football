@@ -80,7 +80,8 @@
 // All of it only when the league's frozen lines are known (`worth.base`);
 // without them every row's three new numbers are null and nothing else moves.
 
-import { optimalLineup } from './forecast.js';
+import { optimalLineup, simulateSeason } from './forecast.js';
+import { standingsKey } from './capture.js';
 import { valueOf, isBase } from './value.js';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -636,9 +637,22 @@ export function perfectOrder(picks, worthOf, teamId) {
     for (let j = i + 1; j < slots.length; j++) if (slots[j].teamId === slots[i].teamId) { end = j; break; }
     let best = i;
     for (let k = i + 1; k <= end; k++) if (worth(men[k]) > worth(men[best])) best = k;
-    if (best !== i) men.splice(i, 0, men.splice(best, 1)[0]);
+    shiftUp(men, i, best);
   }
   return slots.map((p, i) => ({ ...p, playerId: men[i], from: from.get(men[i]) }));
+}
+
+/**
+ * THE SHIFT, the one both the perfect draft and the what-if make: the man in
+ * place `k` moves up to place `i`, and the men in places `i … k − 1` each slide
+ * one place later, so every slot stays filled and the others keep their order.
+ * Nothing moves when `k` is not after `i`. Changes `men` in place and returns it.
+ */
+export function shiftUp(men, i, k) {
+  if (Number.isInteger(i) && Number.isInteger(k) && k > i && i >= 0 && k < men.length) {
+    men.splice(i, 0, men.splice(k, 1)[0]);
+  }
+  return men;
 }
 
 /**
@@ -661,6 +675,332 @@ export function perfectRows(rv, order) {
       overall: slot.overall, round: slot.round, roundPick: slot.roundPick, teamId: slot.teamId, from: slot.from,
     };
   }).filter(Boolean);
+}
+
+// ------------------------------------------------------------------ what if
+//
+// Tim, 2026-10-26: "add a "what if" feature in the draft section where you can
+// click on a single player while a user is selected, and then you can replace
+// that player with any other player that was drafted after that player and the
+// what if will calculate the outcomes as if that user drafted that player. Add
+// a "what if" box underneath the draft board that shows each user's record, avg
+// scoring, etc. do a similar thing to the perfect draft where the player they
+// take, shift all the other players down between the two player so it lines up
+// correctly. … allow the user to keep switching their draft picks with other
+// players as much as they want. When they're done allow the player to go back
+// to normal aswell. Add as many details as you can to the simulated season in
+// the what if box."
+//
+// THE BOARD. A swap is `{overall, playerId}`: at that pick, its team takes that
+// man, who was on the board LATER; the men in between each slide one pick later
+// (`shiftUp`, the perfect draft's own shift). Swaps stack: each is made on the
+// board the earlier ones left, in the order they were made, so undo is "drop
+// the last one" and back to normal is "none". A swap whose man is not later on
+// that board (an earlier swap moved him up past it) is skipped.
+//
+// THE SEASON. Every slot whose man changed is one change for the team that
+// owns the slot: out goes the man it really drafted there, in comes the man
+// the what-if puts there. Week by week, against the real schedule:
+//   - THE ROSTER: the team's real squad that week, with each man it drafted
+//     swapped for his what-if man — only in weeks it really still held him (a
+//     man it traded or dropped takes his replacement with him), and only when
+//     the new man is free that week: on nobody's squad, or on one losing him
+//     to a swap that same week. Otherwise that swap is off for the week, so
+//     no man ever plays for two teams.
+//   - A PLAYED WEEK'S SCORE: the real score, plus what the change does to the
+//     lineup — ESPN's own projections pick the best legal lineup of the squad
+//     with the change and without it, and the difference between what those
+//     two lineups ACTUALLY scored is added. An unchanged squad scores exactly
+//     its real score; the manager's own choices stay in it. Injured reserve
+//     is left out of both.
+//   - A WEEK STILL TO COME (and the week under way): the best lineup's
+//     projection, with and without the change, played out by the site's season
+//     simulation (js/forecast.js `simulateSeason`: same spread, same seed for
+//     both) for the playoff chance. Only played weeks make the record.
+// Standings: win percentage (a tie half a win), then points for — ESPN's order,
+// js/capture.js `standingsKey`.
+
+const IR_SLOT = 21;
+
+/**
+ * The board after a list of swaps, in pick order: each slot's own pick with
+ * the man who fills it (`playerId`) and where he was really taken (`from`) —
+ * `perfectOrder`'s shape, so `perfectRows` and `boardOf` read it as they read that.
+ *
+ * @param {Array<{overall:number, teamId:number, playerId:number}>} picks the real draft
+ * @param {Array<{overall:number, playerId:number}>} swaps in the order made
+ */
+export function whatIfOrder(picks, swaps) {
+  const slots = (picks || []).slice().sort((a, b) => a.overall - b.overall);
+  const from = new Map(slots.map((p) => [p.playerId, p.overall]));
+  const men = slots.map((p) => p.playerId);
+  for (const s of swaps || []) {
+    const i = slots.findIndex((p) => p.overall === Number(s && s.overall));
+    const k = men.findIndex((id) => String(id) === String(s && s.playerId));
+    shiftUp(men, i, k);
+  }
+  return slots.map((p, i) => ({ ...p, playerId: men[i], from: from.get(men[i]) }));
+}
+
+/** The swaps of a list that `whatIfOrder` really makes (each on the board the ones before it left). */
+export function whatIfApplied(picks, swaps) {
+  const out = [];
+  for (const s of swaps || []) {
+    const order = whatIfOrder(picks, out);
+    const i = order.findIndex((p) => p.overall === Number(s && s.overall));
+    const k = order.findIndex((p) => String(p.playerId) === String(s && s.playerId));
+    if (i >= 0 && k > i) out.push({ overall: Number(s.overall), playerId: order[k].playerId });
+  }
+  return out;
+}
+
+/** Who can be taken at a pick on a (what-if) board: every man after it, in board order. */
+export function whatIfCandidates(order, overall) {
+  const list = order || [];
+  const i = list.findIndex((p) => p.overall === Number(overall));
+  return i < 0 ? [] : list.slice(i + 1);
+}
+
+/**
+ * Each team's changes: `Map<teamId, Array<{overall, out, in}>>` — at each of
+ * its slots whose man the what-if changed, the man it really drafted (`out`)
+ * and the what-if's man (`in`). A team with no change has no entry.
+ */
+export function whatIfChanges(picks, order) {
+  const real = new Map((picks || []).map((p) => [p.overall, p]));
+  const out = new Map();
+  for (const slot of order || []) {
+    const r = real.get(slot.overall);
+    if (!r || String(r.playerId) === String(slot.playerId)) continue;
+    const key = r.teamId;
+    if (!out.has(key)) out.set(key, []);
+    out.get(key).push({ overall: slot.overall, out: r.playerId, in: slot.playerId });
+  }
+  return out;
+}
+
+/**
+ * A week's swaps that are on: `Map<teamId, Array<{out, in}>>` — see "THE
+ * SEASON" above. A swap is on when the team holds its `out` man that week and
+ * its `in` man is free (on no squad, or leaving his own through a swap that is on).
+ *
+ * @param {Array<{id:number, players:Array<{playerId:number}>}>} teams the week's real squads
+ * @param {Map<number, Array<{out:number, in:number}>>} changes `whatIfChanges(...)`
+ */
+export function whatIfWeekSwaps(teams, changes) {
+  const holder = new Map();
+  for (const t of teams || []) for (const p of t.players || []) holder.set(String(p.playerId), String(t.id));
+  let on = [];
+  for (const [teamId, list] of changes || []) {
+    for (const c of list) if (holder.get(String(c.out)) === String(teamId)) on.push({ teamId, ...c });
+  }
+  for (;;) {
+    const leaving = new Set(on.map((c) => String(c.out)));
+    const keep = on.filter((c) => !holder.has(String(c.in)) || leaving.has(String(c.in)));
+    if (keep.length === on.length) break;
+    on = keep;
+  }
+  const out = new Map();
+  for (const c of on) {
+    if (!out.has(c.teamId)) out.set(c.teamId, []);
+    out.get(c.teamId).push({ out: c.out, in: c.in });
+  }
+  return out;
+}
+
+/**
+ * The best legal lineup by ESPN's projection (js/forecast.js `optimalLineup`),
+ * with what it projected and what its men actually scored.
+ * @param {Array<{playerId, position, proj, act}>} pool
+ */
+export function lineupOf(pool, slots) {
+  const men = (pool || []).filter((p) => p && p.position && num(p.proj) !== null)
+    .map((p) => ({ ...p, projected: p.proj }));
+  const { starters } = optimalLineup(men, slots);
+  return {
+    starters,
+    proj: starters.reduce((a, p) => a + p.proj, 0),
+    act: starters.reduce((a, p) => a + (num(p.act) ?? 0), 0),
+  };
+}
+
+/**
+ * The season again, with the draft's changes — see "THE SEASON" above.
+ *
+ * @param {Object} o
+ * @param {Array} o.teamIds
+ * @param {Array<{week, homeId, awayId, homeScore, awayScore, final:boolean}>} o.games
+ *   the regular season; `final` = the game is decided
+ * @param {Map<number, Array>} o.rosters week -> that week's real squads (js/season.js shape)
+ * @param {number[]} o.slots one team's starting lineup
+ * @param {Map} o.changes `whatIfChanges(...)`
+ * @param {function(number):{position:string, byWeek:Object}|null} o.manOf a drafted man's
+ *   weeks: `byWeek[w] = {proj, act, counts, done}` (js/draft-page.js `assemble`)
+ * @param {Object|null} [o.playoff] `{teams, weeks}`: how many make it, and the bracket's weeks
+ * @param {number|null} [o.sigma] the league's spread; no sim without it
+ * @returns {{ teams: Array, changed: Set, left: number, simulated: boolean }}
+ *   one entry a team, in `teamIds` order: `{ teamId, real, whatIf, weeks }`;
+ *   `real`/`whatIf` = `{ w, l, t, games, pf, pa, avg, best, worst, rank, pPlayoffs }`;
+ *   `weeks` one a played or coming game: `{ week, oppId, final, real:{pts, opp, res},
+ *   whatIf:{pts, opp, res}, delta, ins, outs }` (`ins`/`outs`: the swapped men
+ *   with what they scored and whether the lineup started them)
+ */
+export function whatIfSeason({ teamIds, games, rosters, slots, changes, manOf, playoff = null, sigma = null, runs = 4000, seed = 1 }) {
+  const ids = (teamIds || []).slice();
+  const key = (id) => String(id);
+  const weekCache = new Map();
+
+  /** One week, both ways: per team `{ real, whatIf, ins, outs, swapped }` (lineups as `lineupOf`). */
+  const weekOf = (w, final) => {
+    const ck = `${w}|${final}`;
+    if (weekCache.has(ck)) return weekCache.get(ck);
+    const teams = (rosters && rosters.get(w)) || [];
+    const on = whatIfWeekSwaps(teams, changes);
+    const out = new Map();
+    for (const t of teams) {
+      const pool = (t.players || []).filter((p) => p && p.lineupSlotId !== IR_SLOT).map((p) => ({
+        playerId: p.playerId,
+        position: p.position,
+        proj: num(final ? (p.done === true ? p.pregame : p.projected) : p.projected),
+        act: final ? (num(p.actual) ?? 0) : null,
+      }));
+      const swaps = on.get(t.id) || on.get(Number(t.id)) || on.get(String(t.id)) || [];
+      const outIds = new Set(swaps.map((s) => String(s.out)));
+      const ins = swaps.map((s) => {
+        const m = manOf ? manOf(s.in) : null;
+        const e = m && m.byWeek ? m.byWeek[w] : null;
+        return {
+          playerId: s.in,
+          position: (m && m.position) || '',
+          proj: e ? num(final ? e.proj : e.counts) : null,
+          act: final ? (e ? num(e.act) ?? 0 : 0) : null,
+        };
+      });
+      const real = lineupOf(pool, slots);
+      const wi = swaps.length ? lineupOf([...pool.filter((p) => !outIds.has(String(p.playerId))), ...ins], slots) : real;
+      const startedIn = (lu, id) => lu.starters.some((s) => String(s.playerId) === String(id));
+      out.set(key(t.id), {
+        real, whatIf: wi, swapped: swaps.length > 0,
+        ins: ins.map((p) => ({ playerId: p.playerId, act: p.act, proj: p.proj, start: startedIn(wi, p.playerId) })),
+        outs: swaps.map((s) => {
+          const p = pool.find((x) => String(x.playerId) === String(s.out)) || {};
+          return { playerId: s.out, act: p.act ?? null, proj: p.proj ?? null, start: startedIn(real, s.out) };
+        }),
+      });
+    }
+    weekCache.set(ck, out);
+    return out;
+  };
+
+  const blank = () => ({ w: 0, l: 0, t: 0, games: 0, pf: 0, pa: 0, best: null, worst: null });
+  const stand = new Map(ids.map((id) => [key(id), { real: blank(), whatIf: blank(), weeks: [] }]));
+  const changed = new Set();
+  const remaining = { real: [], whatIf: [] };
+  let left = 0;
+
+  for (const g of games || []) {
+    if (g.homeId === null || g.homeId === undefined || g.awayId === null || g.awayId === undefined) continue;
+    const h = stand.get(key(g.homeId));
+    const a = stand.get(key(g.awayId));
+    if (!h || !a) continue;
+    const wk = weekOf(g.week, g.final === true);
+    const side = (id) => wk.get(key(id)) || null;
+    const hs = side(g.homeId);
+    const as = side(g.awayId);
+    if (hs && hs.swapped) changed.add(key(g.homeId));
+    if (as && as.swapped) changed.add(key(g.awayId));
+
+    if (g.final !== true) {
+      left++;
+      for (const v of ['real', 'whatIf']) {
+        remaining[v].push({
+          week: g.week, homeId: g.homeId, awayId: g.awayId,
+          homeProj: hs ? hs[v].proj : null, awayProj: as ? as[v].proj : null,
+        });
+      }
+      for (const [me, mine, them, theirs] of [[h, hs, g.awayId, as], [a, as, g.homeId, hs]]) {
+        me.weeks.push({
+          week: g.week, oppId: them, final: false,
+          real: { pts: mine ? mine.real.proj : null, opp: theirs ? theirs.real.proj : null, res: null },
+          whatIf: { pts: mine ? mine.whatIf.proj : null, opp: theirs ? theirs.whatIf.proj : null, res: null },
+          delta: mine ? mine.whatIf.proj - mine.real.proj : 0,
+          ins: mine ? mine.ins : [], outs: mine ? mine.outs : [],
+        });
+      }
+      continue;
+    }
+
+    const real = { home: num(g.homeScore) ?? 0, away: num(g.awayScore) ?? 0 };
+    // A changed side: its real score plus what the change does to its lineup's actual points.
+    const shift = (s) => (s && s.swapped ? s.whatIf.act - s.real.act : 0);
+    const wi = { home: real.home + shift(hs), away: real.away + shift(as) };
+    const res = (mine, theirs) => (mine > theirs + 1e-9 ? 'W' : theirs > mine + 1e-9 ? 'L' : 'T');
+    for (const [me, mine, them, theirs, my, their] of [
+      [h, hs, g.awayId, as, 'home', 'away'], [a, as, g.homeId, hs, 'away', 'home']]) {
+      for (const v of ['real', 'whatIf']) {
+        const pts = v === 'real' ? real[my] : wi[my];
+        const opp = v === 'real' ? real[their] : wi[their];
+        const s = me[v];
+        const r = res(pts, opp);
+        if (r === 'W') s.w++; else if (r === 'L') s.l++; else s.t++;
+        s.games++;
+        s.pf += pts;
+        s.pa += opp;
+        if (!s.best || pts > s.best.pts) s.best = { week: g.week, pts };
+        if (!s.worst || pts < s.worst.pts) s.worst = { week: g.week, pts };
+      }
+      me.weeks.push({
+        week: g.week, oppId: them, final: true,
+        real: { pts: real[my], opp: real[their], res: res(real[my], real[their]) },
+        whatIf: { pts: wi[my], opp: wi[their], res: res(wi[my], wi[their]) },
+        delta: wi[my] - real[my],
+        ins: mine ? mine.ins : [], outs: mine ? mine.outs : [],
+      });
+    }
+  }
+
+  // Ranks: the standings each way.
+  for (const v of ['real', 'whatIf']) {
+    const order = ids.slice().sort((x, y) => {
+      const a = stand.get(key(x))[v];
+      const b = stand.get(key(y))[v];
+      return standingsKey(b, b.pf) - standingsKey(a, a.pf);
+    });
+    order.forEach((id, i) => {
+      const s = stand.get(key(id))[v];
+      s.rank = i + 1;
+      s.avg = s.games ? s.pf / s.games : null;
+    });
+  }
+
+  // The playoff chance, our model: the site's season simulation, both ways, same spread and seed.
+  let simulated = false;
+  for (const s of stand.values()) { s.real.pPlayoffs = null; s.whatIf.pPlayoffs = null; }
+  if (playoff && Number.isFinite(sigma) && sigma > 0 && ids.length) {
+    for (const v of ['real', 'whatIf']) {
+      const banked = new Map(ids.map((id) => {
+        const s = stand.get(key(id))[v];
+        return [id, { wins: s.w + s.t / 2, pointsFor: s.pf }];
+      }));
+      const proj = new Map();
+      for (const w of playoff.weeks || []) {
+        const wk = weekOf(w, false);
+        proj.set(w, new Map(ids.map((id) => [id, wk.has(key(id)) ? wk.get(key(id))[v].proj : null])));
+      }
+      const res = simulateSeason({
+        teamIds: ids, banked, games: remaining[v], sigma, runs, seed,
+        playoff: { teams: playoff.teams, weeks: playoff.weeks || [], proj },
+      });
+      if (!res) continue;
+      simulated = true;
+      for (const t of res.teams) stand.get(key(t.teamId))[v].pPlayoffs = t.pPlayoffs;
+    }
+  }
+
+  return {
+    teams: ids.map((id) => ({ teamId: id, ...stand.get(key(id)) })),
+    changed, left, simulated,
+  };
 }
 
 // ------------------------------------------------------------ the sample draft
