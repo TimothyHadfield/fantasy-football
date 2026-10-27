@@ -118,6 +118,9 @@ export function adaptSimTeam(row) {
     teamId: row.teamId !== undefined ? row.teamId : row.id,
     title: pick('pTitle', 'titlePct'),
     last: pick('pLast', 'lastPct'),
+    // Makes the playoffs: the Playoffs page's and Schedule's Playoffs %, read
+    // off this same run (same model, inputs and seed). The share card only.
+    playoffs: pick('pPlayoffs'),
   };
 }
 
@@ -813,6 +816,10 @@ function buildRows(view, sim) {
       luckMargin: view.enough ? view.luckMarginById.get(t.id) ?? null : null,
       title: view.enough && s ? s.title : null,
       last: view.enough && s ? s.last : null,
+      // On the share card only, and NEVER in the sort below (Tim, 2026-10-26:
+      // "Add playoff % to the summary message now. Don't let it affect the
+      // ordering of the players.").
+      playoffs: view.enough && s ? s.playoffs : null,
     };
   });
 
@@ -1292,6 +1299,7 @@ function cardLines(view, sim, inputs) {
   // One fact per line. These are word-wrapped onto the card rather than
   // truncated — a definition that runs off the right-hand edge is worse than no
   // definition at all, because the reader cannot tell it was cut.
+  lines.push(`Playoff % = makes the playoffs.`);
   lines.push(`Title % = wins the championship round.`);
   lines.push(
     `Loser % = LAST IN THE REGULAR SEASON — not the playoffs, ` +
@@ -1359,11 +1367,12 @@ function buildCardText(view, rows, sim, inputs) {
     String(r.name).padEnd(w),
     recordText(r).padStart(rw),
     (r.luck === null ? '—' : `${r.luck > 0 ? '+' : ''}${r.luck.toFixed(1)}`).padStart(6),
+    (pct(r.playoffs) ?? '—').padStart(9),
     (pct(r.title) ?? '—').padStart(8),
     (pct(r.last) ?? '—').padStart(8),
   ].join('  ');
 
-  const header = ['Member'.padEnd(w), 'Record'.padStart(rw), 'LUCK'.padStart(6), 'Title %'.padStart(8), 'Loser %'.padStart(8)].join('  ');
+  const header = ['Member'.padEnd(w), 'Record'.padStart(rw), 'LUCK'.padStart(6), 'Playoff %'.padStart(9), 'Title %'.padStart(8), 'Loser %'.padStart(8)].join('  ');
 
   return [
     head + `${L.name} — week ${view.through}`,
@@ -1512,14 +1521,18 @@ function renderCard(view, rows, sim, inputs) {
   );
 
   // Columns. Names left, every number right-aligned on its own edge.
+  // PLAYOFF % (Tim, 2026-10-26) sits between LUCK and TITLE %; the card stays
+  // 760 wide, so the percentage columns step 104 rather than 112 and the name
+  // gives up the rest. 110 before it keeps its 17px heading clear of LUCK's.
   const colLast = CARD_W - pad;
-  const colTitle = colLast - 112;
-  const colLuck = colTitle - 112;
+  const colTitle = colLast - 104;
+  const colPo = colTitle - 104;
+  const colLuck = colPo - 110;
   // The record sits right after the name, right-aligned on its own edge like
-  // every other figure. 106px clears LUCK's widest value ("−26.0") with room;
+  // every other figure. 100px clears LUCK's widest value ("−26.0") with room;
   // the name is clipped 90px short of the edge, which the widest record
   // ("13-0-1" at 22px) needs.
-  const colRecord = colLuck - 106;
+  const colRecord = colLuck - 100;
   const nameW = colRecord - pad - 90;
 
   let y = top;
@@ -1530,6 +1543,7 @@ function renderCard(view, rows, sim, inputs) {
   ctx.textAlign = 'right';
   ctx.fillText('RECORD', colRecord, y);
   ctx.fillText('LUCK', colLuck, y);
+  ctx.fillText('PLAYOFF %', colPo, y);
   ctx.fillText('TITLE %', colTitle, y);
   ctx.fillText('LOSER %', colLast, y);
   ctx.textAlign = 'left';
@@ -1567,6 +1581,8 @@ function renderCard(view, rows, sim, inputs) {
       ctx.fillText(`${r.luck > 0 ? '+' : ''}${r.luck.toFixed(1)}`, colLuck, baseline);
     }
 
+    ctx.fillStyle = r.playoffs == null ? INK.dim : INK.text;
+    ctx.fillText(pct(r.playoffs) ?? '—', colPo, baseline);
     ctx.fillStyle = r.title === null ? INK.dim : INK.text;
     ctx.fillText(pct(r.title) ?? '—', colTitle, baseline);
     ctx.fillStyle = r.last === null ? INK.dim : INK.text;

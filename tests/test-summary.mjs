@@ -382,6 +382,7 @@ const SCENARIOS = {
       nothing: adaptSimTeam(null),
       // A bracket that could not be built hands back nulls, and null is not zero.
       noBracket: adaptSimTeam({ teamId: 7, pTitle: null, pLast: 0.4 }),
+      withPlayoffs: adaptSimTeam({ teamId: 7, pTitle: 0.25, pLast: 0.1, pPlayoffs: 0.6 }),
     };
 
     return { errors, fetchCalls, settled, adapter, ...readPage(document) };
@@ -828,6 +829,8 @@ if (!fresh.boot) {
   eq(ad.nothing, null, 'and no row at all gives null rather than throwing');
   eq(ad.noBracket.title, null, 'a null title stays null — no bracket is not a 0% chance');
   eq(ad.noBracket.last, 0.4, 'while the other column is still read');
+  eq(ad.withPlayoffs?.playoffs, 0.6, 'the adapter reads pPlayoffs as a probability');
+  eq(ad.noBracket?.playoffs ?? null, null, 'and a row without it gives null');
 
   // ---- the shape of the chart --------------------------------------------
   eq(fresh.rows.length, demo.teams.length, 'one row per league member');
@@ -901,6 +904,40 @@ if (!fresh.boot) {
   ok('rows are ordered by title % minus loser %',
     fresh.rows.every((r, i, a) => i === 0 || (a[i - 1].title - a[i - 1].last) >= (r.title - r.last) - 1e-9),
     JSON.stringify(fresh.rows.map((r) => [r.name, r.title, r.last])));
+
+  // ---- PLAYOFF % ON THE MESSAGE (Tim, 2026-10-26: "Add playoff % to the
+  // summary message now. Don't let it affect the ordering of the players.") --
+  //
+  // The figure is the same simulation's `pPlayoffs` (the Playoffs page's and
+  // Schedule's Playoffs %, same model and seed), re-derived here in sim8. The
+  // order is the 10-22 rule, title % minus loser %, then LUCK, and nothing else.
+  {
+    const { pct } = await import(moduleUrl('js/summary-table.js'));
+    const cols = (name) => textRow(fresh.cardText, name).split(/\s{2,}/);
+    ok('the text copy has a Playoff % heading between LUCK and Title %',
+      /LUCK\s+Playoff %\s+Title %\s+Loser %/.test(fresh.cardText),
+      fresh.cardText.split('\n').slice(0, 5).join(' / '));
+    for (const r of fresh.rows) {
+      const want = pct(sim8.byName.get(r.name).pPlayoffs);
+      eq(cols(r.name)[3], want, `${r.name}: the text copy carries his playoff % (${want})`);
+    }
+    ok('the text copy says what Playoff % is',
+      /Playoff % = makes the playoffs/.test(fresh.cardText), fresh.cardText.slice(-600));
+    // THE ORDER, re-derived without playoff % at all.
+    const standing = (n) => sim8.byName.get(n).pTitle - sim8.byName.get(n).pLast;
+    const wantOrder = demo.teams.map((t) => t.name).sort((a, b) =>
+      (standing(b) - standing(a)) || (luck8.get(b) - luck8.get(a)) || a.localeCompare(b));
+    const textOrder = fresh.cardText.split('\n')
+      .map((l) => demo.teams.find((t) => l.startsWith(`${t.name} `))?.name).filter(Boolean);
+    eq(fresh.rows.map((r) => r.name).join(','), wantOrder.join(','),
+      'the table keeps its order (title % minus loser %, then LUCK)');
+    eq(textOrder.join(','), wantOrder.join(','), 'and so does the text copy');
+    // Not vacuous: on the demo, playoff % would order the league differently.
+    const byPo = demo.teams.map((t) => t.name).sort((a, b) =>
+      sim8.byName.get(b).pPlayoffs - sim8.byName.get(a).pPlayoffs || a.localeCompare(b));
+    ok('(the demo is a real test: sorting by playoff % would change the order)',
+      byPo.join(',') !== wantOrder.join(','), byPo.join(','));
+  }
 
   // ---- THE SHARED RED/GREEN SCALE, on the table ---------------------------
   //
@@ -1306,6 +1343,25 @@ if (!drawn.boot) {
     ok(`${r.name}: LUCK reached the canvas`, drawn.painted.includes(luckOnly), r.luckText);
     ok(`${r.name}: title % reached the canvas`, drawn.painted.includes(r.titleText), r.titleText);
     ok(`${r.name}: loser % reached the canvas`, drawn.painted.includes(r.lastText), r.lastText);
+  }
+
+  // PLAYOFF % ON THE IMAGE (Tim, 2026-10-26), in its own column between LUCK
+  // and TITLE %, with the heading clear of both neighbours at 17px.
+  {
+    const { pct } = await import(moduleUrl('js/summary-table.js'));
+    const head = (s) => drawn.draws.filter((t) => t.s === s).pop();
+    const po = head('PLAYOFF %');
+    const luck = head('LUCK');
+    const title = head('TITLE %');
+    ok('the PLAYOFF % heading is painted', !!po, painted.slice(0, 300));
+    const w = (s) => s.length * 17 * 0.55;
+    ok('and it sits between LUCK and TITLE % without touching either',
+      po && luck && title && luck.x < po.x - w('PLAYOFF %') && po.x < title.x - w('TITLE %'),
+      JSON.stringify({ luck: luck?.x, po: po?.x, title: title?.x }));
+    const atPo = drawn.draws.filter((t) => po && t.x === po.x && t.s !== 'PLAYOFF %')
+      .slice(-drawn.page.rows.length).map((t) => t.s);
+    const want = drawn.page.rows.map((r) => pct(sim8.byName.get(r.name).pPlayoffs));
+    eq(atPo.join(' '), want.join(' '), 'every row\'s playoff % is painted in that column, in the chart\'s order');
   }
 
   // NO EXPLANATION LINES ON THE IMAGE (Tim, 2026-09-17). The definitions live
