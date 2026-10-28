@@ -126,3 +126,10 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** see PROGRESS Status "Zero = base" and `docs/zero-base-plan.md`. value.js fill rule; season.js Values + `fetchWireValues`; card heat re-centred; one-Value Avgs on Analysis, who-to-start, proj-avg grid, Playoffs, Players, Trade; Trade forced-cut Value; free-agent Values; Draft "Value now" dash.
 - **Verified how:** test-value 125 and test-heat 218 (new blocks failed on the old code), test-cloud-wiring 394 (backup-QB expectation 0.2 → 0.1: his bye now counts as the line), full run-all; headless card-vs-row checks on demo + 1241838; WebKit 393 + desktop screenshots.
 - **Open:** Tim's 14.6/17.2 are 14.4/17.0 by hand; lineup trade engine and Proj slot grids keep the floor; wording of Draft "Value" row and Trade "Value on" picker left for Tim.
+
+## 2026-10-28 · Trade rows tidied + This week column (manager chat)
+- **Asked:** "remove the +- 0.4 or whatever next to the change in % bar in trade summarys. Also remove the "yes:unlikely" showing in the trade bars" + "Add a new column that shows this week's proj change with the top bar being mine and the bottom being theirs".
+- **Decided:** "trade bars" = the offer rows; ± removed everywhere on Trade (rows, pop-up, custom box), yes word removed from rows only; "this week" = first unplayed week, raw lineup change (not netted); column after Gain, heading "This week".
+- **Built:** see progress.md Status "Trade rows: no ± band…".
+- **Verified how:** tr-thisweek-check 81 (7 fail on old code), tr-yes-check 42 (1 fails on old code), tr-test, text-audit 12; local WebKit 393 + 1440 screenshots on demo.
+- **Open:** heading wording and column spot are Tim's.

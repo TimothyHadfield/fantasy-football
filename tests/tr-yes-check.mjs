@@ -81,56 +81,61 @@ const rows = (d.rows || []).filter((r) => r.sub);
 ok('at least five finder rows carry a goal figure', rows.length >= 5, rows.length);
 ok('no row prints the chance as "NN% yes"', rows.every((r) => !/\d+% yes/.test(r.sub) && !/%\s*yes/.test(r.sub)),
   rows.map((r) => r.sub).slice(0, 3).join(' | '));
-ok('every row says before → after and then the word',
+// Tim, 2026-10-28: "Also remove the "yes:unlikely" showing in the trade bars".
+// The row prints before → after only; the word lives in the goal cell's card.
+ok('every row says before → after and nothing else (no yes word, no ±)',
   // Whole-percent chances since trade audit Phase 4 (2026-10-15).
-  rows.every((r) => /^\d+% → \d+% · yes: (likely|maybe|unlikely)$/.test(r.sub)),
-  rows.map((r) => r.sub).slice(0, 3).join(' | '));
+  rows.every((r) => /^\d+% → \d+%$/.test(r.sub) && !r.word && !/±/.test(r.all)),
+  rows.map((r) => `${r.sub} [${r.all}]`).slice(0, 3).join(' | '));
 
-// ------------------------------------------------- 2. the word is the number
+// ------------------------------------- 2. the goal card's word is the number
+const cardWord = (r) => {
+  const m = String(r.goalCard).match(/Chance he says yes (likely|maybe|unlikely) \((\d+)%\)/);
+  return m ? { word: m[1], pct: Number(m[2]) } : null;
+};
 for (const r of rows) {
-  const c = readYesCard(r.card);
-  ok(`${r.key}: the word has a preview ending on the word and its %`, WORD.test(r.word) && c.word === r.word && c.pct !== null,
-    `${r.word} / ${r.card}`);
-  ok(`${r.key}: the word is the % against the cut-offs (${c.pct}% → ${r.word})`, c.pct !== null && wordsFor(c.pct).has(r.word),
-    `${c.pct}% ${r.word}`);
-  const want = r.word === 'likely' ? 'pos' : r.word === 'unlikely' ? 'neg' : '';
-  const has = String(r.wordCls).split(/\s+/);
-  ok(`${r.key}: likely green, unlikely red, maybe plain`,
-    want ? has.includes(want) : !has.includes('pos') && !has.includes('neg'), r.wordCls);
-  // ------------------------------------------------ 3. the parts add up
-  const sum = Math.round(c.parts.reduce((a, p) => a + p.v, 0) * 10) / 10;
-  ok(`${r.key}: the parts add up to "In all"`, c.parts.length > 0 && c.inAll !== null && Math.abs(sum - c.inAll) <= 0.051,
-    `${c.parts.map((p) => p.v).join(', ')} = ${sum} vs ${c.inAll}`);
-  ok(`${r.key}: the goal cell's own card says the same word and %`,
-    r.goalCard.includes(`Chance he says yes ${r.word} (${c.pct}%)`), r.goalCard);
+  const g = cardWord(r);
+  ok(`${r.key}: the goal cell's card ends on the word and its %`, !!g && WORD.test(g.word), r.goalCard);
+  ok(`${r.key}: that word is the % against the cut-offs`, !!g && wordsFor(g.pct).has(g.word), g && `${g.pct}% ${g.word}`);
 }
 
-// ------------------------------------------------- 4. his input is flat
+// ------------------------------------------------- 3/4. pop-up: parts add up, his input is flat
+const top = rows.find((r) => r.key === 'f:0') || rows[0];
+const dc = readYesCard(d.deal.card);
+{
+  const sum = Math.round(dc.parts.reduce((a, p) => a + p.v, 0) * 10) / 10;
+  ok('the top row\'s yes preview: the parts add up to "In all"',
+    dc.parts.length > 0 && dc.inAll !== null && Math.abs(sum - dc.inAll) <= 0.051,
+    `${dc.parts.map((p) => p.v).join(', ')} = ${sum} vs ${dc.inAll}`);
+  const want = dc.word === 'likely' ? 'pos' : dc.word === 'unlikely' ? 'neg' : '';
+  const has = String(d.deal.wordCls).split(/\s+/);
+  ok('the pop-up\'s word: likely green, unlikely red, maybe plain',
+    want ? has.includes(want) : !has.includes('pos') && !has.includes('neg'), d.deal.wordCls);
+}
 let differs = 0;
 for (const r of rows) {
-  const c = readYesCard(r.card);
   const all = String(r.theirCard).match(/ All (\d+) (\d+\.\d) (\d+\.\d) /);
   if (!all) { ok(`${r.key}: his He gains card has its flat "All N" line`, false, r.theirCard.slice(-200)); continue; }
   const flat = (Number(all[3]) - Number(all[2])) / Number(all[1]);
   const shown = num((String(r.their).match(/^([+−]?\d+\.\d)\/wk/) || [])[1]);
   if (Number.isFinite(shown) && Math.abs(shown - flat) >= 0.15) differs++;
+  if (r !== top) continue;
   if (Math.abs(flat) < 0.05) {
-    ok(`${r.key}: no lineup part when his flat change is ~0`, c.lineup === null || Math.abs(c.lineup) <= 0.1, `${c.lineup} vs ${flat}`);
+    ok(`${r.key}: no lineup part when his flat change is ~0`, dc.lineup === null || Math.abs(dc.lineup) <= 0.1, `${dc.lineup} vs ${flat}`);
   } else {
     ok(`${r.key}: "he ${flat < 0 ? 'loses' : 'gains'} X a week" is his FLAT change (${flat.toFixed(2)}), not He gains (${r.their})`,
-      c.lineup !== null && Math.abs(c.lineup - flat) <= 0.06, `${c.lineup} vs flat ${flat.toFixed(3)} / shown ${shown}`);
+      dc.lineup !== null && Math.abs(dc.lineup - flat) <= 0.06, `${dc.lineup} vs flat ${flat.toFixed(3)} / shown ${shown}`);
   }
 }
-ok('on at least one row the flat figure and the printed He gains differ (so the check above can fail)', differs > 0, differs);
+ok('on at least one row the flat figure and the printed He gains differ (so the flat check means something)', differs > 0, differs);
 
 // ------------------------------------------------- 5. pop-up and custom box
-const top = rows.find((r) => r.key === 'f:0') || rows[0];
-const dc = readYesCard(d.deal.card);
 ok('the pop-up opens', d.deal.open === true);
 ok('the pop-up says "he says yes: <word> — <why>", no %',
   /he says yes: (likely|maybe|unlikely) — \S/.test(d.deal.line) && !/\d+% he says yes/.test(d.deal.line), d.deal.line);
-ok('the pop-up\'s word and % are the top row\'s', top && d.deal.word === top.word && dc.pct === readYesCard(top.card).pct,
-  `${d.deal.word} ${dc.pct}% vs ${top && top.word} ${top && readYesCard(top.card).pct}%`);
+ok('the pop-up\'s word and % are the top row\'s (its goal card)', !!top && !!cardWord(top) &&
+  d.deal.word === cardWord(top).word && dc.pct === cardWord(top).pct,
+  `${d.deal.word} ${dc.pct}% vs ${top && JSON.stringify(cardWord(top))}`);
 ok('and its why is the why in the word\'s preview', !!dc.why && d.deal.line.includes(`— ${dc.why}`), `${d.deal.line} / ${dc.why}`);
 
 const cc = readYesCard(d.custom.card);

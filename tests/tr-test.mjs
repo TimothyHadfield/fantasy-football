@@ -1872,8 +1872,10 @@ const SCENARIOS = {
         const td = tr.querySelector('.hv.goal-cell');
         const sub = text(td && td.querySelector('.sub'));
         // `all`: the whole cell, rank and band included — the printed change is in it.
-        // `yes`: the word where "62% yes" was (trade audit Phase 3, "show words").
-        return { sub, yes: (sub.match(/yes: (likely|maybe|unlikely)$/) || [])[1] || null, all: text(td) };
+        // `yes`: the word, off the cell's own card since the row stopped printing
+        // it (Tim, 2026-10-28).
+        const yes = (popText(td).match(/Chance he says yes (likely|maybe|unlikely)/) || [])[1] || null;
+        return { sub, yes, all: text(td) };
       })(),
       opp: text(tr.querySelector('td.opp-proj')),
     };
@@ -4901,6 +4903,7 @@ SCENARIOS.yesWords = async function yesWords() {
     return {
       key: tr.getAttribute('data-key'),
       sub: text(td && td.querySelector('.sub')),
+      all: text(td),
       word: text(word),
       wordCls: word ? String(word.getAttribute('class') || '') : null,
       card: word ? popText(word) : '',
@@ -4917,6 +4920,7 @@ SCENARIOS.yesWords = async function yesWords() {
     open: route.open,
     line: text(document.querySelector('#dealBody .deal-goal')),
     word: text(dealWord),
+    wordCls: dealWord ? String(dealWord.getAttribute('class') || '') : null,
     card: dealWord ? popText(dealWord) : '',
   };
   fire($('dealClose'), 'click');
@@ -4943,6 +4947,35 @@ SCENARIOS.yesWords = async function yesWords() {
     gainB: text($('cuGainB').querySelector('.cu-sub')),
   };
   return { errors, goalOn, rows, deal, custom };
+};
+
+/**
+ * THIS WEEK (Tim, 2026-10-28: "Add a new column that shows this week's proj
+ * change with the top bar being mine and the bottom being theirs"). Read by
+ * tr-thisweek-check.mjs: every finder row's This week halves and their cards,
+ * the Suggested and saved heads, and the week the page treats as next.
+ */
+SCENARIOS.thisWeek = async function thisWeek() {
+  const { document, errors } = await boot();
+  await settleGoal(document);
+  const half = (td, i) => {
+    const sp = td ? td.querySelectorAll('.sp')[i] : null;
+    const hv = sp && sp.querySelector('.hv');
+    return sp ? { label: text(sp.querySelector('.hk')), text: text(hv), cls: hv ? String(hv.className) : '',
+      card: hv ? popText(hv) : '' } : null;
+  };
+  const heads = (id) => [...document.querySelectorAll(`#${id} thead th`)].map((th) => text(th));
+  const rows = [...document.querySelectorAll('#tradeTable tbody tr.offer')].slice(0, 12).map((tr) => {
+    const td = tr.querySelector('td.wkproj');
+    const kids = [...tr.children];
+    return {
+      key: tr.getAttribute('data-key'),
+      at: td ? kids.indexOf(td) : -1,
+      gainsAt: kids.indexOf(tr.querySelector('td.gains')),
+      mine: half(td, 0), theirs: half(td, 1),
+    };
+  });
+  return { errors, rows, finderHeads: heads('tradeTable'), sugHeads: heads('cuSugTable'), savedHeads: heads('cuTable') };
 };
 
 /**
@@ -5227,7 +5260,7 @@ const eq = (a, b, msg) => ok(msg, Object.is(a, b), `got ${JSON.stringify(a)}, wa
     // Every column a card shows is LABELLED with its head's own word.
     const heads = [...html.matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
     const finderHeads = (html.match(/<table id="tradeTable">[\s\S]*?<\/thead>/) || [''])[0];
-    for (const [cls, word] of [['chance', 'Chance'], ['deal', 'Send'], ['gains', 'Gain'],
+    for (const [cls, word] of [['chance', 'Chance'], ['deal', 'Send'], ['gains', 'Gain'], ['wkproj', 'This week'],
       ['value', 'Value'], ['appeal', 'Appeal'], ['total', 'Total'], ['opp-proj', 'His proj vs you']]) {
       const c = decl(`#tradeTable td.${cls}::before`, 'content', PHONE);
       ok(`the phone card labels ${cls} "${word}", the column head's word`,
@@ -5354,13 +5387,13 @@ if (!fresh.boot) {
   // expectation (halves swapped, labels swapped, full names) and seen to fail.
   {
     const rows = fresh.trades;
-    const WANT_CELLS = 'name | split chance | split left deal | split gains | value val-change | appeal | total | opp-proj | left espn';
-    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, Value, Appeal, Total, His proj vs you, ESPN — in that order',
+    const WANT_CELLS = 'name | split chance | split left deal | split gains | split wkproj | value val-change | appeal | total | opp-proj | left espn';
+    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, This week, Value, Appeal, Total, His proj vs you, ESPN — in that order',
       rows.length > 0 && rows.every((t) => t.cells.join(' | ') === WANT_CELLS),
       [...new Set(rows.map((t) => t.cells.join(' | ')))].join(' ¦ '));
-    ok('ROW: and the head names those nine columns, one heading per cell',
+    ok('ROW: and the head names those ten columns, one heading per cell',
       fresh.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') ===
-        'Manager | Chance | Send | Gain | Value | Appeal | Total | His proj vs you | ESPN',
+        'Manager | Chance | Send | Gain | This week | Value | Appeal | Total | His proj vs you | ESPN',
       fresh.heads.join(' | '));
     // TOTAL (Tim, 2026-10-12) = Appeal + both gains a week: a whole cell right
     // after Appeal, and with no Appeal on the sample league a dash as well. Its
@@ -5374,7 +5407,7 @@ if (!fresh.boot) {
     // season averages to set a projection against — a dash with no number and
     // no colour. Its arithmetic is held in test-outlook-mark.mjs.
     ok('ROW: Appeal is one whole cell after Value; on the sample league a dash, with no number to sort by and no colour',
-      rows.length > 0 && rows.every((t) => t.appeal && !t.appeal.split && t.appeal.index === 5 && t.appeal.parts === 0 &&
+      rows.length > 0 && rows.every((t) => t.appeal && !t.appeal.split && t.appeal.index === 6 && t.appeal.parts === 0 &&
         t.appeal.text === '—' && t.appeal.v === null && t.appeal.sign === ''),
       JSON.stringify(rows.slice(0, 3).map((t) => t.appeal)));
     // THE +1 A WEEK FLOOR (Tim, 2026-10-12: "don't suggest any trades that
@@ -5451,7 +5484,7 @@ if (!fresh.boot) {
     // `parts` 6, so both of these fail there.
     ok('ROW: Value is ONE whole cell (`td.value.val-change`) — no halves, no "You"/"Him" label',
       rows.length > 0 && rows.every((t) => t.valueCell && t.valueCell.cls === 'value val-change' && !t.valueCell.split &&
-        t.valueCell.parts === 0 && t.valueCell.index === 4),
+        t.valueCell.parts === 0 && t.valueCell.index === 5),
       JSON.stringify(rows.slice(0, 2).map((t) => t.valueCell)));
     // REPLACED with it: was "the two Value halves are opposite numbers". There
     // is one number now, yours; the arithmetic is held in tr-value-check §10.
@@ -5644,7 +5677,7 @@ for (const noApi of [false, true]) {
     const m = t.match(/(\d+)% → (\d+)% \(([+−]?\d+)% ±/);
     const tenth = (s) => Math.round(num(s));
     ok(`the change it quotes is its own before → after subtracted, and the row's${tag}`,
-      !!m && tenth(m[2]) - tenth(m[1]) === tenth(m[3]) && ai.row.goal.all.includes(`${m[3]}% ±`),
+      !!m && tenth(m[2]) - tenth(m[1]) === tenth(m[3]) && ai.row.goal.all.includes(`${m[3]}%`),
       `${(t.match(/chance \(my goal.*/) || [''])[0]} / ${ai.row.goal.all}`);
   }
   ok(`my remaining roster, by position${tag}`, /Rest of my roster \(pts\/wk\):\nQB: /.test(t), t.slice(-400));
@@ -8592,7 +8625,7 @@ if (!live.boot) {
       /No ESPN league in demo/.test(r.espn), r.espn);
     eq(cu.savedRemove, 1, 'and Remove as one extra cell on the end');
     ok('the head names every column the row draws',
-      cu.savedHeads.slice(0, 9).join(' | ') === 'With | Chance | Send | Gain | Value | Appeal | Total | His proj vs you | ESPN',
+      cu.savedHeads.slice(0, 10).join(' | ') === 'With | Chance | Send | Gain | This week | Value | Appeal | Total | His proj vs you | ESPN',
       cu.savedHeads.join(' | '));
   }
 
@@ -8823,8 +8856,9 @@ if (!gt.boot) {
   ok('and rows with the SAME net increase keep the goal\'s order between them',
     T.trades.some((t, i, a) => i > 0 && netOf(a[i - 1]) === netOf(t)) && netTiesKeepGoal(T.trades),
     T.trades.map((t) => `${netOf(t) / 10}:${t.goal.v.toFixed(4)}`).join(' '));
-  ok('each cell says before → after and how likely he is to say yes',
-    scored.every((t) => /^\d+% → \d+% · yes: (likely|maybe|unlikely)$/.test(t.goal.sub)),
+  // No yes word on the row since 2026-10-28 (Tim); it is in the cell's card.
+  ok('each cell says before → after and nothing else',
+    scored.every((t) => /^\d+% → \d+%$/.test(t.goal.sub)),
     scored.slice(0, 3).map((t) => t.goal.sub).join(' | '));
   ok('and a green cell is one that helps, a red one one that hurts — by sign as well as hue',
     scored.every((t) => (/\bpos\b/.test(t.goal.cls) ? /^\+/.test(t.goal.head) : true) &&
@@ -8838,7 +8872,8 @@ if (!gt.boot) {
   const tenths = (s) => Math.round(Number(String(s).replace('−', '-').replace('+', '')));
   /** '' when "Δ … a% → b%" adds up, the text when it does not, null when there is no trio. */
   const trioOff = (words) => {
-    const m = String(words || '').match(/([+−-]?\d+)% ±\d\.\d\D{0,4}?(\d+)% → (\d+)%/);
+    // No ± band since 2026-10-28 (Tim); still read if one ever comes back.
+    const m = String(words || '').match(/([+−-]?\d+)%(?: ±\d\.\d)?\D{0,4}?(\d+)% → (\d+)%/);
     if (!m) return null;
     return tenths(m[3]) - tenths(m[2]) === tenths(m[1]) ? '' : m[0];
   };
@@ -8908,7 +8943,7 @@ if (!gt.boot) {
     // "yes" is only within a point for a partner sure to reach the bracket).
     const top = scored.slice().sort((a, b) => b.goal.v - a.goal.v)[0];
     const re = top ? await rederiveGoal(T, top, 'title') : null;
-    const shown = top ? top.goal.sub.match(/^(\d+)% → (\d+)% · yes: (likely|maybe|unlikely)$/) : null;
+    const shown = top ? top.goal.sub.match(/^(\d+)% → (\d+)%$/) : null;
     // Whole percent since trade audit Phase 4: within half a point of rounding,
     // plus the 0.1 the after was allowed before.
     ok('the top row’s title chance re-derives from the engine alone',
@@ -8918,11 +8953,11 @@ if (!gt.boot) {
     // Since 2026-10-15 (trade audit Phase 3) the yes-chance also reads each
     // man's ESPN average, last game, rank, injury tag, his holes and standing
     // (js/accept.js, pinned by test-accept.mjs) — not re-derivable from the
-    // engine alone, so this only holds the row to one of its words (since
-    // wave 2, "show words"; tr-yes-check.mjs holds the word to its %).
-    ok('and the row prints the chance he says yes as a word',
-      !!shown && /^(likely|maybe|unlikely)$/.test(shown[3]),
-      `page ${top && top.goal.sub}`);
+    // engine alone. Since 2026-10-28 the row no longer prints the word (Tim:
+    // "remove the "yes:unlikely" showing in the trade bars"); tr-yes-check.mjs
+    // holds the word in the cell's card to its %.
+    ok('and the row no longer prints the chance he says yes',
+      !!shown && !/yes/.test(top.goal.sub), `page ${top && top.goal.sub}`);
   }
 
   // -- THE CANDIDATES FOLLOW THE GOAL ------------------------------------------
@@ -9048,16 +9083,17 @@ if (!gt.boot) {
   }
 
   // (4) NO FALSE PRECISION. No chance is printed to two decimals anywhere, and a
-  // stated change carries the measured band.
-  ok('every goal cell prints the ± band beside the change it states',
-    scored.every((t) => t.goal.band === '±0.4' && /^[+−]?\d+% ±0\.4$/.test(t.goal.head)),
+  // stated change no longer carries the band (Tim, 2026-10-28: "remove the +-
+  // 0.4 or whatever next to the change in %"); the method note still states it.
+  ok('every goal cell prints the change with no ± band',
+    scored.every((t) => !t.goal.band && /^[+−]?\d+%$/.test(t.goal.head)),
     scored.slice(0, 4).map((t) => `"${t.goal.head}" band="${t.goal.band}"`).join(' | '));
   ok('and no chance is quoted to two decimal places — not in a cell, not in a tooltip',
     T.trades.every((t) => !/\d\.\d\d\s*%/.test(`${t.goal.head} ${t.goal.sub} ${t.goal.title}`)) &&
       !/\d\.\d\d\s*%/.test(T.count),
     (T.trades.find((t) => /\d\.\d\d\s*%/.test(t.goal.title)) || { goal: {} }).goal.title || '');
-  ok('the pop-up and the custom box state the band too, wherever they state a change',
-    /±0\.4/.test(gt.dealGoal) && /±0\.4/.test(gt.cuPreview),
+  ok('the pop-up and the custom box state the change with no ± band either',
+    !/±/.test(gt.dealGoal) && !/±/.test(gt.cuPreview) && /%/.test(gt.dealGoal) && /%/.test(gt.cuPreview),
     `${gt.dealGoal} | ${gt.cuPreview}`);
 
   // (5) THE BRACKET-WEEK BASIS, said in the note (rule 7). The gain columns add
@@ -9528,7 +9564,7 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     ok('SUGGESTED: every row ADDS a man to the ticked deal',
       sg.one.rows.every((r) => r.send.length + r.receive.length > 1), sum(sg.one));
     ok('SUGGESTED: rows carry the saved table\'s columns', JSON.stringify(sg.one.heads) === JSON.stringify(
-      ['With', 'Chance', 'Send', 'Gain', 'Value', 'Appeal', 'Total', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
+      ['With', 'Chance', 'Send', 'Gain', 'This week', 'Value', 'Appeal', 'Total', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
     ok('SUGGESTED: every row is with the custom partner', sg.one.rows.every((r) => r.partner === sg.partnerName),
       sg.one.rows.map((r) => r.partner).join(','));
     // REPLACED, 2026-10-12: was "every row has Open in custom trades, Ask AI
@@ -9873,7 +9909,8 @@ if (!gl.boot) {
     ok('no console errors with both goal columns', tw.errors.length === 0, tw.errors.slice(0, 2).join(' | '));
     ok('and demo still costs no request', tw.fetchCalls.length === 0, tw.fetchCalls.join(' | '));
     // Whole percent since trade audit Phase 4 (2026-10-15).
-    const chanceRe = /^[+−]?\d+% ±0\.4$/;
+    // No ± band since 2026-10-28 (Tim).
+    const chanceRe = /^[+−]?\d+%$/;
     const subRe = /^(\d+)% → (\d+)%$/;
     // A missing cell reads as blank, so an absent column fails its checks rather than throwing.
     const NA = { head: '', sub: '', cls: '', v: NaN, sign: '?' };
@@ -9890,7 +9927,7 @@ if (!gl.boot) {
     ok('every row carries the preview in the same cell, its "Last" half, filled in (not still waiting)',
       A.trades.length > 2 && A.trades.every((t) => t.alt && t.alt.index === 1 && t.alt.half === 'Last' && !t.alt.wait),
       JSON.stringify(A.trades.slice(0, 2).map((t) => t.alt)));
-    ok('each preview states the change with its ± band, and before → after under it',
+    ok('each preview states the change, and before → after under it',
       A.trades.every((t) => t.alt && chanceRe.test(t.alt.head) && subRe.test(t.alt.sub)),
       A.trades.slice(0, 3).map((t) => `${t.alt && t.alt.head} / ${t.alt && t.alt.sub}`).join(' | '));
     ok('a last-place chance that DROPS is green and one that rises is red — sign and hue agree',

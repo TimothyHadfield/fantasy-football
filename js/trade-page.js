@@ -4025,6 +4025,8 @@ function offerRowAt(offer, i, key, opts = {}) {
           ? weeklyGainHtml(his.gain, his.weeks, theirs.mark, fig.hisWeek)
           : `${signedText(his.gain)}${theirs.mark}`}</td>`) +
     `</td>` +
+    // THIS WEEK (Tim, 2026-10-28): the coming week's proj change, you / him.
+    thisWeekCellHtml(offer) +
     valueCellHtml(offer) +
     appealCellHtml(offer) +
     totalCellHtml(offer, fig.total) +
@@ -6101,9 +6103,10 @@ function goalCellHtml(offer) {
     return `<td class="goal-cell goal-wait" data-v="-1" data-rc="goal" data-why="${esc(why)}">${r.running ? '…' : '—'}</td>`;
   }
   const good = chanceCls(s.mine.gain, s.mine.before, s.mine.after).replace(/^(?=.)/, ' ');
-  // "yes: likely" where "62% yes" was (Tim, 2026-10-14: "show words"); the
-  // percentage, the parts and the why are in the word's own preview.
-  const yes = Number.isFinite(s.accept) ? yesWordHtml(s.verdict || { p: s.accept }) : '';
+  // NO "± band" AND NO "yes: likely" ON THE ROW (Tim, 2026-10-28: "remove the
+  // +- 0.4 or whatever next to the change in % … Also remove the "yes:unlikely"
+  // showing in the trade bars"). The chance he says yes is still in this
+  // cell's preview (`goalSpec`), the pop-up and the custom box.
   // THE RANK, AND THE EQUALS SIGN. A tie group's rows all print the group's
   // number with an "=" after it, which is how a results table has said "level"
   // for a century, and they keep the strict order the comparator gave them.
@@ -6121,10 +6124,8 @@ function goalCellHtml(offer) {
   // down by the guard, and a test has to see the same figure the page sorted on.
   return (
     `<td class="goal-cell${good}" data-v="${s.value}" data-gain="${s.mine.gain}" data-rc="goal">` +
-    `${place}${pctChange(s.mine.before, s.mine.after)}<span class="band"> ±${bandText()}</span>` +
-    `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
-    (yes ? ` · yes: ${yes}` : '') +
-    `</span></td>`
+    `${place}${pctChange(s.mine.before, s.mine.after)}` +
+    `<span class="sub">${pct(s.mine.before)} → ${pct(s.mine.after)}</span></td>`
   );
 }
 
@@ -6257,7 +6258,7 @@ function altGoalCellHtml(offer) {
   const good = chanceCls(s.gain, s.before, s.after).replace(/^(?=.)/, ' ');
   return (
     `<td class="alt-goal-cell${good}" data-v="${s.gain}" data-rc="alt">` +
-    `${pctChange(s.before, s.after)}<span class="band"> ±${bandText()}</span>` +
+    `${pctChange(s.before, s.after)}` +
     `<span class="sub">${pct(s.before)} → ${pct(s.after)}</span></td>`
   );
 }
@@ -6374,6 +6375,52 @@ function vsOptsOf(offer) {
   const o = oppProjOf(offer);
   if (!o || !o.per.length) return {};
   return { vs: new Map(o.per.map((p) => [p.week, p.delta])), vsName: offer.partner.name };
+}
+
+/**
+ * THIS WEEK (Tim, 2026-10-28: "Add a new column that shows this week's proj
+ * change with the top bar being mine and the bottom being theirs, just like
+ * many of the other columns"). Each lineup's projected points in the first week
+ * still to be played, with the deal less without it — raw, not netted and not
+ * weighted, read off the deal's own `byWeek` / `theirByWeek`. A deal sent after
+ * that week changes nothing in it. Null when the week is not priced.
+ * `{week, mine, theirs}`, each side `{before, after, delta}` or null.
+ */
+function thisWeekOf(offer) {
+  if (!offer || offer.combined || basis() !== 'weeks') return null;
+  const played = new Set(playedWeeks());
+  const week = state.weeks.find((w) => !played.has(w)) ?? bracketWeeksAhead()[0];
+  if (week === undefined) return null;
+  const side = (list) => {
+    const w = Array.isArray(list) ? list.find((x) => x && x.week === week) : null;
+    if (!w) {
+      const cut = cutOf(offer.sendAfter);
+      return cut !== null && week <= cut ? { before: null, after: null, delta: 0 } : null;
+    }
+    // Round the two ends first, then subtract: the card prints both.
+    const delta = Number.isFinite(w.before) && Number.isFinite(w.after)
+      ? round1(round1(w.after) - round1(w.before)) : w.delta;
+    return Number.isFinite(delta) ? { before: w.before, after: w.after, delta } : null;
+  };
+  return { week, mine: side(offer.byWeek), theirs: side(offer.theirByWeek) };
+}
+
+/** The This week cell: your change on top, his under it, coloured by sign. */
+function thisWeekCellHtml(offer) {
+  const t = thisWeekOf(offer);
+  const half = (d, rc) => {
+    if (!d) {
+      return `<td class="wk-proj" data-rc="${rc}" data-why="${esc('This week is not priced for this deal.')}">—</td>`;
+    }
+    const cls = d.delta > 0.05 ? ' pos' : d.delta < -0.05 ? ' neg' : '';
+    return `<td class="wk-proj${cls}" data-rc="${rc}" data-v="${d.delta}">${signedText(d.delta)}</td>`;
+  };
+  return (
+    `<td class="split wkproj" data-v="${t && t.mine ? t.mine.delta : -Infinity}">` +
+      splitHalf('You', half(t && t.mine, 'wkm')) +
+      splitHalf('Him', half(t && t.theirs, 'wkt')) +
+    `</td>`
+  );
 }
 
 /** His lineup vs you: HIS gain is YOUR red, and the other way round. */
@@ -6848,11 +6895,9 @@ function dealGoalHtml(offer) {
   const cls = chanceCls(s.mine.gain, s.mine.before, s.mine.after);
   return (
     `<p class="deal-goal"><span class="lbl">Your ${esc(g.chance)}</span>` +
-    `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong>` +
-    // THE BAND, WHEREVER A CHANGE IS STATED. One seed of 10,000 seasons puts a
-    // third of a point of noise on this figure, so a change quoted without it
-    // reads as exact. Measured; see TIE_BAND in js/trade-odds.js.
-    `<span class="band"> ±${bandText()}</span> ` +
+    // No ± band since 2026-10-28 (Tim: "remove the +- 0.4"); the noise is
+    // said once in "How this works".
+    `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong> ` +
     `<span class="sub-inline">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
     (Number.isFinite(s.theirs.before) ? ` · his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
     yesLineHtml(s, offer, 'deal-yes') +
@@ -7697,7 +7742,7 @@ function altInlineHtml(s) {
   const cls = chanceCls(s.gain, s.before, s.after);
   return (
     ` <span class="alt-inline">· ${esc(CHANCE_SHORT[s.goal])} ` +
-    `<b class="${cls}">${pctChange(s.before, s.after)}</b><span class="band"> ±${bandText()}</span></span>`
+    `<b class="${cls}">${pctChange(s.before, s.after)}</b></span>`
   );
 }
 
@@ -9184,8 +9229,7 @@ function renderCustomPreviewAt(priced) {
     : null;
   const goalBit = s && Number.isFinite(s.mine.gain)
     ? ` · <span class="${chanceCls(s.mine.gain, s.mine.before, s.mine.after)}">` +
-      `${esc(goalOf(state.goal).chance)} <strong>${pctChange(s.mine.before, s.mine.after)}</strong>` +
-      `<span class="band"> ±${bandText()}</span></span> ` +
+      `${esc(goalOf(state.goal).chance)} <strong>${pctChange(s.mine.before, s.mine.after)}</strong></span> ` +
       `(${pct(s.mine.before)} → ${pct(s.mine.after)})`
     : '';
   // WILL HE SAY YES, under his own figure (trade audit Phase 3): the word and
@@ -10955,6 +10999,18 @@ function rowCardSpec(cell) {
       ...link,
     };
   }
+  if (kind === 'wkm' || kind === 'wkt') {
+    const t = thisWeekOf(offer);
+    const d = t ? (kind === 'wkm' ? t.mine : t.theirs) : null;
+    const spec = gainWeeksSpec({
+      title: kind === 'wkm' ? 'Your lineup' : `${partner || 'His'} lineup`,
+      sub: t ? `Week ${t.week}, projected` : sub,
+      before: d ? d.before : null, after: d ? d.after : null,
+      shown: d ? signedText(d.delta) : '—',
+      foot: why || (d && d.before === null ? 'The deal is sent after this week.' : ''),
+    });
+    return { ...spec, ...link };
+  }
   if (kind === 'goal') {
     const g = goalOf(state.goal);
     const s = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore : null;
@@ -11241,6 +11297,7 @@ const HEAD_TITLES = [
   [/^Chance$/, 'What the deal does to your chance of finishing first, and of finishing last.'],
   [/^Send$/, 'The men you would give up, and the men he would.'],
   [/^Gain\b/, 'Points a week the deal adds to your best lineup, and to his.'],
+  [/^This week$/, 'How far the deal moves your projected lineup in the coming week, and his.'],
   [/^Value$/, 'Your change in total Value. His is the same figure with the sign turned.'],
   [/^Appeal$/, 'Projection less season average, the men you get minus the men you send.'],
   [/^Total$/, 'Appeal plus his gain a week.'],
