@@ -43,8 +43,8 @@
       "scenarios": 11
     },
     "test-assumed-trade.mjs": {
-      "assertions": 102,
-      "scenarios": 7
+      "assertions": 115,
+      "scenarios": 8
     },
     "test-season-rules.mjs": {
       "assertions": 145,
@@ -90,8 +90,8 @@
       "assertions": 247
     },
     "test-cloud-wiring.mjs": {
-      "assertions": 356,
-      "scenarios": 27
+      "assertions": 394,
+      "scenarios": 29
     },
     "test-trade-odds.mjs": {
       "assertions": 139
@@ -211,7 +211,7 @@
       "assertions": 37
     },
     "tr-yes-check.mjs": {
-      "assertions": 87
+      "assertions": 42
     },
     "test-trade-cut.mjs": {
       "assertions": 3254
@@ -350,8 +350,8 @@
       "assertions": 86
     },
     "notify-check.mjs": {
-      "assertions": 123,
-      "scenarios": 11
+      "assertions": 147,
+      "scenarios": 12
     },
     "bell-check.mjs": {
       "assertions": 145,

@@ -106,6 +106,7 @@ Choices Claude made and Tim hasn't confirmed, in full: `docs/archive/progress-20
 21. **No K, D/ST or Value < 1 man in a suggestion** (Tim, 2026-10-16: "stop suggesting to trade K and DEF in the suggested trades list" / "don't suggest to trade with any player who has a value under 1"). Test fixtures adapt; the rule doesn't.
 
 ## Traps
+- **CI fails when a suite's assertion count FALLS** (`tests/counts.json`; 10-28 tr-yes-check 87 → 42 on purpose). Update that entry by hand (or `node run-all.mjs --bless`, ~35 min) in the same push.
 - **Changing a Trade row's cells breaks other suites' cell indexes:** tr-test (`trioOff`, appeal/value index), `tr-yes-check`, `test-notify-trades` (row shape) all read rows by position. Grep tests for the old order before pushing (10-28 CI went red on test-notify-trades).
 - **A sent offer gone from the waiting list costs one extra ESPN read** (`mTransactions2+mRoster+mTeam`, season.js `trackSent`); Home's request count check (`home-winpct-check`) counts the pending-moves read. Never let `git worktree remove --force` touch a worktree holding a node_modules JUNCTION: it deletes the target's files (happened 10-22; `npm ci` restored). Remove the junction first with `cmd /c rmdir`.
 - **ESPN injury status is TODAY's only** (measured 10-19). The recap saves the latest week's injuries only between ESPN closing the week and the next week's first kickoff (`nextUnderWay`); older weeks are rebuilt from "played, then sat out" and claim no status. A man who sat out is filed as projected 0.0 / actual 0.0, not null.
