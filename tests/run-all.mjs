@@ -149,6 +149,7 @@ const SUITES = [
   ['record-live-check.mjs', 'a record while its game is being played: 3–2 at 20% reads 3.2–2.8, the same on Stats, Summary and Schedule'],
   ['tr-test.mjs', 'the trade page: the depth map, the finder, and the controls'],
   ['tr-send-after-check.mjs', 'Trade: Send now / after week N in the custom box — the weeks up to N unchanged, every figure over the weeks after it, kept on a saved trade'],
+  ['custom-trade-check.mjs', 'Trade custom box (Tim, 2026-10-28): Save keeps the ticks, the red box is the normal box with a red tick, past trades and offers with the picked manager under the lists'],
   ['tr-fixes-check.mjs', 'Trade: Ask AI offers let go on repaint, focus back on what opened the pop-up, Enter on a saved row (sweep 2026-10-16 rows 5, 15, 16)'],
   ['tr-value-check.mjs','Trade: the Proj | Value switch on the custom lists, the season boxes and the assumed trade, and Value on its player cards'],
   ['test-depth.mjs', 'Depth on the Trade grid: men who start in under 20% of the weeks left (exactly 20% is not), their Values added'],

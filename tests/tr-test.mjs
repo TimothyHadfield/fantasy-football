@@ -1521,6 +1521,9 @@ const SCENARIOS = {
     boxB2.checked = true; fire(boxB2, 'change');
     fire($('cuSave'), 'click');
     out.rowsAfterDuplicate = $('cuRows').querySelectorAll('tr').length;
+    // Save keeps the ticks (2026-10-28): Clear, so the row click below is
+    // what fills the box.
+    fire($('cuClear'), 'click');
 
     // A saved row, clicked, goes back into the box (2026-10-12: it opened the
     // pop-up before); the box's own button then opens the finder's pop-up.
@@ -1591,6 +1594,8 @@ const SCENARIOS = {
     const pair = opts.slice(0, 2).sort((x, y) => x.name.localeCompare(y.name));
     const [early, late] = pair;
     const saveOne = async (partner, k) => {
+      // Save keeps the ticks (2026-10-28), so each deal starts from Clear.
+      fire($('cuClear'), 'click');
       $('cuTeamB').value = partner.id;
       fire($('cuTeamB'), 'change');
       await settle(400);
@@ -4986,6 +4991,78 @@ SCENARIOS.thisWeek = async function thisWeek() {
  *      Week by week button since the Best combo went, 2026-10-18), not <body>;
  *  16  Enter on a saved row does what a click does (loads it into the box).
  */
+/**
+ * THE CUSTOM BOX, 2026-10-28 (tests/custom-trade-check.mjs). Tim: "When you
+ * click "save trade" in the custome trade section, don't unselect the
+ * players"; the red box is the normal box; "Undearneath the player selectoin
+ * area in the custom trade show all past trades you've made or offered with
+ * that user". Stubbed live league, you = Ana (1); the season's trades from
+ * TR_PAST_TRADES, waiting offers from TR_PENDING, your ended offers from
+ * TR_SENT (the `ff.trades.sent.*` record).
+ */
+SCENARIOS.customTrade = async function customTrade() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '1241838', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live', 'trade.team': 1 }),
+  };
+  if (process.env.TR_SENT) seed['ff.trades.sent.1241838-2026'] = process.env.TR_SENT;
+  const { document, window, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const partner = async (id) => {
+    $('cuTeamB').value = String(id);
+    fire($('cuTeamB'), 'change');
+    for (let i = 0; i < 200; i++) {
+      if ($('cuHistory') && !$('cuHistory').hidden) break;
+      await settle(25);
+    }
+    await settle(300);
+  };
+  const history = () => {
+    const host = $('cuHistory');
+    if (!host) return null;
+    return {
+      hidden: !!host.hidden,
+      title: text(host.querySelector('h3')),
+      none: text(host.querySelector('.cu-hist-none')),
+      heads: [...host.querySelectorAll('thead th')].map(text),
+      rows: [...host.querySelectorAll('tbody tr')].map((tr) => ({
+        status: tr.getAttribute('data-status'), cells: [...tr.querySelectorAll('td')].map(text),
+      })),
+    };
+  };
+  await partner(2);
+  const bo = history();
+  const red = [...document.querySelectorAll('.cu-man.cu-past')].map((r) => r.getAttribute('data-man'));
+  // Tick one man a side and save.
+  const tick = (sel) => {
+    const b = document.querySelector(sel);
+    if (!b) return null;
+    b.checked = true;
+    fire(b, 'change');
+    return String(b.value);
+  };
+  const ticks = [tick('#cuListA .cu-man[data-man="102"] input'), tick('#cuListB .cu-man[data-man="205"] input')];
+  await settle(600);
+  fire($('cuSave'), 'click');
+  await settle(600);
+  const checked = () => [...document.querySelectorAll('#cuListA input, #cuListB input')]
+    .filter((x) => x.checked || x.hasAttribute('checked')).map((x) => String(x.value)).sort();
+  const save = {
+    ticks, rows: $('cuRows').querySelectorAll('tr[data-cu]').length, after: checked(),
+    saveEnabled: !$('cuSave').disabled,
+  };
+  fire($('cuClear'), 'click');
+  await settle(300);
+  save.afterClear = checked();
+  await partner(3);
+  const cy = history();
+  await partner(4);
+  const di = history();
+  return { errors, bo, cy, di, red, save };
+};
+
 SCENARIOS.trFixes = async function trFixes() {
   const { document, window, errors } = await boot();
   const $ = (id) => document.getElementById(id);
@@ -5080,6 +5157,10 @@ SCENARIOS.trFixes = async function trFixes() {
   const ticked = () => [...document.querySelectorAll('#cuListA input, #cuListB input')]
     .filter((x) => x.checked || x.hasAttribute('checked')).map((x) => String(x.value)).sort();
   out.saved = { ticks, rows: $('cuRows').querySelectorAll('tr[data-cu]').length, tickedAfterSave: ticked() };
+  // Save keeps the ticks (2026-10-28): Clear first, so Enter is what loads them.
+  fire($('cuClear'), 'click');
+  await settle(200);
+  out.saved.tickedAfterClear = ticked();
   const row = $('cuRows').querySelector('tr[data-cu]');
   if (row) {
     const ev = new window.Event('keydown', { bubbles: true, cancelable: true });
@@ -8629,7 +8710,8 @@ if (!live.boot) {
       cu.savedHeads.join(' | '));
   }
 
-  eq(cu.ticksClearedAfterSave, 0, 'saving clears the ticks');
+  // Tim, 2026-10-28: "don't unselect the players" on Save (was: cleared).
+  eq(cu.ticksClearedAfterSave, 2, 'saving keeps the ticks');
   ok('but keeps the squads, so a second deal between the same two is quick',
     cu.pickersKept.a === cu.picked.a && cu.pickersKept.b === cu.picked.b,
     JSON.stringify(cu.pickersKept));

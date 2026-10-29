@@ -92,6 +92,8 @@ import { scope } from './prefs.js';
 import * as espn from './espn.js';
 import { movesFor } from './trade-moves.js';
 import { pastTradeBars, undoesPastTrade } from './past-trades.js';
+import { tradeHistory, STATUS_WORDS as HISTORY_WORDS } from './trade-history.js';
+import { readSent } from './trade-outcome.js';
 // The custom box's orange / red boxes and each side's needs (Tim, 2026-10-15). Pure.
 import { hintSteps } from './custom-hint.js';
 import { slotAverages, positionNeeds } from './slot-needs.js';
@@ -4961,7 +4963,7 @@ function valueGapOk(offer) {
  * it cannot be had (the sample league, a copy not synced), nothing is barred.
  * When it lands and a row on show undoes a trade, the lists are searched again.
  */
-const pastTrades = { key: null, moves: null, bars: new Map() };
+const pastTrades = { key: null, moves: null, bars: new Map(), players: null };
 function loadPastTrades() {
   const cfg = state.isDemo ? null : savedConfig();
   const key = cfg ? `${cfg.leagueId}|${cfg.season}` : null;
@@ -4969,12 +4971,16 @@ function loadPastTrades() {
   pastTrades.key = key;
   pastTrades.moves = null;
   pastTrades.bars = new Map();
+  pastTrades.players = null;
   if (!key) return;
   // Through a promise, so a read that throws at once costs only the bars.
   Promise.resolve().then(() => season.fetchDecisionWorld()).then((world) => {
     if (pastTrades.key !== key) return;
     pastTrades.moves = (world && world.moves) || [];
+    // Names of men no squad holds now, for the box's past-trades list.
+    pastTrades.players = world && world.players instanceof Map ? world.players : null;
     pastTrades.bars = new Map();
+    renderCuHistory();
     if ((state.rows || []).some((o) => pastTradeBarred(o))) runSearch({ keepDeal: true });
     if ((cuSug.rows || []).some((o) => pastTradeBarred(o, state.custom.a))) {
       cuSug.key = null;
@@ -8197,6 +8203,8 @@ function mergePending(offers) {
 }
 
 let pendingTurn = 0;
+/** The offers last read, as ESPN listed them (the box's past-trades list). */
+let pendingOffers = [];
 /** Read the offers waiting and redraw the saved list. Never throws. */
 async function loadPendingTrades() {
   const turn = ++pendingTurn;
@@ -8205,8 +8213,71 @@ async function loadPendingTrades() {
     if (typeof season.fetchPendingTrades === 'function') offers = (await season.fetchPendingTrades()) || [];
   } catch { offers = []; }
   if (turn !== pendingTurn || state.source !== 'live') return;
+  pendingOffers = Array.isArray(offers) ? offers : [];
   mergePending(offers);
   renderCustom();
+}
+
+// ---- PAST TRADES WITH HIM, under the two lists -------------------------------
+//
+// Tim, 2026-10-28: "Undearneath the player selectoin area in the custom trade
+// show all past trades you've made or offered with that user so you don't
+// accidentily send the same or too similar of a trade." js/trade-history.js,
+// on what the page already holds: the season's trades (`pastTrades`), your sent
+// offers that ended (`ff.trades.sent.*`, js/trade-outcome.js) and the offers
+// waiting (`pendingOffers`). No ESPN request of its own. Hidden on the sample
+// league and until the season's trades are read.
+
+function renderCuHistory() {
+  const host = $('cuHistory');
+  if (!host) return;
+  const c = state.custom;
+  const partner = c && c.b !== null && c.b !== undefined ? teamById(c.b) : null;
+  if (state.isDemo || state.source !== 'live' || !partner || c.a === null || c.a === undefined || !pastTrades.moves) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  const me = state.espnTeamId;
+  const mine = me !== null && me !== undefined && String(me) === String(c.a);
+  let ended = [];
+  if (mine) {
+    try {
+      const cfg = savedConfig();
+      if (cfg) ended = readSent(cfg.leagueId, cfg.season, me).ended;
+    } catch { ended = []; }
+  }
+  const rows = tradeHistory({
+    moves: pastTrades.moves, ended, pending: mine ? pendingOffers : [], a: c.a, b: c.b, me,
+  });
+  const who = esc(partner.name || 'him');
+  host.hidden = false;
+  if (!rows.length) {
+    host.innerHTML = `<p class="panel-note cu-hist-none">No trades with ${who} yet.</p>`;
+    return;
+  }
+  const known = new Map();
+  for (const t of customTeams()) for (const p of t.players || []) known.set(String(p.playerId), p.name);
+  const nameOf = (pid, given) => {
+    if (given) return given;
+    if (known.has(pid)) return known.get(pid);
+    const w = pastTrades.players ? (pastTrades.players.get(Number(pid)) || pastTrades.players.get(pid)) : null;
+    return w && w.name ? w.name : `Player ${pid}`;
+  };
+  const men = (ids, given) => esc(ids.map((pid, i) => nameOf(pid, given[i])).join(', ') || '—');
+  const when = (r) => (r.week !== null ? `Wk ${r.week}`
+    : r.at !== null ? new Date(r.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
+  host.innerHTML =
+    `<h3 class="sbw-title">Past trades with ${who}</h3>` +
+    '<div class="table-scroll"><table class="cu-hist-table"><thead><tr>' +
+    '<th class="left">When</th><th class="left">Status</th><th class="left">You give</th><th class="left">You get</th>' +
+    '</tr></thead><tbody>' +
+    rows.map((r) => `<tr data-status="${esc(r.status)}">` +
+      `<td class="left">${esc(when(r))}</td>` +
+      `<td class="left">${esc(HISTORY_WORDS[r.status] || r.status)}</td>` +
+      `<td class="left">${men(r.give, r.giveNames)}</td>` +
+      `<td class="left">${men(r.get, r.getNames)}</td></tr>`).join('') +
+    '</tbody></table></div>';
 }
 
 /** The badge and the words a pending row carries in its last cell. */
@@ -10550,6 +10621,7 @@ function renderCustomBuilt(building) {
   renderCustomSuggest();
   renderCustomPreview(priced);
   scheduleCuHint();
+  renderCuHistory();
   renderCustomInline(priced);
   renderCustomSeason();
   renderCustomSaved();
@@ -11796,11 +11868,8 @@ $('cuSave').addEventListener('click', () => {
     state.customSaved = [entry].concat(state.customSaved);
     saveCustomTrades();
   }
-  // The pickers keep their squads and lose their ticks, so building a second
-  // deal between the same two managers is a couple of taps rather than a
-  // reset.
-  state.custom.sendA = [];
-  state.custom.sendB = [];
+  // THE TICKS STAY (Tim, 2026-10-28: "When you click "save trade" in the
+  // custome trade section, don't unselect the players"). Clear empties them.
   renderCustom();
 });
 

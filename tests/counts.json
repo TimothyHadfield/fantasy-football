@@ -384,6 +384,10 @@
       "assertions": 10,
       "scenarios": 10
     },
+    "custom-trade-check.mjs": {
+      "assertions": 29,
+      "scenarios": 29
+    },
     "test-week-summary.mjs": {
       "assertions": 83
     },
