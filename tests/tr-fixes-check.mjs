@@ -57,8 +57,9 @@ ok('ROW 15: CLOSING PUTS FOCUS BACK ON THE BUTTON THAT OPENED IT',
   !!d.focusBack && d.focusBack.id === 'cuOpen' && d.focusBack.key === d.headKey, JSON.stringify(d.focusBack));
 
 // row 16
-ok('a one-for-one deal was saved and the ticks cleared',
-  d.saved && d.saved.rows >= 1 && d.saved.ticks.every(Boolean) && d.saved.tickedAfterSave.length === 0, JSON.stringify(d.saved));
+ok('a one-for-one deal was saved, the ticks kept (2026-10-28), then cleared by Clear',
+  d.saved && d.saved.rows >= 1 && d.saved.ticks.every(Boolean) && d.saved.tickedAfterSave.length === 2 &&
+    Array.isArray(d.saved.tickedAfterClear) && d.saved.tickedAfterClear.length === 0, JSON.stringify(d.saved));
 ok('ROW 16: ENTER ON A SAVED ROW LOADS IT INTO THE BOX, AS A CLICK DOES',
   d.enter && JSON.stringify(d.enter.tickedAfterEnter) === JSON.stringify(d.enter.want), JSON.stringify(d.enter));
 

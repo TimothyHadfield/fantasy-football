@@ -746,20 +746,37 @@
      meant their tiny little box on the side that has a check mark when it's
      selected, not the entire player's box") — same 16px, so nothing moves;
      a tick still shows as a white check on the colour. */
-  .cu-man.cu-hint input, .cu-man.cu-past input {
+  .cu-man.cu-hint input {
     -webkit-appearance: none; appearance: none; box-sizing: border-box;
     border-radius: 3px; display: inline-grid; place-content: center; cursor: pointer;
   }
   .cu-man.cu-hint input { background: var(--assumed); border: 1px solid var(--assumed); }
-  .cu-man.cu-past input { background: var(--err); border: 1px solid var(--err); }
-  .cu-man.cu-hint input:checked::before, .cu-man.cu-past input:checked::before {
-    content: '¹3'; color: #fff; font-size: 12px; font-weight: 700; line-height: 1;
+  .cu-man.cu-hint input:checked::before {
+    content: '\2713'; color: #fff; font-size: 12px; font-weight: 700; line-height: 1;
+  }
+  /* THE RED BOX IS THE NORMAL BOX (Tim, 2026-10-28: "The Red boxes by a player
+     in the custom trade section are bigger than the other boxes and too red.
+     When you select that player, check it like the other players but make the
+     background redish instead of blue."). The browser's own checkbox, same
+     size and same check; ticked, its fill is a muted red instead of blue. A
+     thin muted-red ring keeps the mark the key under the lists names. */
+  #customPanel { --cu-past: #b5545c; }
+  .cu-man.cu-past input {
+    accent-color: var(--cu-past);
+    outline: 1px solid var(--cu-past); outline-offset: 0; border-radius: 3px;
   }
   /* Its line is held empty, so the marks coming and going on a tick move nothing below. */
   #cuHintKey { min-height: 1.5em; }
   .cu-hint-key .lg-mark { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 5px 0 0; vertical-align: -1px; }
   .cu-hint-key .cu-hint-mark { background: var(--assumed); }
-  .cu-hint-key .cu-past-mark { background: var(--err); }
+  .cu-hint-key .cu-past-mark { background: transparent; box-shadow: inset 0 0 0 1px var(--cu-past); }
+  /* Past trades with him, under the two lists: a plain small table. */
+  .cu-history { margin: 10px 0 4px; }
+  .cu-history .sbw-title { margin: 0 0 4px; }
+  .cu-history table { font-size: 12.5px; width: auto; }
+  .cu-history td { white-space: normal; }
+  .cu-history td:first-child { white-space: nowrap; }
+  .cu-history .cu-hist-none { margin: 4px 0; }
   /* WHAT EACH SIDE NEEDS, after its name (Tim, 2026-10-15): red needed, green
      had — the Analysis grid's own two colours. */
   .cu-head .cu-needs { font-weight: 500; }
@@ -2020,6 +2037,11 @@
         <div class="cu-inline" id="cuInlineB"></div>
       </div>
     </div>
+
+    <!-- PAST TRADES WITH HIM (Tim, 2026-10-28: "show all past trades you've
+         made or offered with that user so you don't accidentily send the same
+         or too similar of a trade"). js/trade-page.js `renderCuHistory`. -->
+    <div class="cu-history" id="cuHistory" hidden></div>
 
     <!-- SUGGESTED (Tim, 2026-10-01: "when I select player(s) in custom trades
          with another user … show all the potential additions as suggested
