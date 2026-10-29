@@ -1153,9 +1153,13 @@ export function readingFrom({
   });
   // Every squad's rosters are in memory at this moment and nowhere afterwards,
   // so the projection history is kept here, on the one call both routes make.
+  // The floor's wire read rides along on the floors (js/season.js
+  // `fetchFloors`, a non-enumerable `wire`), so the free agents cost nothing.
   if (snap && projection && weekTeams) {
     keepHistory({
       leagueId, season, week, data, weeks: projection.weeksCovered, weekTeams, takenAt: snap.takenAt,
+      wire: floors && Array.isArray(floors.wire) ? floors.wire : null,
+      wireWeek: floors && Array.isArray(floors.wire) ? floorWeek : null,
     });
   }
   return snap;
@@ -1201,6 +1205,79 @@ export function historyFrom(weekTeams, weeks) {
   return { weeks: list, cols: PLAYER_COLS.slice(), teams };
 }
 
+// ---------------------------------------------------------------------------
+// THE FREE AGENTS WORTH TRACKING (2026-10-28)
+//
+// Tim: "I want to make a graph for each player that shows their data movement
+// over week progress. The biggest thing I want to see is change in future proj
+// over time." A copy held only rostered men, so a free agent he looked up had
+// no history at all. So each copy also keeps `wire`: the best free agents of
+// the wire the floor already read for the copy's first week (`fetchFloors`,
+// one read, used flat — no request of its own; rule 3 forbids the bulk form,
+// so the other weeks would cost a request each, and are left null).
+//
+// Each is a row in `wireCols`: the team rows' seven, then `ros` — ESPN's
+// rest-of-season projection off the same read (`seasonProjected`, the line the
+// floor ranks by), which is the "future" figure a one-week read can give.
+// `slot` is null: a free agent has no lineup slot.
+//
+// WHO: the top `WIRE_CAP[pos]` per position by `ros` (this week's number where
+// ESPN sent no rest-of-season line), the playerId breaking ties. A man the
+// rosters have on a squad is never listed here (the reads are a moment apart).
+
+/** How many free agents a copy keeps per position. */
+export const WIRE_CAP = Object.freeze({ QB: 25, RB: 25, WR: 25, TE: 25, K: 10, DST: 10 });
+
+/** What each position in a `wire` row holds. */
+export const WIRE_COLS = [...PLAYER_COLS, 'ros'];
+
+/**
+ * @param {Array} wire     js/season.js `fetchWireWeek` results (one week)
+ * @param {number[]} weeks the copy's weeks
+ * @param {number} wireWeek the week that wire was read for
+ * @param {Object} [teams] the copy's `teams`, whose men are left out
+ * @returns {Array|null} rows in `WIRE_COLS`, or null when there is nothing to keep
+ */
+export function wireFrom(wire, weeks, wireWeek, teams = null) {
+  if (!Array.isArray(wire) || !wire.length || !Array.isArray(weeks)) return null;
+  const at = weeks.indexOf(Number(wireWeek));
+  if (at < 0) return null;
+  const owned = new Set();
+  for (const rows of Object.values(teams || {})) for (const r of rows || []) if (r && r[0] != null) owned.add(String(r[0]));
+
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const byPos = new Map();
+  const seen = new Set();
+  for (const p of wire) {
+    if (!p || p.playerId === null || p.playerId === undefined) continue;
+    const id = String(p.playerId);
+    if (owned.has(id) || seen.has(id) || !(p.position in WIRE_CAP)) continue;
+    seen.add(id);
+    const week = num(p.done === true ? p.pregame : p.projected);
+    const ros = num(p.seasonProjected);
+    const rank = ros ?? week;
+    if (rank === null) continue;
+    if (!byPos.has(p.position)) byPos.set(p.position, []);
+    byPos.get(p.position).push({ p, week, ros, rank });
+  }
+
+  const out = [];
+  for (const pos of Object.keys(WIRE_CAP)) {
+    const pool = (byPos.get(pos) || [])
+      .sort((a, b) => b.rank - a.rank || (Number(a.p.playerId) || 0) - (Number(b.p.playerId) || 0))
+      .slice(0, WIRE_CAP[pos]);
+    for (const { p, week, ros } of pool) {
+      const proj = weeks.map(() => null);
+      proj[at] = round2(week);
+      out.push([
+        p.playerId, p.name || '', p.position || '', p.proTeam || '', null, p.injuryStatus || 'ACTIVE',
+        proj, round2(ros),
+      ]);
+    }
+  }
+  return out.length ? out : null;
+}
+
 /**
  * Keep this week's projection history, if it has none yet. FIRST COPY WINS.
  *
@@ -1215,9 +1292,13 @@ export function historyFrom(weekTeams, weeks) {
  * @param {number[]} o.weeks      the projected weeks the rosters cover
  * @param {Map} o.weekTeams       week -> teams, for those weeks
  * @param {string} [o.takenAt]    ISO time the rosters were read; now if absent
+ * @param {Array} [o.wire]        one week's wire (`fetchWireWeek`), for `wire`
+ * @param {number} [o.wireWeek]   the week it was read for
  * @returns {boolean} whether a copy was written
  */
-export function keepHistory({ leagueId, season, week, data = null, weeks, weekTeams, takenAt = null }) {
+export function keepHistory({
+  leagueId, season, week, data = null, weeks, weekTeams, takenAt = null, wire = null, wireWeek = null,
+}) {
   try {
     const id = String(leagueId ?? '');
     if (!/^\d+$/.test(id) || (data && data.isDemo) || !weekTeams) return false;
@@ -1226,6 +1307,9 @@ export function keepHistory({ leagueId, season, week, data = null, weeks, weekTe
     const rows = historyFrom(weekTeams, weeks);
     if (!rows || rows.weeks[0] !== week) return false;
     if (data && data.teams && Object.keys(rows.teams).length < data.teams.length) return false;
+    // The free agents are an extra: a wire that will not build is no wire, never no copy.
+    let free = null;
+    try { free = wire ? wireFrom(wire, rows.weeks, wireWeek, rows.teams) : null; } catch { free = null; }
     return projHistory.save({
       v: projHistory.SCHEMA,
       leagueId: id,
@@ -1233,6 +1317,7 @@ export function keepHistory({ leagueId, season, week, data = null, weeks, weekTe
       week: Number(week),
       takenAt: takenAt || new Date().toISOString(),
       ...rows,
+      ...(free ? { wireCols: WIRE_COLS.slice(), wire: free } : {}),
     }).written;
   } catch {
     return false;

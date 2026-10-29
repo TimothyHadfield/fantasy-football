@@ -1643,7 +1643,12 @@ export async function fetchFloors(week) {
       // whatever week the wire was asked for; the schedule's current week when
       // this page has read it, else the week read.
       const fromWeek = currentWeek() || w;
-      return floor.positionFloors(wire.map(preGame), { week: w, fromWeek, byes });
+      const floors = floor.positionFloors(wire.map(preGame), { week: w, fromWeek, byes });
+      // The wire itself rides along, unseen by anything that iterates or
+      // copies the floors, for the projection history's free agents
+      // (js/capture.js `wireFrom`): the copy then needs no wire read of its own.
+      Object.defineProperty(floors, 'wire', { value: wire, enumerable: false });
+      return floors;
     } catch {
       // Cached as empty on purpose: a league that refuses the wire would
       // otherwise be asked again by every panel on the page.

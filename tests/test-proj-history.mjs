@@ -533,6 +533,119 @@ const v1 = JSON.parse(readFileSync(new URL('./snap-v1-fixture.json', import.meta
   ok('a whole season of copies stays under 600KB of a browser’s ~5MB', season > 0 && season < 600 * 1024, `${season} bytes`);
 }
 
+// ---- THE FREE AGENTS (2026-10-28): `wire`, off the floor's one wire read ---------
+//
+// A real wire read is 150 men, most-owned first (season.js WIRE_LIMIT), every
+// position mixed, ESPN's rest-of-season line (`seasonProjected`) on most, a
+// finished man carrying his score as `projected` and his projection as
+// `pregame`. This one is that shape and size, plus the oddities a real read
+// has: a man the rosters now hold, an UNK, a man ESPN sends no number for.
+{
+  const MIX = { QB: 18, RB: 42, WR: 48, TE: 20, K: 11, DST: 11 };
+  const realWire = [];
+  for (const [position, n] of Object.entries(MIX)) {
+    for (let i = 0; i < n; i++) {
+      const id = 4400000 + realWire.length;
+      realWire.push({
+        playerId: id, name: `Free ${position} Number${i}`, position, proTeam: 'NYJ', proTeamId: 20,
+        injuryStatus: i % 9 === 0 ? 'QUESTIONABLE' : 'ACTIVE', percentOwned: 50 - i * 0.3,
+        // Ranked below by ROS, not by the order ESPN sent them in.
+        seasonProjected: i % 7 === 3 ? null : Math.round((150 - ((i * 37) % 120)) * 100) / 100 + 0.123,
+        projected: 3 + ((i * 13) % 11) + 0.456, actual: null, seasonAvg: null, posRank: null,
+        status: 'FREEAGENT', waiverClears: null,
+      });
+    }
+  }
+  // A man whose game is over: what is kept is what he was PROJECTED.
+  Object.assign(realWire[20], { done: true, pregame: 8.25, projected: 31.4 });
+  // Squad 3's WR4 (304) is on the wire read too — the reads are a moment apart.
+  realWire.push({ playerId: 304, name: 'Manager 3 WR4', position: 'WR', seasonProjected: 999, projected: 50 });
+  realWire.push({ playerId: 4499998, name: 'Nobody Knows', position: 'UNK', seasonProjected: 500, projected: 20 });
+  realWire.push({ playerId: 4499999, name: 'No Line', position: 'RB', seasonProjected: null, projected: null });
+  eq(realWire.length, 153, 'the fixture is a real wire read’s size (150) plus three oddities');
+
+  // The floors as js/season.js hands them over: a Map, the wire unseen on it.
+  const floorsWith = (wire) => {
+    const m = new Map([['K', { value: 7, position: 'K', name: 'X', playerId: 1, pool: 3, rank: 3, want: 3, week: 4, basis: 'week', games: null }]]);
+    Object.defineProperty(m, 'wire', { value: wire, enumerable: false });
+    return m;
+  };
+  const wf = { calls: 0, fn: async () => { wf.calls++; return floorsWith(realWire); } };
+
+  reset();
+  const r = await capture.captureIfDue({ ...base(), fetchFloors: wf.fn });
+  eq(r.code, 'recorded', 'a capture with the floor’s wire in hand is recorded');
+  eq([stub.calls.rosters, stub.calls.schedule, wf.calls], [[1, 2, 3, ...AHEAD], 1, 1],
+    'and costs exactly what it did: the same roster weeks, one schedule, ONE wire read (the floor’s own)');
+  const c = stored() || {};
+  const wire = Array.isArray(c.wire) ? c.wire : [];
+  eq(c.wireCols, ['id', 'name', 'pos', 'team', 'slot', 'inj', 'proj', 'ros'], 'the copy names its wire columns: the team rows’ seven, then ros');
+  const per = {};
+  for (const row of wire) per[row[2]] = (per[row[2]] || 0) + 1;
+  eq(per, { QB: 18, RB: 25, WR: 25, TE: 20, K: 10, DST: 10 },
+    'capped per position: 25 QB/RB/WR/TE, 10 K and D/ST (fewer where the wire has fewer)');
+  ok('nobody on a squad is listed as a free agent', !wire.some((row) => row[0] === 304));
+  ok('an unknown position and a man with no number are left out',
+    !wire.some((row) => row[0] === 4499998 || row[0] === 4499999));
+  const rbs = wire.filter((row) => row[2] === 'RB');
+  const want = realWire.filter((p) => p.position === 'RB' && p.playerId !== 4499999)
+    .map((p) => ({ id: p.playerId, k: p.seasonProjected ?? (p.done ? p.pregame : p.projected) }))
+    .sort((a, b) => b.k - a.k || a.id - b.id).slice(0, 25).map((p) => p.id);
+  eq(rbs.map((row) => row[0]), want, 'the 25 RBs kept are the best by rest-of-season line, this week’s where ESPN sent none');
+  ok('every row is the shape the team rows are, slot null, proj lined up with weeks',
+    wire.length > 0 && wire.every((row) => row.length === 8 && row[4] === null && Array.isArray(row[6]) && row[6].length === AHEAD.length &&
+      row[6].slice(1).every((v) => v === null)));
+  const fin = wire.find((row) => row[0] === realWire[20].playerId);
+  eq(fin && [fin[6][0], fin[7]], [8.25, Math.round(realWire[20].seasonProjected * 100) / 100],
+    'a finished man keeps his pre-game 8.25 in week 4’s place, not his 31.4 score, and his ROS to the hundredth');
+  eq(JSON.stringify(c.teams), JSON.stringify(F.teams), 'the squads’ rows are exactly what a copy without a wire holds');
+
+  // Size, before and after, on the stub league (10 squads × 14 × 13 weeks).
+  const bytes = JSON.stringify(c).length;
+  const without = JSON.stringify(F).length;
+  console.log(`MEASURED: the stub league’s week is ${without} bytes without wire, ${bytes} with ${wire.length} free agents (+${bytes - without})`);
+  ok('the wire adds under 16KB to a week, and the week stays under 60KB', bytes - without < 16 * 1024 && bytes < 60 * 1024, `${bytes - without} bytes`);
+
+  // Reading it back.
+  const back = history.wireAsOf ? history.wireAsOf(LEAGUE, SEASON, 4) : null;
+  eq(back && [back.week, back.weeks, back.players.length], [4, AHEAD, wire.length], 'wireAsOf reads the free agents back');
+  const one = back && back.players.find((p) => p.playerId === realWire[20].playerId);
+  eq(one && [one.slotId, one.proj.get(4), one.proj.get(5), one.ros], [null, 8.25, null, fin && fin[7]],
+    'as teamAsOf’s players: slot null, week 4 known, week 5 not, plus ros');
+  eq(history.teamAsOf(LEAGUE, SEASON, 4, 3)?.players.length, 14, 'teamAsOf is untouched by the wire beside it');
+  eq(history.list(LEAGUE, SEASON).filter((e) => e.week === 4).map((e) => e.source), ['store'], 'list sees the copy as any other');
+
+  // An old copy without wire reads as having none, everywhere.
+  const old = { ...c };
+  delete old.wire; delete old.wireCols;
+  const m = new Map();
+  const io = { storage: storageOver(m), readings: { list: () => [], get: () => null } };
+  history.save({ ...old, week: 4 }, io);
+  eq(history.wireAsOf ? history.wireAsOf(LEAGUE, SEASON, 4, io) : 'missing', null, 'a copy from before `wire` has no free agents, quietly');
+  eq(history.teamAsOf(LEAGUE, SEASON, 4, 3, io)?.players.length, 14, 'and its squads read as before');
+
+  // The cloud carries it: uploads sends the stored record, keepCloud keeps it whole.
+  const up = history.uploads ? history.uploads(LEAGUE, SEASON) : [];
+  const sent = up.find((u) => u.week === 4);
+  eq(sent && sent.wire && sent.wire.length, wire.length, 'uploads sends the copy with its wire');
+  const m2 = new Map();
+  const io2 = { storage: storageOver(m2), readings: { list: () => [], get: () => null } };
+  const kept = history.keepCloud ? history.keepCloud(LEAGUE, SEASON, [JSON.parse(JSON.stringify(sent || {}))], io2) : null;
+  eq(kept && kept.kept, 1, 'keepCloud keeps a copy that came down with a wire');
+  eq(history.wireAsOf ? history.wireAsOf(LEAGUE, SEASON, 4, io2)?.players.length : null, wire.length, 'and its free agents read back on the phone');
+
+  // A wire that cannot be built is no wire, never no copy.
+  reset();
+  const bad = { fn: async () => floorsWith([{ playerId: 1, position: 'RB', get seasonProjected() { throw new Error('boom'); } }]) };
+  await capture.captureIfDue({ ...base(), fetchFloors: bad.fn });
+  const c2 = stored();
+  ok('a wire that throws still leaves the whole copy written, with no wire', Boolean(c2) && !('wire' in c2) && Object.keys(c2.teams).length === 10);
+  // And floors without a wire (stubs, demo, a refused read) write the copy as before.
+  reset();
+  await capture.captureIfDue(base());
+  ok('no wire on the floors: no `wire` key at all', Boolean(stored()) && !('wire' in stored()) && !('wireCols' in stored()));
+}
+
 // ---- "is this week saved?": what the connection bar's chip is told ----------
 // SAVED MEANS BOTH the reading and every squad's copy. A chip that said "saved"
 // on the reading alone would be reassuring about exactly the loss this store

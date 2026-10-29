@@ -263,7 +263,7 @@
       "scenarios": 11
     },
     "test-done.mjs": {
-      "assertions": 103,
+      "assertions": 105,
       "scenarios": 11
     },
     "test-trade-progress.mjs": {
@@ -295,7 +295,7 @@
       "assertions": 427
     },
     "test-proj-history.mjs": {
-      "assertions": 136
+      "assertions": 159
     },
     "test-projhist-cloud.mjs": {
       "assertions": 18,
