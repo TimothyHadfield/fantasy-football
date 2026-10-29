@@ -551,14 +551,20 @@
       else confirmed.push(label);
     }
 
-    showBadge(doc, {
-      ticked: confirmed,
-      already,
-      missing,
-      notRegistered: failed,
-      refused,
-      note: '',
-    });
+    // NO BADGE WHEN EVERY MAN IS IN (Tim, 2026-10-28: "Can we remove that
+    // notification and just autmoatically tic the right players?"). The badge
+    // stays only when a man is NOT in the trade, because a silently smaller
+    // deal is the one failure here with real consequences.
+    if (missing.length + failed.length + refused.length > 0) {
+      showBadge(doc, {
+        ticked: confirmed,
+        already,
+        missing,
+        notRegistered: failed,
+        refused,
+        note: '',
+      });
+    }
 
     return { ran: true, ticked: confirmed, already, missing, refused, failed };
   }

@@ -300,7 +300,21 @@ const staged = (myPlayers, theirPlayerIds = [15847, 4241457]) => ({
   sameSet(page.store, [15847, 4362628, 4430807], 'so he is still in the trade');
   eq(page.clicksOn(4430807), 1, 'and the one that needed ticking was ticked');
   eq(page.touchedSubmit(), 0, 'still nothing near the submit controls');
-  ok(/Already selected: Jahmyr Gibbs/.test(badgeText(page)), 'the badge accounts for him rather than ignoring him');
+  eq(badgeText(page), null, 'every man is in the trade, so no badge (Tim, 2026-10-28)');
+}
+{
+  // Every man found and ticked: the ticks are the whole answer, no badge.
+  const page = buildPage({
+    theirs: THEIRS.slice(0, 1), mine: MINE.slice(0, 2), preTicked: [15847], search: SEARCH,
+  });
+  const chrome = fakeWorker(staged([
+    { id: 4362628, name: 'Jahmyr Gibbs' },
+    { id: 4430807, name: 'Puka Nacua' },
+  ], [15847]));
+  const out = await runScript(page, chrome);
+  eq(out.ticked.length, 2, 'both of mine ticked');
+  sameSet(page.store, [15847, 4362628, 4430807], 'and the trade holds all three');
+  eq(badgeText(page), null, 'and no badge is drawn when nothing went wrong');
 }
 
 // ===========================================================================
