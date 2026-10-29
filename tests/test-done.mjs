@@ -456,6 +456,11 @@ const SCENARIOS = {
     ok('a decided week’s wire is untouched', past.every((p) => !('done' in p) && !('pregame' in p)));
     const floors = await season.fetchFloors(3);
     eq(floors.get('RB').value, 5, 'the positional floor is still the 3rd-best PRE-GAME projection (5), not hindsight (7)');
+    // The wire it was read off rides along for the projection history's free
+    // agents (js/capture.js `wireFrom`), unseen by anything iterating the floors.
+    eq(Array.isArray(floors.wire) ? floors.wire.map((p) => [p.playerId, p.pregame ?? null]) : null,
+      [[901, 5], [902, null], [903, 0], [904, 6], [905, 4]], 'the floors carry the wire they were read off, pregame and all');
+    ok('as a hidden property: not a key, not a Map entry', !Object.keys(floors).includes('wire') && !floors.has('wire'));
   },
 
   // Contract B: a matchup whose every starter has finished is final now.

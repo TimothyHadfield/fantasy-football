@@ -38,6 +38,17 @@
 // or ESPN gave no number, 0 in his bye. Slot and injury status are as of the
 // first week; a man who only appears on a later week's roster has a null slot.
 //
+// FROM 2026-10-28 a copy may also hold the free agents worth tracking:
+//
+//     wireCols: ['id', 'name', 'pos', 'team', 'slot', 'inj', 'proj', 'ros'],
+//     wire: [[4430807, 'Some Back', 'RB', 'NYJ', null, 'ACTIVE',
+//             [9.1, null, null, ...], 104.5], ...]
+//
+// The team rows' seven (slot null), then `ros`, ESPN's rest-of-season total.
+// `proj` lines up with `weeks` but only the first week is filled: it is the one
+// wire the floor read (js/capture.js `wireFrom`). Copies from before then have
+// no `wire`; every reader treats it as absent (`wireAsOf` is null).
+//
 // No DOM and no fetching. Storage and the readings are reached through `io`,
 // so the suites drive this in Node with a Map behind it.
 
@@ -254,6 +265,28 @@ export function teamAsOf(leagueId, season, week, teamId, io) {
   return {
     week: Number(week), takenAt: part.takenAt, weeks,
     players: rows.map((r) => playerOf(r, cols, weeks)), source: 'cloud',
+  };
+}
+
+/**
+ * The free agents a week's stored copy kept, or null — a copy from before
+ * `wire` existed, a one-team copy and a reading all have none.
+ *
+ * @returns {{week:number, takenAt:string, weeks:number[], players:Array}|null}
+ *   players as `teamAsOf`'s, each with `ros` (ESPN's rest-of-season total or null)
+ */
+export function wireAsOf(leagueId, season, week, io) {
+  const rec = get(leagueId, season, week, io);
+  if (!rec || !Array.isArray(rec.wire) || !rec.wire.length) return null;
+  const cols = Array.isArray(rec.wireCols) ? rec.wireCols : [...COLS, 'ros'];
+  const weeks = rec.weeks.slice();
+  const r = cols.indexOf('ros');
+  return {
+    week: Number(week), takenAt: rec.takenAt, weeks,
+    players: rec.wire.filter(Array.isArray).map((row) => ({
+      ...playerOf(row, cols, weeks),
+      ros: r >= 0 && typeof row[r] === 'number' ? row[r] : null,
+    })),
   };
 }
 
