@@ -134,6 +134,8 @@ const SUITES = [
   ['wv-test.mjs', 'the waiver-wire page'],
   ['cmp-check.mjs', 'the waiver page compared against your own roster'],
   ['wv-start-check.mjs', 'Players: the Analysis page’s Who to start box above the free agents, for the position picked — the shared renderer’s rows, and nothing asked of ESPN'],
+  ['test-player-history.mjs', 'Player analysis maths: a man’s future proj in each saved week (bye and 0 as the waiver line, a free agent from ESPN’s rest-of-season total), each week’s proj line by line, red to green'],
+  ['pa-check.mjs', 'Players: Player analysis — the search, his card, future proj by week from saved weeks worked by hand, each week’s proj red to green, the previews, the sample league'],
   ['wv-marks-check.mjs', 'Players: Show my players, the diamond / coin by a name and its filter, and the green name for a bye already played'],
   ['taken-check.mjs', 'the taken-players table: owners, positional ranks, no colour'],
   ['playoffs-players-check.mjs', 'the Playoffs page’s player list: its columns, first-name owners, Future and Playoff as means with every 0 week counted, Playoff − Avg, free agents'],

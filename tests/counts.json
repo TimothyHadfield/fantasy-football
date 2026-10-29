@@ -301,6 +301,13 @@
       "assertions": 18,
       "scenarios": 10
     },
+    "test-player-history.mjs": {
+      "assertions": 53
+    },
+    "pa-check.mjs": {
+      "assertions": 44,
+      "scenarios": 3
+    },
     "proj-changes-check.mjs": {
       "assertions": 110
     },
