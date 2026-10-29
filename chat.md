@@ -133,3 +133,10 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** see progress.md Status "Trade rows: no ± band…".
 - **Verified how:** tr-thisweek-check 81 (7 fail on old code), tr-yes-check 42 (1 fails on old code), tr-test, text-audit 12; local WebKit 393 + 1440 screenshots on demo.
 - **Open:** heading wording and column spot are Tim's.
+
+## 2026-10-28 · Player analysis, custom trade fixes, wire in copies, extension badge (manager chat)
+- **Asked:** a Player analysis at the top of Players (name search, 17-week preview + metrics, future proj by week graph with hover = the weekly projections behind it, a red→green many-line graph of each week's proj over time); custom trade: Save keeps the ticks, red boxes normal size with a reddish tick, past trades/offers with that manager under the lists; extension: "remove that notification and just autmoatically tic the right players".
+- **Decided:** graph 2 = one line per saved copy over target weeks (red oldest → green now); free agents saved in copies so the graphs cover them (ROS total ÷ games left); the extension's problem badge stays when a man is not in the trade.
+- **Built:** three builders (ff-pa ea0339e, ff-cu 2f047e6, ff-wire 59d001a) + extension 0.5.2 (666ac12). See PROGRESS Status top four lines.
+- **Verified how:** test-player-history 53, pa-check 44, wv-test 1290, custom-trade-check 29, test-proj-history 159, test-capture 186, test-espn-tick, test-extension 369; WebKit 393 + desktop screenshots with seeded copies; live curl of js/player-history.js and js/trade-history.js.
+- **Open:** graph 2 reading and wording are Tim's; full tr-test left to CI; real wire rows, real ESPN trade records and his phone not seen.
