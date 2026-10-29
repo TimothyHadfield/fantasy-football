@@ -131,6 +131,11 @@ import * as outlook from './outlook-mark.js';
 import * as pendingView from './pending-view.js';
 // THE GREEN NAME: his bye is behind him (Tim, 2026-10-14) — the Trade page's rule.
 import { byePastOf, byePastHtml } from './bye-past.js';
+// Player analysis (Tim, 2026-10-28): the saved weeks, the maths, the search.
+import * as projHistory from './proj-history.js';
+import * as playerHistory from './player-history.js';
+import { searchPlayers } from './value-measure.js';
+import { weekRun, runHtml } from './player-card.js';
 
 const $ = (id) => document.getElementById(id);
 const prefs = scope('waivers');
@@ -3464,6 +3469,275 @@ function render() {
   scrollToSpotlight();
   // An open row shows the man's own Value: ask for them once (no-op otherwise).
   ensurePlayerValues();
+  renderAnalysis();
+}
+
+// ------------------------------------------------------- player analysis
+//
+// Tim, 2026-10-28: "make something at the top of the players section called
+// player analysis which is looking in-depth into a single player. You can just
+// search this player by name for now. When you pull it up, show their 17 week
+// preview as well as core metrics. underneath this show the future proj/week
+// graph ... Underneath that, make another graph that basically shows what each
+// future proj was for each future week." The maths is js/player-history.js;
+// the saved weeks are js/proj-history.js's copies; the strip and the glance
+// line are the player card's own (`weekRun` / `runHtml`, `glanceLine`).
+
+const pa = { id: null, hist: null, copies: null, copiesFor: null, asked: new Set() };
+
+/** Everyone this page knows: the wire and every squad in every week read. */
+function paPeople() {
+  const out = new Map();
+  for (const p of state.pool.values()) {
+    out.set(String(p.playerId), { playerId: p.playerId, name: p.name, position: p.position, team: p.proTeam, wire: true });
+  }
+  const weeks = [...state.rosterWeeks.keys()].sort((a, b) => b - a);
+  for (const w of weeks) {
+    for (const t of state.rosterWeeks.get(w) || []) {
+      for (const p of t.players || []) {
+        if (p.playerId === null || p.playerId === undefined || out.has(String(p.playerId))) continue;
+        out.set(String(p.playerId), { playerId: p.playerId, name: p.name, position: p.position, team: p.proTeam, wire: false });
+      }
+    }
+  }
+  return [...out.values()];
+}
+
+/** The man picked, as the rest of this page knows him, or null. */
+function paPlayer() {
+  if (pa.id === null) return null;
+  const wire = state.pool.get(pa.id) || state.pool.get(Number(pa.id));
+  if (wire) return { p: wire, wire: true };
+  const weeks = [...state.rosterWeeks.keys()].sort((a, b) => b - a);
+  for (const w of weeks) {
+    for (const t of state.rosterWeeks.get(w) || []) {
+      for (const x of t.players || []) if (String(x.playerId) === String(pa.id)) return { p: x, wire: false };
+    }
+  }
+  return null;
+}
+
+/** Every saved week of this league, read once per league (whole copies; a one-team copy for a week with none). */
+function paCopies() {
+  const cfg = espn.getConfig ? espn.getConfig() : null;
+  const key = `${state.token}:${cfg ? `${cfg.leagueId}.${cfg.season}` : ''}`;
+  if (pa.copiesFor === key && pa.copies) return pa.copies;
+  let got = { whole: [], part: [] };
+  try {
+    if (cfg && cfg.leagueId) got = projHistory.stored(cfg.leagueId, cfg.season) || got;
+  } catch { /* no storage: no saved weeks */ }
+  const whole = new Set(got.whole.map((r) => Number(r.week)));
+  pa.copies = [...got.whole, ...got.part.filter((r) => !whole.has(Number(r.week)))];
+  pa.copiesFor = key;
+  return pa.copies;
+}
+
+/** His projection in a week still to come: the three states of `valueFor` (pregame for a finished game). */
+function paProj(p, wire, w) {
+  const v = wire ? valueFor(p.playerId, w) : rosterValueFor(p.playerId, w);
+  if (v === undefined) return undefined;
+  const done = doneFor(p.playerId, w, !wire);
+  return done ? done.pregame : v;
+}
+
+/** His season strip, the player card's own. */
+function paRun(p, wire) {
+  const weeks = allWeeks();
+  const played = new Set(state.playedWeeks);
+  const projections = [];
+  const actuals = [];
+  for (const w of weeks) {
+    if (played.has(w)) {
+      const got = pastOf(p, w, wire);
+      projections.push(got === 'wait' ? 'wait' : got && typeof got === 'object' ? got.projected : null);
+      actuals.push(got && typeof got === 'object' ? got.actual : null);
+      continue;
+    }
+    const v = paProj(p, wire, w);
+    projections.push(v === undefined ? 'wait' : v);
+    const done = doneFor(p.playerId, w, !wire);
+    actuals.push(done ? done.actual : null);
+  }
+  const last = state.playedWeeks.length ? Math.max(...state.playedWeeks) : null;
+  return weekRun({
+    heading: weekRange(weeks),
+    weeks, projections, actuals,
+    currentWeek: state.currentWeek,
+    demo: state.isDemo,
+    byeWeek: byeWeekOf(p, state.byes),
+    injuryStatus: p.injuryStatus || null,
+    playoffWeeks: state.playoffWeeks,
+    splitAfter: last,
+    fill: value.fillOf(state.value.base, p.position),
+  });
+}
+
+/** The live sheet as one more point: every regular week left read, or null until they are. */
+function paNow(p, wire, regular) {
+  const now = state.currentWeek;
+  if (now === null || now === undefined) return null;
+  const byWeek = new Map();
+  for (const w of regular.filter((x) => x >= now)) {
+    const v = paProj(p, wire, w);
+    if (v === undefined) return null;
+    byWeek.set(w, v);
+  }
+  return byWeek.size ? { week: now, byWeek } : null;
+}
+
+const paWidth = (el) => Math.min(720, Math.max(240, (el && el.clientWidth) || 340));
+
+function renderAnalysis() {
+  const body = $('paBody');
+  if (!body) return;
+  const got = paPlayer();
+  if (!got) {
+    body.hidden = true;
+    pa.hist = null;
+    return;
+  }
+  body.hidden = false;
+  const { p, wire } = got;
+  const card = $('paCard');
+  const team = p.proTeam ? ` · ${p.proTeam}` : '';
+  card.innerHTML = `<div class="tc-ident">${esc(p.name)} · ${esc(p.position === 'DST' ? 'D/ST' : p.position)}${esc(team)}</div>` +
+    `${glanceLine(p, wire)}${runHtml(paRun(p, wire), paWidth(card))}`;
+
+  const note = $('paNote');
+  const graphs = $('paGraphs');
+  if (state.isDemo) {
+    pa.hist = null;
+    note.textContent = 'Sample data has no saved projections.';
+    note.hidden = false;
+    graphs.hidden = true;
+    return;
+  }
+  const regular = allWeeks().filter((w) => !isPlayoff(w));
+  const fill = value.fillOf(state.value.base, p.position);
+  const hist = playerHistory.history({
+    copies: paCopies(), playerId: p.playerId, regularWeeks: regular,
+    byeWeek: byeWeekOf(p, state.byes), fill, now: paNow(p, wire, regular),
+  });
+  pa.hist = hist;
+  const first = regular[0];
+  const words = [];
+  if (hist.firstCopy === null) words.push(`No saved projections${state.currentWeek ? ` before week ${state.currentWeek}` : ''}.`);
+  else if (hist.firstCopy > first) words.push(`No saved projections before week ${hist.firstCopy}.`);
+  if (!hist.points.some((x) => x.live)) words.push('This week’s point fills in as the weeks are read.');
+  note.textContent = words.join(' ');
+  note.hidden = !words.length;
+  graphs.hidden = !hist.points.length && !hist.lines.length;
+  const trendEl = $('paTrend');
+  trendEl.innerHTML = playerHistory.trendSvg(hist.points, {
+    width: paWidth(trendEl), fromWeek: first, toWeek: state.currentWeek ?? undefined,
+  });
+  $('paWeeks').innerHTML = playerHistory.linesSvg(hist.lines, { width: paWidth($('paWeeks')) });
+}
+
+/** The weeks his strip and his live point need, bought like the columns' — never on the synced copy. */
+async function ensureAnalysisWeeks() {
+  if (state.isDemo || pa.id === null) return;
+  const token = state.token;
+  ensurePastWeeks();
+  const now = state.currentWeek ?? allWeeks()[0];
+  const need = allWeeks().filter((w) => w >= now && (wantsWire(w) || wantsRoster(w)));
+  if (!need.length) return;
+  if (await onSyncedCopy()) return;
+  if (token !== state.token) return;
+  await fetchWeeks(need, token);
+}
+
+/** A point's or a week's preview. */
+function paCardFor(el) {
+  const hist = pa.hist;
+  if (!hist) return null;
+  if (el.matches('.pa-pt')) {
+    const asOf = Number(el.getAttribute('data-asof'));
+    const pt = hist.points.find((x) => x.asOf === asOf);
+    if (!pt) return null;
+    const title = `As of week ${asOf}${pt.live ? ' (now)' : ''}`;
+    if (typeof pt.ros === 'number') {
+      return {
+        title,
+        sub: 'A free agent then: ESPN’s rest-of-season total',
+        rows: [{ label: 'Rest-of-season total', value: pt.ros }, { label: 'Games left', value: String(pt.games) }],
+        total: { label: 'Future proj', value: pt.avg },
+      };
+    }
+    const rows = pt.weeks.map((r) => ({
+      lead: `Wk ${r.week}`,
+      label: r.how === 'base' ? 'Bye or 0' : r.how === 'none' ? 'No number' : 'Proj',
+      note: r.how === 'base' ? ' = waiver line' : '',
+      value: r.how === 'none' ? null : r.used,
+    }));
+    return { title, rows, total: { label: 'Future proj', value: pt.avg } };
+  }
+  if (el.matches('.pa-wk')) {
+    const week = Number(el.getAttribute('data-week'));
+    const rows = [];
+    for (const l of hist.lines) {
+      const at = l.pts.find((x) => x.week === week);
+      if (!at || at.proj === null) continue;
+      rows.push({ label: l.live ? `Now (week ${l.asOf})` : `As of week ${l.asOf}`, value: at.proj });
+    }
+    return rows.length ? { title: `Week ${week} proj`, rows } : null;
+  }
+  return null;
+}
+
+/** The search: suggestions under the box, picked by tap, click or Enter. */
+function wireAnalysisSearch() {
+  const input = $('paFind');
+  const list = $('paList');
+  if (!input || !list) return;
+  let hits = [];
+  let on = 0;
+  const close = () => { list.hidden = true; list.innerHTML = ''; hits = []; };
+  const paint = () => {
+    list.innerHTML = hits.length
+      ? hits.map((h, i) => `<li role="option" data-i="${i}"${i === on ? ' class="on" aria-selected="true"' : ''}>` +
+        `<span class="nm">${esc(h.name)}</span><span class="ps">${esc(h.position === 'DST' ? 'D/ST' : h.position)}${h.team ? ` · ${esc(h.team)}` : ''}</span></li>`).join('')
+      : '<li class="none">No player by that name</li>';
+    list.hidden = false;
+  };
+  const pick = (h) => {
+    if (!h) return;
+    pa.id = h.playerId;
+    input.value = h.name;
+    close();
+    renderAnalysis();
+    ensureAnalysisWeeks();
+  };
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    if (!q) { close(); return; }
+    hits = searchPlayers(paPeople(), q, { limit: 8 });
+    on = 0;
+    paint();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (list.hidden || !hits.length) return;
+    if (e.key === 'ArrowDown') { on = (on + 1) % hits.length; paint(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { on = (on - 1 + hits.length) % hits.length; paint(); e.preventDefault(); }
+    else if (e.key === 'Enter') { pick(hits[on]); e.preventDefault(); }
+    else if (e.key === 'Escape') close();
+  });
+  // mousedown, so the pick lands before the box loses focus.
+  list.addEventListener('mousedown', (e) => {
+    const li = e.target.closest ? e.target.closest('li[data-i]') : null;
+    if (!li) return;
+    e.preventDefault();
+    pick(hits[Number(li.getAttribute('data-i'))]);
+  });
+  input.addEventListener('blur', () => setTimeout(close, 150));
+  wirePops($('paPanel'), { selector: '.pa-pt, .pa-wk', card: paCardFor });
+  let resizeTimer = null;
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => { if (pa.id !== null) renderAnalysis(); }, 150);
+    });
+  }
 }
 
 /**
@@ -5202,6 +5476,7 @@ enableSort($('waiverTable'), { defaultIndex: 3 });
 wireGainJump($('waiverTable'));
 wirePops($('waiverTable'), { selector: PREVIEWS, card: previewFor });
 wirePops($('takenTable'), { selector: PREVIEWS, card: previewFor });
+wireAnalysisSearch();
 // Same reasoning one column further right, the Owner column having pushed Avg
 // from index 3 to index 4.
 enableSort($('takenTable'), { defaultIndex: 4 });

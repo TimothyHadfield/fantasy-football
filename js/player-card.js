@@ -1477,13 +1477,27 @@ function cardHtml({ ident, run, href, openLabel, glance, playerId, value }, shee
   // (glanceHtml). The Value is read now, as the card opens — see setValueSource.
   const head = `<div class="tc-ident">${esc(ident)}</div>${glanceHtml(projFor(glance, playerId), valueFor({ value, playerId }))}`;
   if (!run) return `${head}${actionsHtml(href, openLabel)}`;
+  return `${head}${runBody(run, perLine(sheet))}${actionsHtml(href, openLabel)}`;
+}
 
+/**
+ * THE CARD'S WEEK STRIP ON ITS OWN, for a page that shows it inline rather than
+ * in a hover card (the Players page's Player analysis, 2026-10-28): the heading
+ * and the wrapped chart, nothing above or below. `width` is the room it has in
+ * px; without one it wraps as a sheet would.
+ */
+export function runHtml(run, width = null) {
+  if (!run) return '';
+  const w = Number(width);
+  const cap = w > 0 ? Math.max(CHART.min, Math.floor((w - CHART.label - CHART.safety) / CHART.col)) : perLine(true);
+  return runBody(run, cap);
+}
+
+function runBody(run, cap) {
   const sub = `<div class="tc-head">${esc(run.heading)}</div>`;
-  if (run.pending) {
-    return `${head}${sub}<div class="tc-pending">${esc(run.pending)}</div>${actionsHtml(href, openLabel)}`;
-  }
+  if (run.pending) return `${sub}<div class="tc-pending">${esc(run.pending)}</div>`;
 
-  const lines = chartLines(run.cols, perLine(sheet))
+  const lines = chartLines(run.cols, cap)
     .map((l) => lineHtml(l, run.vsName)).join('');
 
   // A BLANK IN THE ACT ROW IS A CLAIM, so it is stated rather than left to be
@@ -1541,7 +1555,7 @@ function cardHtml({ ident, run, href, openLabel, glance, playerId, value }, shee
   const key = `${note}${poNote}${extras}${legend}`;
   const keyHtml = key ? `<div class="tc-key sr-only">${key}</div>` : '';
 
-  return `${head}${sub}<div class="tc-chart">${lines}</div>${keyHtml}${actionsHtml(href, openLabel)}`;
+  return `${sub}<div class="tc-chart">${lines}</div>${keyHtml}`;
 }
 
 /**

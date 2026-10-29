@@ -647,6 +647,35 @@ details.explain > .panel-note .lead { color: var(--text); font-weight: 600; }
     <div id="sourceStatus" class="panel-note"></div>
   </section>
 
+  <!-- PLAYER ANALYSIS (Tim, 2026-10-28): one man in depth — his card's week
+       strip and glance line, then his future proj as it stood in each saved
+       week, then each week's projection as it changed. Drawn by
+       js/waivers-page.js (`renderAnalysis`); the maths is js/player-history.js. -->
+  <section class="panel" id="paPanel">
+    <h2>Player analysis</h2>
+    <p class="lede">How one player&rsquo;s projections have moved week by week.</p>
+    <div class="pa-find">
+      <input type="search" id="paFind" placeholder="Search a player" autocomplete="off" spellcheck="false" aria-label="Search a player by name" aria-controls="paList">
+      <ul class="pa-list" id="paList" role="listbox" hidden></ul>
+    </div>
+    <div id="paBody" hidden>
+      <div class="pa-card" id="paCard"></div>
+      <p class="panel-note pa-note" id="paNote" hidden></p>
+      <div id="paGraphs">
+        <h3>Future proj by week</h3>
+        <div class="pa-chart" id="paTrend"></div>
+        <h3>Each week&rsquo;s proj over time</h3>
+        <div class="pa-chart" id="paWeeks"></div>
+        <p class="panel-note pa-key"><span class="pa-ramp" aria-hidden="true"></span> red = oldest saved week, green = now</p>
+      </div>
+      <details class="explain">
+        <summary>How to read this</summary>
+        <p class="panel-note">Each point on the first graph is his future proj as it stood that week: his average over the regular-season weeks left then, a bye or a 0 counted as his position&rsquo;s waiver line. Hover or tap a point for the weeks it was made of. A free agent&rsquo;s point is ESPN&rsquo;s rest-of-season total over his games left.</p>
+        <p class="panel-note">The second graph has one line per saved week: what that week said about each week after it. A gap is a bye, a 0 or no number. Weeks with no saved projections are left out.</p>
+      </details>
+    </div>
+  </section>
+
   <section class="panel">
     <div class="panel-head">
       <h2>Available players</h2>

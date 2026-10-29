@@ -2369,3 +2369,46 @@ header.site .wrap:not(:has(.site-bell)) nav { margin-right: 42px; }
   #preNowTable td.name, #preNowTable td.pvn-teamcol { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 /* ===================================================== end of Preseason vs now */
+
+/* ==========================================================================
+ * PLAYER ANALYSIS (Players page, Tim 2026-10-28): the search, his card's glance
+ * line and week strip inline, and the two graphs (js/player-history.js). The
+ * suggestion list is the Trade page's value measurement list; colours are the
+ * site's tokens only, the line ramp is --err -> --warn -> --accent.
+ * ========================================================================== */
+.pa-find { position: relative; max-width: 360px; margin-bottom: 10px; }
+.pa-find input { width: 100%; box-sizing: border-box; }
+.pa-list {
+  position: absolute; z-index: 30; left: 0; right: 0; top: 100%;
+  margin: 2px 0 0; padding: 4px; list-style: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+}
+.pa-list li { display: flex; gap: 6px; align-items: baseline; padding: 6px 7px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.pa-list li.on, .pa-list li:hover { background: var(--panel-2); }
+.pa-list li .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pa-list li .ps { color: var(--dim); font-size: 11px; flex: 0 0 auto; }
+.pa-list li.none { cursor: default; color: var(--dim); }
+.pa-card { margin-bottom: 8px; }
+.pa-card .tc-glance { font-size: 11.5px; color: var(--dim); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+.pa-card .tc-glance b { color: var(--text); font-weight: 600; }
+#paGraphs h3 { margin: 12px 0 4px; }
+.pa-chart { width: 100%; max-width: 720px; overflow: hidden; }
+.pa-svg { display: block; }
+.pa-svg .pa-grid { stroke: var(--line); stroke-width: 1; }
+.pa-svg .pa-tick { fill: var(--dim); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.pa-svg .pa-axis { fill: var(--dim); font-size: 11px; }
+.pa-svg .pa-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.pa-svg .pa-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
+.pa-svg .pa-pt.now .pa-dot { fill: var(--text); }
+.pa-svg .pa-hit { fill: transparent; }
+.pa-svg .pa-pt, .pa-svg .pa-wk { cursor: pointer; outline: none; }
+.pa-svg .pa-pt:focus-visible .pa-dot, .pa-svg .pa-pt:hover .pa-dot { stroke: var(--text); stroke-width: 2; }
+.pa-svg .pa-wk:hover .pa-hit, .pa-svg .pa-wk:focus-visible .pa-hit { fill: rgba(255, 255, 255, .05); }
+.pa-svg .pa-wline { fill: none; stroke-width: 1.75; }
+.pa-svg .pa-wline.now { stroke-width: 2.5; }
+.pa-key { display: flex; align-items: center; gap: 6px; }
+.pa-ramp { display: inline-block; width: 44px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--err), var(--warn), var(--accent)); }
+/* 16px: iOS zooms the page into a smaller form control when it is focused. */
+@media (max-width: 760px) { .pa-find { max-width: none; } .pa-find input { font-size: 16px; } }
+/* ====================================================== end of Player analysis */
