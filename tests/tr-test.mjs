@@ -2818,6 +2818,29 @@ SCENARIOS.liveByes = async function liveByes() {
 };
 
 /**
+ * TIM'S 3-FOR-3 (2026-10-31: "notice how there's combinations of 3 for 3
+ * players"). `TR_THREE` turns Ana and Di into the two sides of the trade he
+ * saved with Robert Lane (tr-stub-season.mjs `THREE`). The finder's rows.
+ */
+SCENARIOS.threeForThree = async function threeForThree() {
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '476225250', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify({ 'trade.source': 'live' }),
+  };
+  const { document, errors } = await boot('trade.html', '', seed);
+  await settleGoal(document);
+  return {
+    errors,
+    ranked: document.getElementById('tradeTable').getAttribute('data-ranked'),
+    trades: readTrades(document).map((t) => ({
+      partner: t.partner,
+      send: t.send.map((m) => m.id),
+      receive: t.receive.map((m) => m.id),
+    })),
+  };
+};
+
+/**
  * A MAN ON BYE IN A WEEK YOU PLAY THE PARTNER (Tim, 2026-09-29): "highlight a
  * player's name if they have a BYE the week that the users play against each
  * other … me giving the player away … green … me recieving … yellow."
@@ -10427,6 +10450,24 @@ if (!gl.boot) {
 }
 
 // ---------------------------------------------------------------------------
+// TIM'S 3-FOR-3 (2026-10-31): with Ana and Di as the two sides of the deal
+// Tim saved with Robert (TR_THREE), the finder puts a 3-for-3 with Di on a row,
+// with Pitts (405, the ~10-a-week TE a flat top-N cut would lose) in it. The
+// exact deal is one of several versions of one trade, so the row shows the best
+// version (`dropVariants`); test-trade-three.mjs prices Tim's exact one.
+{
+  const three = run('threeForThree', { stub: true, env: { TR_THREE: '1' } });
+  ok('the 3-for-3 scenario boots', !three.boot, three.boot);
+  if (!three.boot) {
+    ok('no console errors on the 3-for-3 stub', three.errors.length === 0, three.errors.slice(0, 2).join(' | '));
+    const all = three.trades.map((t) => `${t.partner}: ${t.send.join(',')} > ${t.receive.join(',')}`).join(' | ');
+    const row = three.trades.find((t) => t.partner === 'Di' && t.send.length === 3 && t.receive.length === 3);
+    ok('a finder row is a 3-for-3 with Di', !!row, all);
+    ok('three of Ana men for three of Di men', !!row &&
+      row.send.every((id) => Math.floor(id / 100) === 1) && row.receive.every((id) => Math.floor(id / 100) === 4), all);
+    ok('with Pitts, the ~10-a-week TE, in it', !!row && row.receive.includes(405), all);
+  }
+}
 
 if (fails.length) {
   for (const f of fails.slice(0, 25)) console.log('FAIL ' + f);

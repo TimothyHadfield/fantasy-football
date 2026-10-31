@@ -95,6 +95,7 @@ const SUITES = [
   ['test-trade-bench.mjs', 'the bench-value switch: a deal that leaves your lineup level is kept on request, and every offer names your forced cut'],
   ['test-trade-net.mjs', 'net gain: your change minus his in the weeks you play him, and the pruned finder keeps what an exhaustive one does'],
   ['test-trade-suggest.mjs', 'the Suggested list under the custom builder: every completion of the ticked men, against a brute force'],
+  ['test-trade-three.mjs', 'three-man packages: Tim's own 3-for-3 is found and priced, pruned = exhaustive, `skip` holds, and `keep` gates before the one-per-trade dedupe'],
   ['test-trade-odds.mjs', 'the goal: a trade ranked by the title (or last-place) chance it moves, and will he say yes'],
   ['test-accept.mjs', 'will he say yes, rebuilt: an even deal near 50%, an Out man or a lineup loss lowers it, a filled hole raises it, out of the race lowers it; likely / maybe / unlikely and a why'],
   ['test-list-order.mjs', 'the finder’s order: net increase, but a deal that lowers your goal chance never above one that does not, and the +1 gate needs the chance not to fall; the custom Suggested list takes the same order (no gate) and Notifications never keeps a lowering deal'],

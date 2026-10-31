@@ -43,6 +43,9 @@ const ok = (cond, name, detail = '') => {
   else { fail++; console.log(`FAIL ${name}${detail ? ` — ${String(detail).slice(0, 600)}` : ''}`); }
 };
 const round1 = (x) => Math.round(x * 10) / 10;
+// The brute force below is written for 1–2 men a side, the shapes up to
+// 2-for-2; three-man completions are checked in test-trade-three.mjs.
+const TWO_KINDS = ['even', 'consolidate', 'depth', 'two'];
 
 ok(T.SUGGEST_MIN === 3 && T.SUGGEST_MAX === 5, 'the list is 3 rows at least, 5 at most', `${T.SUGGEST_MIN}/${T.SUGGEST_MAX}`);
 
@@ -180,7 +183,7 @@ for (const [flabel, floors] of [['no floors', null], ['floors', FLOORS]]) {
       const mustReceive = t.receive.map((p) => p.playerId);
       const opts = {
         teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, floors, meetWeeks: meetFor(me.id),
-        partnerId: him.id, mustSend, mustReceive,
+        partnerId: him.id, mustSend, mustReceive, kinds: TWO_KINDS,
         ...(weighted ? { weights: WEIGHTS, theirMinPerWeek: -2, theirReach: () => REACH, rankBy: RANK_BY } : {}),
       };
       const t0 = Date.now();
@@ -252,21 +255,25 @@ console.log(`timing: complete-mode search ${Math.min(...times)}–${Math.max(...
 
 // Nothing to add: a full 2-for-2 ticked has exactly one completion, itself.
 {
-  const full = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, partnerId: him.id,
+  const full = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, partnerId: him.id, kinds: TWO_KINDS,
     mustSend: [mine[0].playerId, mine[1].playerId], mustReceive: [his[0].playerId, his[1].playerId], complete: true });
   ok(full.considered === 1 && full.offers.length === 1, 'a full 2-for-2 ticked: its only completion is itself',
     `${full.considered} / ${full.offers.length}`);
 }
 // Three of his ticked: past the package limit, no completion at all.
 {
-  const over = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, partnerId: him.id,
+  const over = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, partnerId: him.id, kinds: TWO_KINDS,
     mustReceive: [his[0].playerId, his[1].playerId, his[2].playerId], complete: true });
   ok(over.offers.length === 0, 'three of his ticked: no completion within 2 a side', over.offers.length);
+  // Since 2026-10-31 a package may hold three: four ticked is past every limit.
+  const four = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, partnerId: him.id,
+    mustReceive: [his[0].playerId, his[1].playerId, his[2].playerId, his[3].playerId], complete: true });
+  ok(four.offers.length === 0, 'four of his ticked: no completion within 3 a side', four.offers.length);
 }
 // Without `complete` and the ticks, nothing changes for the existing finder.
 {
-  const plain = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, limit: Infinity });
-  const ex = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, limit: Infinity, exhaustive: true });
+  const plain = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, limit: Infinity, kinds: TWO_KINDS });
+  const ex = findTrades({ teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, limit: Infinity, kinds: TWO_KINDS, exhaustive: true });
   ok(plain.offers.length > 0 && plain.considered === ex.considered, 'the plain finder is unchanged (pruned == exhaustive)');
 }
 

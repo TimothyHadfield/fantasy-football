@@ -147,6 +147,8 @@ const REACH = WEEKS.map((w) => (w >= 12 ? 0.6 : 1));
 const keyOf = (o) => `${o.partner.id}|${o.send.map((p) => p.playerId).join(',')}>${o.receive.map((p) => p.playerId).join(',')}`;
 const summary = (r) => r.offers.map((o) => `${keyOf(o)}:${o.myGain}:${o.netGain}:${o.goalPoints}:${o.theirGain}`);
 
+// Every shape but the three-man ones (2026-10-31) — see section 5.
+const TWO_KINDS = ['even', 'consolidate', 'depth', 'two'];
 let meetingOffers = 0;
 let checkedNet = 0;
 let lifted = 0;
@@ -163,8 +165,10 @@ for (const [label, floors] of [['no floors', null], ['floors', FLOORS]]) {
     config++;
     for (const me of squads) {
       searches++;
+      // The shapes up to 2-for-2 here: an exhaustive search with three-man
+      // packages costs minutes a squad. Section 5 proves those on one partner.
       const opts = {
-        teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, floors, limit: Infinity,
+        teams, myTeamId: me.id, slots, weeks: WEEKS, projFor, floors, limit: Infinity, kinds: TWO_KINDS,
         meetWeeks: meetFor(me.id),
         ...(weighted ? { weights: WEIGHTS, theirMinPerWeek: -2, theirReach: () => REACH } : {}),
       };
@@ -241,7 +245,7 @@ console.log(`timing over ${searches} searches: pruned ${times.pruned} ms, exhaus
   T.setIrSlots(4);
   let irOffers = 0;
   for (const me of irTeams.slice(0, 2)) {
-    const opts = { teams: irTeams, myTeamId: me.id, slots, weeks: WEEKS, projFor, floors: FLOORS, limit: Infinity, meetWeeks: meetFor(me.id) };
+    const opts = { teams: irTeams, myTeamId: me.id, slots, weeks: WEEKS, projFor, floors: FLOORS, limit: Infinity, kinds: TWO_KINDS, meetWeeks: meetFor(me.id) };
     const pruned = findTrades(opts);
     const full = findTrades({ ...opts, exhaustive: true });
     eq(summary(pruned), summary(full), `IR demo · ${me.name}: the pruned search keeps exactly the exhaustive one's offers`);
@@ -250,6 +254,33 @@ console.log(`timing over ${searches} searches: pruned ${times.pruned} ms, exhaus
   T.setIrSlots(null);
   ok(irOffers > 0, 'IR demo: some kept offers move an IR-slot man (so the two-cut bound is exercised)', irOffers);
   console.log(`IR demo: ${irOffers} kept offers move an IR-slot man`);
+
+  // =========================================================================
+  // 5. Three-man packages (2026-10-31): pruned == exhaustive, one partner
+  // =========================================================================
+  // The new bounds (a dead smaller send or receive kills every bigger one; his
+  // gifted weeks; up to three of his cuts in a meeting week) on the shapes
+  // with a three-man side, floors on and netted, with and without IR men and
+  // goal weights. One partner a run: the exhaustive search is the slow half.
+  T.setIrSlots(4);
+  let threeOffers = 0;
+  for (const [tag, lg] of [['plain', teams], ['IR', irTeams]]) {
+    for (const weighted of [false, true]) {
+      const me = lg[2];
+      const partner = lg.find((t) => t.id !== me.id && meetFor(me.id)(t.id).some((w) => WEEKS.includes(w))) || lg[3];
+      const opts = { teams: lg, myTeamId: me.id, partnerId: partner.id, slots, weeks: WEEKS, projFor, floors: FLOORS,
+        limit: Infinity, kinds: ['three'], meetWeeks: meetFor(me.id),
+        ...(weighted ? { weights: WEIGHTS, theirMinPerWeek: -2, theirReach: () => REACH } : {}) };
+      const pruned = findTrades(opts);
+      const full = findTrades({ ...opts, exhaustive: true });
+      ok(pruned.considered === full.considered, `three-man ${tag}${weighted ? ' weighted' : ''}: pruned finds as many as exhaustive`,
+        `${pruned.considered} vs ${full.considered}`);
+      eq(summary(pruned), summary(full), `three-man ${tag}${weighted ? ' weighted' : ''}: and keeps exactly the same offers`);
+      threeOffers += pruned.offers.length;
+    }
+  }
+  T.setIrSlots(null);
+  ok(threeOffers > 0, 'three-man: the checks have offers to compare', threeOffers);
 }
 
 console.log(`${pass} passed, ${fail} failed`);

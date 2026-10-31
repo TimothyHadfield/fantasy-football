@@ -386,6 +386,43 @@ function poSpike(id, week) {
  *                    19 every week), and `Cy QB1` projects 2, so Cy starts his
  *                    6-point backup. Unset, slot 12 is `Bills D/ST` as before.
  */
+/**
+ * TIM'S 3-FOR-3 (2026-10-31), only when `TR_THREE` is set. Ana and Di become
+ * the two sides of the trade Tim saved with Robert Lane, at its real per-week
+ * numbers: Ana sends Cook RB 18.6, Pollard RB 14.7 and Warren TE 11.4 (or a
+ * cheaper RB in place of Cook) for Di's St. Brown WR 20.1, Pitts TE 10.6 and
+ * Lawrence QB 20.6. Pitts is a ~10-a-week TE, below Di's bench WR and QB by
+ * rest-of-season points — the man a flat "top N" cut would have lost. Three
+ * positions each way; Bo and Cy are unchanged. Di, not Bo: Ana plays Bo
+ * most weeks, and his netted side would sink every deal with him. Indexes keep their slots.
+ */
+const THREE = {
+  1: {
+    0: P('Ana QB1', 'QB', SLOT.QB, flat(12), 12),
+    1: P('Ana Cook', 'RB', SLOT.RB, flat(18.6), 18.6),
+    2: P('Ana Pollard', 'RB', SLOT.RB, flat(14.7), 14.7),
+    3: P('Ana WR1', 'WR', SLOT.WR, flat(12), 12),
+    4: P('Ana WR2', 'WR', SLOT.WR, flat(11), 11),
+    5: P('Ana Warren', 'TE', SLOT.TE, flat(11.4), 11.4),
+    6: P('Ana RB3', 'RB', SLOT.FLEX, flat(13), 13),
+    9: P('Ana RB4', 'RB', SLOT.BE, flat(12), 12),
+    10: P('Ana TE2', 'TE', SLOT.BE, flat(10), 10),
+    11: P('Ana WR4', 'WR', SLOT.BE, flat(5), 5),
+  },
+  4: {
+    0: P('Di Lawrence', 'QB', SLOT.QB, flat(20.6), 20.6),
+    1: P('Di RB1', 'RB', SLOT.RB, flat(9), 9),
+    2: P('Di RB2', 'RB', SLOT.RB, flat(8), 8),
+    3: P('Di St. Brown', 'WR', SLOT.WR, flat(20.1), 20.1),
+    4: P('Di WR2', 'WR', SLOT.WR, flat(13), 13),
+    5: P('Di Pitts', 'TE', SLOT.TE, flat(10.6), 10.6),
+    6: P('Di WR3', 'WR', SLOT.FLEX, flat(12), 12),
+    9: P('Di QB2', 'QB', SLOT.BE, flat(19), 19),
+    10: P('Di WR4', 'WR', SLOT.BE, flat(11), 11),
+    11: P('Di RB3', 'RB', SLOT.BE, flat(4), 4),
+  },
+};
+
 function specOf(team, i) {
   const spec = team.players[i];
   const env = typeof process !== 'undefined' && process.env ? process.env : {};
@@ -410,6 +447,10 @@ function specOf(team, i) {
     if (i === 9) return P('Bo QB2', 'QB', SLOT.BE, flat(3), 3);
     if ([1, 2, 6].includes(i)) return { ...team.players[i], week: flat(17), mean: 17 };
     if (i === 11) return P('Bo RB4', 'RB', SLOT.BE, flat(16), 16);
+  }
+  if (env.TR_THREE) {
+    const t = THREE[team.id] && THREE[team.id][i];
+    if (t) return t;
   }
   const off = Number(env.TR_BYE_MAN);
   if (off && playerId(team.id, i) === off) {

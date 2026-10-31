@@ -6,6 +6,44 @@
 // wiring; this decides what the numbers mean.
 //
 // ---------------------------------------------------------------------------
+// PAGE CONTRACT for Tim's checklist finder (2026-10-31, docs/trade-fit-plan.md)
+//
+//   SHAPES. Packages hold 1–3 men a side. Any deal with a 3-man side has
+//   `kind: 'three'` (shape '3-for-3', '3-for-2', '2-for-3', '3-for-1',
+//   '1-for-3'); the four older kinds mean exactly what they always did.
+//   `PACKAGE_KINDS` includes 'three', so `kinds: PACKAGE_KINDS` ("Any shape")
+//   searches it; `kinds: ['three']` searches only it. 3-man packages come from
+//   each side's best few per position (THREE_PER_POS: QB 2, RB 3, WR 3, TE 2,
+//   never K / D/ST / a `skip` man; ticked men always), and a deal with a 3-man
+//   side is priced only when every man on both sides is in that pool.
+//   A 3-for-1 makes the side taking three cut two men (`myCut` names yours).
+//
+//   GATES BEFORE THE DEDUPE. `keep: (offer) => boolean` runs on every offer the
+//   search found (after `skip`, before `rankBy`, `bestPerTarget`,
+//   `dropRedundant`, `dropVariants` and `limit`). Put Tim's gates there —
+//   e.g. `(o) => myPerWeekShown(o, span) >= 2 && customValueChange(...).a >= 0`
+//   — so the one-row-per-trade dedupe chooses among deals that PASS them; a
+//   gate applied to `result.offers` afterwards finds the kept version failing
+//   while a dropped sibling would have passed (measured on 1241838: 11 of 20
+//   kept rows passed afterwards; with `keep`, 19 of 19). The offer it sees is
+//   unfinished: every figure is there (`myGain`, `netGain`, `goalPoints`,
+//   `theirGain`, `byWeek`, `theirByWeek`, `myCut`, `send`, `receive`, `kind`)
+//   but not the churn lists (`yourChurn`, `theirChurn`, `yourMoves`,
+//   `theirMoves`). It is called once per found offer (thousands), so keep it
+//   cheap; a throw counts as false. Not applied with `complete` (the custom
+//   box's Suggested list has `barred` for that). `skip` (rule 21) is unchanged.
+//   The result carries `passed`: how many passed `keep` (= `considered`
+//   without it).
+//
+//   TIME (measured 2026-10-31, headless, the real trade page on public league
+//   1241838, 9 partners, goal-weighted): before, 1.6–1.8 s a partner (Chrome
+//   and WebKit alike); now 0.56–0.98 s in Chrome, 0.70–0.85 s in WebKit, with
+//   3-man packages in. What pays for them: a package holding a `skip` man is
+//   never priced, his gifted weeks are reused like yours, and DEAD
+//   SUB-PACKAGES (below). On the demo league in node, with no goal weights,
+//   0.58–0.72 s before and ~0.9 s now; with the 3-man pool off, 0.21 s.
+//
+// ---------------------------------------------------------------------------
 // The one idea the whole file is built on
 //
 // A manager's team is worth exactly what his STARTING LINEUP scores. His bench
@@ -473,8 +511,13 @@ export function depthTable(teams, slots, measure = typicalWeek) {
 // here is a cap on roster size, which exists to stop a pathological league
 // hanging the page rather than to make the answer cleverer.
 
-/** How many players from each side a package may hold. */
-const MAX_PACKAGE = 2;
+/**
+ * How many players from each side a package may hold. Three since 2026-10-31
+ * (Tim: "notice how there's combinations of 3 for 3 players" — both trades he
+ * saved by hand were 3-for-3); a 3-man package is searched only among each
+ * side's THREE_POOL (see below).
+ */
+const MAX_PACKAGE = 3;
 
 /** Ignore a gain smaller than this: it is float noise dressed as a trade. */
 const MIN_GAIN = 0.1;
@@ -503,12 +546,21 @@ function candidates(scoredPlayers) {
     .slice(0, CANDIDATE_CAP);
 }
 
-/** Every 1- and 2-man package from a candidate list. */
-function packages(list, max = MAX_PACKAGE) {
+/**
+ * Every 1- and 2-man package from a candidate list, then every 3-man package
+ * from `three` (the side's THREE_POOL, best first; none when omitted).
+ */
+function packages(list, three = null) {
   const out = list.map((p) => [p]);
-  if (max < 2) return out;
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) out.push([list[i], list[j]]);
+  }
+  if (Array.isArray(three) && MAX_PACKAGE >= 3) {
+    for (let i = 0; i < three.length; i++) {
+      for (let j = i + 1; j < three.length; j++) {
+        for (let k = j + 1; k < three.length; k++) out.push([three[i], three[j], three[k]]);
+      }
+    }
   }
   return out;
 }
@@ -773,6 +825,10 @@ function forcedCut(kept, over, ctx, solved, reserve = null) {
  * bare ratio makes the reader work out which one they are looking at.
  */
 function packageKind(send, receive) {
+  // Any deal with a THREE-man side is its own kind (2026-10-31), so every
+  // older kind keeps exactly the shapes it always meant (1-for-1, 2-for-1,
+  // 1-for-2, 2-for-2) and a page filter for them is unchanged.
+  if (send.length >= 3 || receive.length >= 3) return 'three';
   // Two for two is its own shape (2026-09-21) — a different conversation from
   // a straight swap, and a filter button of its own on the page.
   if (send.length === 2 && receive.length === 2) return 'two';
@@ -800,6 +856,65 @@ function twoForTwoAllowed(send, receive, myTop, theirTop) {
 const topIds = (list) => new Set(list.slice(0, TWO_CAP).map((p) => p.playerId));
 
 /**
+ * THREE-MAN PACKAGES, BOUNDED BY POSITION (2026-10-31). Tim's two hand-made
+ * trades were 3-for-3 and mixed positions with mid-tier men in them (sending
+ * Cook RB 18.6, Warren TE 11.4, Pollard RB 14.7 for St. Brown WR 20.1, Pitts
+ * TE 10.6, Lawrence QB 20.6). A flat "top N by rest-of-season total" cut drops
+ * an 11-a-week TE behind every 14-a-week bench back, so the pool is instead
+ * each side's best few AT EACH POSITION — about its starters and first backups:
+ * THREE_PER_POS men a position, by rest-of-season total. K and D/ST are never
+ * in it (rule 21 bars them from suggestions anyway), nor any man the page asked
+ * to `skip`; a man the reader ticked (`mustSend`/`mustReceive`) always is.
+ *
+ * A deal with a 3-man side is searched only when EVERY man on BOTH sides is in
+ * his side's pool. Sizes measured on public league 1241838 (see the header's
+ * PAGE CONTRACT for the timings).
+ */
+const THREE_DEFAULT = Object.freeze({ QB: 2, RB: 3, WR: 3, TE: 2 });
+let THREE_PER_POS = THREE_DEFAULT;
+
+/**
+ * TESTS AND MEASUREMENT ONLY: a different pool per position (`{QB: 1, …}`), or
+ * null for the default. `{}` turns three-man packages off.
+ */
+export function setThreePerPos(caps) {
+  THREE_PER_POS = caps && typeof caps === 'object' ? { ...caps } : THREE_DEFAULT;
+}
+
+/** A side's THREE_POOL, best first: see THREE_PER_POS. */
+function threePool(scoredList, skip = null, need = null) {
+  const byPos = new Map();
+  const ok = (p) => p.playerId !== null && p.playerId !== undefined && Number.isFinite(p.projected);
+  const sorted = scoredList.filter(ok).slice()
+    .sort((a, b) => b.projected - a.projected || a.playerId - b.playerId);
+  const out = [];
+  for (const p of sorted) {
+    const id = String(p.playerId);
+    if (need && need.has(id)) { out.push(p); continue; }
+    if (skip && skip.has(id)) continue;
+    const cap = THREE_PER_POS[p.position] || 0;
+    const held = byPos.get(p.position) || 0;
+    if (held >= cap) continue;
+    byPos.set(p.position, held + 1);
+    out.push(p);
+  }
+  return out;
+}
+
+/**
+ * May this pair of packages be priced? 2-for-2 only among the top TWO_CAP a
+ * side (see TWO_CAP); any 3-man side only when every man is in his side's
+ * THREE_POOL (sets of ids).
+ */
+function shapeAllowed(send, receive, myTop, theirTop, myThree, theirThree) {
+  if (send.length >= 3 || receive.length >= 3) {
+    return send.every((p) => myThree.has(p.playerId)) && receive.every((p) => theirThree.has(p.playerId));
+  }
+  if (send.length === 2 && receive.length === 2) return twoForTwoAllowed(send, receive, myTop, theirTop);
+  return true;
+}
+
+/**
  * Every trade with this partner that makes BOTH lineups better.
  *
  * Both sides are re-priced from scratch — fill the best legal lineup before,
@@ -820,7 +935,7 @@ const topIds = (list) => new Set(list.slice(0, TWO_CAP).map((p) => p.playerId));
  * straight swaps rather than the leftovers of a search that preferred
  * something else.
  */
-export const PACKAGE_KINDS = ['even', 'consolidate', 'depth', 'two'];
+export const PACKAGE_KINDS = ['even', 'consolidate', 'depth', 'two', 'three'];
 
 function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds, myMin = null) {
   const myFloor = Number.isFinite(myMin) ? myMin : MIN_GAIN;
@@ -829,10 +944,15 @@ function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds, myMin = n
 
   const myCands = candidates(myScored);
   const theirCands = candidates(theirScored);
-  const myPackages = packages(myCands);
-  const theirPackages = packages(theirCands);
+  const wantThree = kinds.includes('three');
+  const myThreeList = wantThree ? threePool(myScored) : [];
+  const theirThreeList = wantThree ? threePool(theirScored) : [];
+  const myPackages = packages(myCands, myThreeList);
+  const theirPackages = packages(theirCands, theirThreeList);
   const myTop = topIds(myCands);
   const theirTop = topIds(theirCands);
+  const myThree = new Set(myThreeList.map((p) => p.playerId));
+  const theirThree = new Set(theirThreeList.map((p) => p.playerId));
   // One lineup, so the cut is judged on that one lineup (see `afterTrade`).
   const cutCtx = { slots, n: 1, floors: null, view: (roster) => roster };
 
@@ -841,9 +961,8 @@ function* tradesWithSteps(myScored, theirScored, theirs, slots, kinds, myMin = n
     // One stop per package sent — the scalar twin of `tradesAcrossWeeksSteps`.
     yield;
     for (const receive of theirPackages) {
-      // 2-for-2 only among the top TWO_CAP pieces a side — see TWO_CAP.
-      if (send.length === 2 && receive.length === 2 &&
-          !twoForTwoAllowed(send, receive, myTop, theirTop)) continue;
+      // 2-for-2 only among the top TWO_CAP, 3-man sides only in THREE_POOL.
+      if (!shapeAllowed(send, receive, myTop, theirTop, myThree, theirThree)) continue;
 
       const kind = packageKind(send, receive);
       if (!kinds.includes(kind)) continue;
@@ -1031,8 +1150,12 @@ export const SUGGEST_MAX = 5;
 const dealKey = (send, receive) =>
   `${send.map((p) => String(p.playerId)).sort().join(',')}>${receive.map((p) => String(p.playerId)).sort().join(',')}`;
 
-/** Every non-empty subset of a list of at most two. */
-const subsetsOf = (list) => (list.length === 2 ? [[list[0]], [list[1]], list] : [list]);
+/** Every non-empty subset of a (short) list. */
+const subsetsOf = (list) => {
+  const out = [];
+  for (let m = 1; m < (1 << list.length); m++) out.push(list.filter((_, i) => m & (1 << i)));
+  return out;
+};
 
 function pickCompletions(sorted, gates) {
   const byKey = new Map(sorted.map((o) => [dealKey(o.send, o.receive), o]));
@@ -1128,7 +1251,10 @@ function pickCompletions(sorted, gates) {
  *   the ticked men in `mustSend`/`mustReceive`: no gain gate on either side
  *   (every completion is a candidate, a bad one too), and `offers` is the
  *   SUGGESTION LIST — see `pickCompletions`. Weekly measure only.
- * @returns {{offers: Array, mine: Object|null, considered: number, basis: string}}
+ * @param {function} [opts.keep] `(offer) -> boolean`: the page's own gates,
+ *   applied to every offer found BEFORE ranking and the one-per-trade dedupe
+ *   (see PAGE CONTRACT at the top of this file). Ignored with `complete`.
+ * @returns {{offers: Array, mine: Object|null, considered: number, passed: number, basis: string}}
  */
 export function findTrades(opts) {
   return drain(findTradesSteps(opts));
@@ -1206,7 +1332,7 @@ function* findTradesSteps({
   weights = null, theirMinPerWeek = null, rankBy = null, theirReach = null,
   meetWeeks = null, exhaustive = false, myMin = null,
   partnerId = null, mustSend = null, mustReceive = null, complete = false,
-  distinct = false, skip = null, barred = null,
+  distinct = false, skip = null, barred = null, keep = null,
 }) {
   const mine = (teams || []).find((t) => t.id === myTeamId) || null;
   if (!mine) return { offers: [], mine: null, considered: 0, basis: 'measure' };
@@ -1242,7 +1368,8 @@ function* findTradesSteps({
               meet: meetIndices(weeks, typeof meetWeeks === 'function' ? meetWeeks(theirs.id) : null),
               exhaustive: !!exhaustive,
               myMin,
-              must, complete: !!complete, gates }
+              must, complete: !!complete, gates,
+              kinds, skip: skip && skip.size ? new Set([...skip].map(String)) : null }
           )
         : yield* tradesWithSteps(myScored, scored(theirs.players, measure), theirs, slots, kinds, myMin)
     );
@@ -1260,6 +1387,16 @@ function* findTradesSteps({
   }
 
   const considered = offers.length;
+  // THE PAGE'S OWN GATES, BEFORE ANYTHING IS THROWN AWAY (`keep`, 2026-10-31).
+  // `bestPerTarget`, `dropRedundant`, `dropVariants` and `limit` each keep one
+  // deal of several; a gate applied after them can find the kept one failing
+  // while a dropped sibling would have passed. Run here, the page's gate picks
+  // the pool and the dedupe works only among deals that pass it.
+  if (typeof keep === 'function' && !complete) {
+    offers = offers.filter((o) => {
+      try { return !!keep(o); } catch { return false; }
+    });
+  }
   if (typeof rankBy === 'function') {
     for (const o of offers) {
       const r = rankBy(o);
@@ -1286,6 +1423,8 @@ function* findTradesSteps({
     offers: ranked,
     mine,
     considered,
+    // How many passed `keep` (= considered without it), before the dedupe.
+    passed: offers.length,
     basis: weekly ? 'weeks' : 'measure',
   };
 }
@@ -1809,12 +1948,22 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
     for (const p of pkg) if (need.has(String(p.playerId))) n++;
     return n === need.size;
   };
-  const myPackages = packages(myCands).filter(holds(must.send));
-  const theirPackages = packages(theirCands).filter(holds(must.receive));
+  // A package holding a man the page will not suggest (`skip`, rule 21) is
+  // never priced: `findTradesSteps` would drop every offer it made anyway, so
+  // this changes no answer and saves the time (K and D/ST sit in most top-18s).
+  const skip = options.skip instanceof Set && options.skip.size ? options.skip : null;
+  const clean = (need) => (pkg) => !skip || pkg.every((p) => !skip.has(String(p.playerId)) || need.has(String(p.playerId)));
+  const wantThree = (options.kinds || PACKAGE_KINDS).includes('three');
+  const myThreeList = wantThree ? threePool(myScored, skip, must.send) : [];
+  const theirThreeList = wantThree ? threePool(theirScored, skip, must.receive) : [];
+  const myPackages = packages(myCands, myThreeList).filter(holds(must.send)).filter(clean(must.send));
+  const theirPackages = packages(theirCands, theirThreeList).filter(holds(must.receive)).filter(clean(must.receive));
   const myTop = topIds(myCands);
   const theirTop = topIds(theirCands);
   for (const id of must.send) myTop.add(myCands.find((p) => String(p.playerId) === id)?.playerId);
   for (const id of must.receive) theirTop.add(theirCands.find((p) => String(p.playerId) === id)?.playerId);
+  const myThree = new Set(myThreeList.map((p) => p.playerId));
+  const theirThree = new Set(theirThreeList.map((p) => p.playerId));
   // COMPLETIONS (`complete`): no gate on either side, so nothing to prune by.
   const complete = !!options.complete;
 
@@ -1867,12 +2016,40 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
   // every reach is ≥ 0.
   const prune = !options.exhaustive && !complete;
   const ceilingForThem = prune ? new Array(myPackages.length) : null;
+  // HIS gifted weeks per package (his roster plus it, nobody gone): the same
+  // shortcut as mine below — a week in which none of the men he sends starts
+  // is that week as gifted, with no fill.
+  const hisGifted = prune ? new Array(myPackages.length) : null;
   if (prune) {
     for (let k = 0; k < myPackages.length; k++) {
-      ceilingForThem[k] = theirOf(totalAcrossWeeks(theirScored.concat(myPackages[k]), slots, n, floors));
+      const pool = theirScored.concat(myPackages[k]);
+      const wk = new Array(n);
+      const totals = new Array(n);
+      let t = 0;
+      for (let i = 0; i < n; i++) {
+        wk[i] = solveWeek(pool, i, cutCtx);
+        totals[i] = wk[i].total;
+        t += totals[i];
+      }
+      hisGifted[k] = wk;
+      ceilingForThem[k] = theirOf({ total: round1(t), weekTotals: totals });
       yield;
     }
   }
+  // DEAD SUB-PACKAGES (2026-10-31, what keeps three-man packages affordable).
+  // Sending MORE can only lower your weeks, and taking more from him only
+  // lowers his: a roster with a man gone never fields more. So once a send
+  // fails your bound with a receive BEFORE any cut, every bigger send that
+  // contains it fails too, with that receive — and the same for his side, a
+  // receive that fails his gate with a send fails in every bigger receive.
+  // Exact, like every other bound here (the exhaustive checks prove it).
+  const keyOf = (pkg) => pkg.map((p) => String(p.playerId)).sort().join(',');
+  const myKeys = myPackages.map(keyOf);
+  const theirKeys = theirPackages.map(keyOf);
+  const smaller = (pkg) => (pkg.length < 2 ? [] : pkg.map((_, i) => keyOf(pkg.filter((__, j) => j !== i))));
+  const mySmaller = myPackages.map(smaller);
+  const theirSmaller = theirPackages.map(smaller);
+  const hisDead = prune ? myPackages.map(() => new Set()) : null;
 
   // THE WEEKS YOU PLAY HIM, NETTED (Tim, 2026-09-30: "add the change in
   // opponent proj to the total +/- gain"). `meet` holds the indices of the
@@ -1924,24 +2101,36 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
     if (!meet) return { noCut: 0, cut: 0 };
     const taken = new Set(receive.map((p) => p.playerId));
     const left = theirScored.filter((p) => !taken.has(p.playerId));
-    const maxCuts = MAX_PACKAGE - activeIn(receive);
+    // The most I can send with this receive: three only when every man in it
+    // is in his THREE_POOL (`shapeAllowed`), else two.
+    const maxSend = MAX_PACKAGE >= 3 && receive.every((p) => theirThree.has(p.playerId)) ? 3 : 2;
+    const maxCuts = Math.min(3, maxSend - activeIn(receive));
     let noCut = 0;
     let cut = 0;
     for (const i of meet) {
       const base = solveWeek(left, i, cutCtx);
       let least = base.total;
-      // A cut is only possible if I can send more than I take.
+      // A cut is only possible if I can send more than I take: every way of
+      // losing up to `maxCuts` of that week's starters.
+      // Taking a man off who does not start changes nothing, so each next man
+      // worth trying is one of the CURRENT starters (after the earlier
+      // removals — a backup who steps in can be the next one lost). Each set of
+      // removed men is solved once.
       if (maxCuts >= 1) {
-        const ids = [...base.ids];
-        for (let a = 0; a < ids.length; a++) {
-          const t = solveWeek(left.filter((p) => p.playerId !== ids[a]), i, cutCtx).total;
-          if (t < least) least = t;
-          if (maxCuts < 2) continue;
-          for (let b = a + 1; b < ids.length; b++) {
-            const t2 = solveWeek(left.filter((p) => p.playerId !== ids[a] && p.playerId !== ids[b]), i, cutCtx).total;
-            if (t2 < least) least = t2;
+        const seen = new Set();
+        const walk = (roster, starters, gone) => {
+          for (const id of starters) {
+            const next = gone.concat(id).sort();
+            const key = next.join(',');
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const rest = roster.filter((p) => p.playerId !== id);
+            const x = solveWeek(rest, i, cutCtx);
+            if (x.total < least) least = x.total;
+            if (next.length < maxCuts) walk(rest, x.ids, next);
           }
-        }
+        };
+        walk(left, base.ids, []);
       }
       noCut += wAt(i) * (theirBase.weekTotals[i] - base.total);
       cut += wAt(i) * (theirBase.weekTotals[i] - least);
@@ -1952,7 +2141,9 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
   const found = [];
   // Receive is the outer loop now, so a package that cannot help me at all
   // skips every send rather than being re-rejected once per send.
-  for (const receive of theirPackages) {
+  for (let r = 0; r < theirPackages.length; r++) {
+    const receive = theirPackages[r];
+    const myDead = new Set();
     // The gifted roster — mine plus theirs, nothing sent, nobody cut. Its
     // lineups are the ceiling AND, below, the shortcut.
     const giftedPool = myScored.concat(receive);
@@ -1970,11 +2161,14 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
     for (let k = 0; k < myPackages.length; k++) {
       const send = myPackages[k];
       if (prune && ceilingForThem[k] < theirMin) continue;
-      if (send.length === 2 && receive.length === 2 &&
-          !twoForTwoAllowed(send, receive, myTop, theirTop)) continue;
+      if (!shapeAllowed(send, receive, myTop, theirTop, myThree, theirThree)) continue;
 
       const kind = packageKind(send, receive);
       if (!kinds.includes(kind)) continue;
+      if (prune) {
+        if (mySmaller[k].some((x) => myDead.has(x))) { myDead.add(myKeys[k]); continue; }
+        if (theirSmaller[r].some((x) => hisDead[k].has(x))) { hisDead[k].add(theirKeys[r]); continue; }
+      }
       // One stop per send that is actually priced; the skips above cost nothing.
       yield;
 
@@ -1996,6 +2190,15 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
           ? solveWeek(preRoster, i, cutCtx)
           : { total: gifted.byWeek[i].total, ids: giftedStarters[i] };
       }
+      if (prune) {
+        // Your weeks before any cut: the most this send can be worth with
+        // this receive, and so with every bigger send (DEAD SUB-PACKAGES).
+        const pre = new Array(n);
+        let preT = 0;
+        for (let i = 0; i < n; i++) { pre[i] = preSolved[i].total; preT += pre[i]; }
+        const preMine = w ? weigh(pre, myBase.weekTotals) : round1(round1(preT) - myBase.total);
+        if (preMine + extraMax + NET_SLACK < myFloor) { myDead.add(myKeys[k]); continue; }
+      }
       // Then the cut, chosen on those same weeks (see `afterTrade`). It hands
       // back the after-trade weeks, re-filled only where the man cut started.
       const myCut = afterTrade(myScored, send, receive, cutCtx, preSolved);
@@ -2016,8 +2219,25 @@ function* tradesAcrossWeeksSteps(myScored, theirScored, theirs, slots, kinds, we
       if (prune && mineOnly + canAdd + NET_SLACK < myFloor) continue;
 
       const takenIds = receive.map((p) => p.playerId);
-      const hisCut = afterTrade(theirScored, receive, send, cutCtx,
-        solveWeeks(theirScored.filter((p) => !takenIds.includes(p.playerId)).concat(send), cutCtx));
+      const hisRoster = theirScored.filter((p) => !takenIds.includes(p.playerId)).concat(send);
+      let hisPre;
+      if (prune) {
+        const gw = hisGifted[k];
+        hisPre = new Array(n);
+        const totals = new Array(n);
+        let t = 0;
+        for (let i = 0; i < n; i++) {
+          hisPre[i] = takenIds.some((id) => gw[i].ids.has(id)) ? solveWeek(hisRoster, i, cutCtx) : gw[i];
+          totals[i] = hisPre[i].total;
+          t += totals[i];
+        }
+        // His weeks before any cut: if they miss his gate, so does every
+        // bigger receive with this send (DEAD SUB-PACKAGES).
+        if (theirOf({ total: round1(t), weekTotals: totals }) < keepTheirMin) { hisDead[k].add(theirKeys[r]); continue; }
+      } else {
+        hisPre = solveWeeks(hisRoster, cutCtx);
+      }
+      const hisCut = afterTrade(theirScored, receive, send, cutCtx, hisPre);
       const theirRoster = hisCut.roster;
       let theirTotal = 0;
       const theirWeekTotals = new Array(n);
