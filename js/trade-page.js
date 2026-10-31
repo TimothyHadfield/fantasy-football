@@ -5345,6 +5345,11 @@ function runSearch({ keepDeal = false } = {}) {
     state.goalWeights = W;
     const myPlayers = (teams.find((t) => t.id === state.myTeamId) || {}).players || [];
     const benchBefore = state.benchValue ? benchValueOf(myPlayers) : null;
+    // HIS side and the page's other hard gates (see below), defined before the
+    // search so `keep` can hold every deal to them ahead of the dedupe.
+    const hisMin = W && !state.bothWin ? (o) => THEIR_MIN_PER_WEEK * hisSideOf(o, weeks || undefined).weeks : () => 0.1;
+    const hisOk = (o) => { const h = hisSideOf(o, weeks || undefined); return !Number.isFinite(h.gain) || h.gain >= hisMin(o) - 0.05; };
+    const hardOk = (o) => hisOk(o) && totalOk(o) && valueGapOk(o) && !pastTradeBarred(o);
     const result = await findTradesSliced({
       teams,
       myTeamId: state.myTeamId,
@@ -5393,10 +5398,16 @@ function runSearch({ keepDeal = false } = {}) {
       // TIM'S GATES BEFORE THE DEDUPE (engine `keep`, 2026-10-31): the deals
       // that pass, and the near misses (one gate short) so they can be shown.
       // Flip: its two figures. Bench value: none.
-      keep: state.benchValue ? null
+      // Every mode also holds the hard gates (his side, Total, Value gap, a
+      // trade undone), so a variant that passes them survives the dedupe.
+      keep: state.benchValue ? hardOk
         : state.flip
-        ? (o) => tfit.flipBand(gateYouOf(o), valueChangeOfOffer(o))
-        : (o) => { const g = tfit.fitOf({ youGain: gateYouOf(o), valueChange: valueChangeOfOffer(o) }); o.gatePass = g.pass; return g.pass || g.near; },
+        ? (o) => tfit.flipBand(gateYouOf(o), valueChangeOfOffer(o)) && hardOk(o)
+        : (o) => {
+          const g = tfit.fitOf({ youGain: gateYouOf(o), valueChange: valueChangeOfOffer(o) });
+          o.gatePass = g.pass;
+          return (g.pass || g.near) && hardOk(o);
+        },
       myMin: state.benchValue ? 0 : state.flip && weeks ? -2 * weeks.length : null,
       // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
       // the yes-chance all read this — the base run, so it costs nothing.
@@ -5418,9 +5429,7 @@ function runSearch({ keepDeal = false } = {}) {
     // week of loss, or a gain with the "Both teams gain" switch (and before the
     // goal's weights are in). The engine gates his own lineup; this is the
     // figure the row prints as Him.
-    const hisMin = W && !state.bothWin ? (o) => THEIR_MIN_PER_WEEK * hisSideOf(o, weeks || undefined).weeks : () => 0.1;
-    const hisOk = (o) => { const h = hisSideOf(o, weeks || undefined); return !Number.isFinite(h.gain) || h.gain >= hisMin(o) - 0.05; };
-    const kept = result.offers.filter((o) => hisOk(o) && totalOk(o) && valueGapOk(o) && !pastTradeBarred(o));
+    const kept = result.offers.filter(hardOk);
     result.near = [];
     result.sentHidden = [];
     if (state.benchValue) {
