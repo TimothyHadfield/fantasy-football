@@ -11,7 +11,7 @@
 - 2026-10-31 · His process is the spec: the numbers below are his, not Claude's.
 
 ## The answer (one sentence)
-Turn the finder from "best by our model" into "deals that pass **Tim's own checklist**": gates for his side (future proj +2 to +4 a week, Value ≥ 0), an order by how appealing it looks to the other manager (his this-week gain, buying 💎 / sending 🪙, filling his need), a visible ✓ checklist on every row, a cap per manager, and a separate "Flip" mode for cheap high-Value buys that another manager needs.
+Turn the finder from "best by our model" into "deals that pass **Tim's own checklist**": gates for his side (future proj +2 to +4 a week, Value ≥ 0), added on top of every existing gate, an order by how appealing it looks to the other manager (his this-week gain, buying 💎 / sending 🪙, filling his need), a ✓ checklist on every row, a cap per manager, and a separate "Flip" mode for cheap high-Value buys that another manager needs.
 
 ## Tim's checklist (the spec, turned into rules)
 | # | His words | Rule | Data that already exists |
@@ -21,10 +21,16 @@ Turn the finder from "best by our model" into "deals that pass **Tim's own check
 | 3 | "my opponents change in this week's proj should be positive" | His This week > 0 | `thisWeekOf` (trade-page.js:6395) |
 | 4 | "players that I want … in the position that I need it in the most" | A man you get fills one of YOUR Needs | `js/slot-needs.js` Needs/Has (custom box only today) |
 | 5 | "players … my opponent needs" | A man you send fills one of HIS Needs | same |
-| 6 | "coin and diamond … buy low and not high" | You get 💎 (or near), you send 🪙 (or near); never get 🪙 | `outlookMarkOf` (trade-page.js:2589); Appeal = Σ(proj−avg) in − out (js/outlook-mark.js:73) |
-| 7 | "this week's proj … buying low" | Men you get have a low this-week proj vs their future (bye/bad matchup) | per-week projections already on every man |
-| 8 | "relatively sparce … not repetitive" | ≤ 2 suggestions per manager; nothing like an offer sent / declined recently | sent offers `ff.trades.sent.*`, past trades (js/trade-history.js, js/past-trades.js) |
-| 9 | Flip: "bench players with high value (2-4) … buy them for low, even if my change in future proj is slightly negative (-0-1) … If no one needs a QB, then I won't buy it" | Flip mode: You gain −1 to 0/wk, Value +2 to +4, and another manager Needs that position (name him) | Value, Needs/Has |
+| 6 | "coin and diamond … buy low and not high" | Order only: you get 💎 (or near), you send 🪙 (or near). Not a hard bar. "Near" = proj − avg within 1.0 of the ±2 mark, for ordering only; the ±2 marks themselves never change (Rejected 10-19) | `outlookMarkOf` (trade-page.js:2589); Appeal = Σ(proj−avg) in − out (js/outlook-mark.js:73) |
+| 7 | "this week's proj … buying low" | Same idea as rule 3 (buying a man with a bad week is what makes his This week positive), so it is **merged into rule 3**, not counted twice | — |
+| 8 | "relatively sparce … not repetitive" | ≤ 2 suggestions per manager; nothing like an offer YOU sent recently (the site's own sent-offer store; no real ESPN declined record has ever been seen) | sent offers `ff.trades.sent.*`, past trades (js/trade-history.js, js/past-trades.js) |
+| 9 | Flip: "bench players with high value (2-4) … buy them for low, even if my change in future proj is slightly negative (-0-1) … If no one needs a QB, then I won't buy it" | Flip mode: a man on the SELLER's bench whose own Value is 2–4; your Value change +2 to +4; You gain −1 to 0/wk; and a manager OTHER than the seller Needs that position (named on the row) | Value, Needs/Has, slot on roster |
+
+**This week missing:** `thisWeekOf` is null for some deal shapes and 0 once the week can't change (his league has a 1-day review, so from about Saturday). Then rule 3 is "not judged" (shown as —), never ✗.
+
+**Every existing gate stays** and the new ones sit on top: Total ≥ −5, |Value change| ≤ 5 ("+5 up he wouldn't take"), no buy-back (past trades), the goal guard (rule 18's guard), no K / D/ST / Value < 1 (rule 21). The +1/wk floor is superseded by rule 1's +2.
+
+**"Suggested trades" reading:** taken as BOTH the finder table and the custom box's Suggested completions; both get the same gates and order.
 
 ## Blockers / deciding constraint
 - **His real trades are the test.** Claude cannot read his league (476225250) or his browser's saved custom trades. Phase 0 needs him to save his liked custom trades and send screenshots (or the names: who, gives, gets).
@@ -40,7 +46,7 @@ Turn the finder from "best by our model" into "deals that pass **Tim's own check
 ## Options
 | Option | What it is | Cost | How it fails |
 |---|---|---|---|
-| A | **Checklist finder:** keep the engine's candidates; replace the gates with rules 1–2 (+ his bounds), order by appeal (rules 3–7), cap per manager (8), ✓ marks per row; Flip as a switch (9) | Medium: page-side gates + order + one column; engine candidate cap may need widening | Too few deals pass all gates on a thin week → show the near-misses below a line with the failed check named |
+| A | **Checklist finder:** keep the engine's candidates; ADD rules 1–2 on top of every existing gate, order by appeal (rules 3–6), cap per manager (8), ✓ checklist per row; Flip as a switch (9) | Medium: page-side gates + order + one column; engine candidate cap may need widening | Too few deals pass all gates on a thin week → show the near-misses below a line with the failed check named |
 | B | One blended "Fit" score with weights | Medium | Opaque; Tim can't see why a deal ranks; weights are guesses (the yes-chance already has this problem) |
 | C | Keep today's order, add the checks as filter switches | Small | He still sorts and judges by eye; doesn't fix the complaint |
 
@@ -49,8 +55,8 @@ Turn the finder from "best by our model" into "deals that pass **Tim's own check
 2. Then **Flip mode** (rule 9), as its own switch in the finder box, each row naming the manager who needs that position.
 3. Then the **"not repetitive" memory** (rule 8, second half) using the sent-offers store.
 
-### Order inside A (deals that pass rules 1–2)
-Sort by count of appeal checks passed (3, 5, 6-send, 6-get, 7, 4), then by his This week, then by You gain closest to +3 (the middle of +2–4). Every check is shown as ✓/✗ on the row, so the order is explainable at a glance. The yes-chance word stays in the card only.
+### Order inside A (deals that pass every gate)
+Goal guard on top (as today). Then: count of appeal checks passed (3, 4, 5, 6-get, 6-send), then his This week, then You gain (any value in +2–4 counts the same; above +4 ranks after), then a strict key (player ids) so ties are a display grouping only (rule 19). **This replaces rule 18's "ordered by net increase" if Tim answers (a) yes.** The checklist (✓ / ✗ / — per check) opens as a hover card / tap sheet on the row, not a new column (phone width; layout is Tim's call). The yes-chance word stays in the card only.
 
 ## Deliberately NOT planned
 - ~~A new acceptance model~~ · his checklist IS his acceptance model; the old one's constants are guesses (js/accept.js header).
@@ -65,16 +71,20 @@ Sort by count of appeal checks passed (3, 5, 6-send, 6-get, 7, 4), then by his T
 - Needs/Has decides rules 4–5; if it calls a deep position a need, the order goes wrong → spot-check on 1241838.
 
 ## Phases (each ships on its own)
-0. **Review Tim's liked custom trades** (no code): score each against the checklist, show which rule each passes/fails, settle the open thresholds. Done when every one of his trades is explained by the rules or a rule is changed.
-1. **Checklist finder** (A): gates 1–2, appeal order, ✓ column, ≤ 2 per manager, near-misses under a line. Suggested (custom box completions) uses the same gates and order. Done when: a suite seen failing first proves gates/order/cap on the trade stub; Tim's Phase-0 trades (as stub fixtures of the same shape) rank in the top rows; 393 px + laptop screenshots; tr-test touched scenarios pass.
-2. **Flip mode:** switch in the finder box; rows show "Flip to <manager> (needs QB)". Done when a stub with a QB-needy third team produces the row and one without produces none.
-3. **Not repetitive:** hide deals sharing a man each way with an offer sent or declined in the last 7 days; show "sent Oct 26" instead. Done when the stub's sent offer suppresses its near-copy.
+0. **Review Tim's liked custom trades** (no code): score each against the checklist, show which rule each passes/fails, settle "+2 = printed You gain or plain lineup change" and the open thresholds. Also **measure** on 1241838 how many of the engine's 160 kept deals pass You ≥ +2 and Value ≥ 0; if almost none, widen the engine's pool before Phase 1. Done when every one of his trades is explained by the rules or a rule is changed.
+1. **Checklist finder** (A): a pure checklist function (new module) + gates 1–2, appeal order, ≤ 2 per manager, near-misses under a line, checklist hover card. Done when: a suite seen failing first proves gates/order/cap on the trade stub (new stub knob for a deal set with varied Value/This week/marks); each of Tim's Phase-0 trades passes the pure checklist function and fits the engine's shape (1-for-1 … 2-for-2, top 18); 393 px + laptop screenshots. Expected test fallout, fixed in the same push: tr-test (base stub's 3 rows all +10), test-list-order, tr-yes-check, test-notify-trades, counts.json.
+2. **Flip mode:** switch in the finder box; rows show "Flip to <manager> (needs QB)". Done when a stub with a QB-needy third team produces the row, and the same stub with only the seller needing a QB produces none.
+3. **Not repetitive:** hide deals sharing a man each way with an offer you sent in the last 7 days (site's sent-offer store); show "sent Oct 26" instead. Done when the stub's sent offer suppresses its near-copy.
 
 ## Questions for Tim
 a. Order the finder by your checklist (✓ marks) instead of today's net increase × yes-chance? · recommended: **yes** — it is your own process.
 b. Above +4 a week for you: still show, but lower (looks lopsided to him)? · recommended: **yes, lower**, not hidden.
 c. Flip mode as its own switch, only when another manager needs that position? · recommended: **yes**.
-d. At most 2 suggestions per manager? · recommended: **2**.
+d. "Sparse" = at most 2 suggestions per manager on screen (not hiding managers you already sent an offer to)? · recommended: **yes, 2 per manager**; Phase 3 hides only near-copies of a sent offer.
+e. "+2 future proj" = the printed You gain (which subtracts his gain in weeks you play him)? · recommended: **yes**, settle in Phase 0 against your trades.
+
+## Review 2026-10-31 (plan-reviewer)
+Fixed: existing gates kept and listed; Flip remapped (man's own Value 2–4 on seller's bench, buyer ≠ seller); rule 18 replacement tied to (a) + strict tiebreak (rule 19); rule 7 merged into 3; "closest to +3" dropped; missing This week = not judged; 💎/🪙 order-only and ±2 marks untouched; Phase 1 test = pure checklist function, not stub rank; measurement step added; both "Suggested" readings stated; test fallout named; checklist as hover card; Phase 3 limited to the site's sent store.
 
 ## Sources
 - Code read 2026-10-31 (js/trade.js, js/trade-page.js, js/accept.js, js/outlook-mark.js, js/slot-needs.js, js/past-trades.js).

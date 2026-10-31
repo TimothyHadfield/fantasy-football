@@ -140,3 +140,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** three builders (ff-pa ea0339e, ff-cu 2f047e6, ff-wire 59d001a) + extension 0.5.2 (666ac12). See PROGRESS Status top four lines.
 - **Verified how:** test-player-history 53, pa-check 44, wv-test 1290, custom-trade-check 29, test-proj-history 159, test-capture 186, test-espn-tick, test-extension 369; WebKit 393 + desktop screenshots with seeded copies; live curl of js/player-history.js and js/trade-history.js.
 - **Open:** graph 2 reading and wording are Tim's; full tr-test left to CI; real wire rows, real ESPN trade records and his phone not seen.
+## 2026-10-31 · ESPN proj log, auto lineup, extension 0.5.4, trade checklist plan (manager chat)
+- **Asked:** talk about ESPN projections (how they change, accuracy, history); record every projection change; "fix all future ESPN lineups"; extension error; trade suggestions rebuilt around his own process (plan only, he'll make custom trades for review first).
+- **Decided:** projection log in its own public repo (hourly Action, public league, all players, weeks now→18); ESPN writes only the current week, so auto-lineup sets each week as it becomes current and backs off after a hand edit; trade plan = his checklist on top of existing gates.
+- **Built:** espn-proj-log repo (first run green); Auto-set best lineup 50329fa (ext 0.5.3); ext 0.5.4 2ec3b8d (orphaned-tab relay stops quietly); docs/trade-fit-plan.md (NOTHING BUILT, reviewed).
+- **Verified how:** proj log local double run (0 changes 2nd) + cloud run green; auto-lineup-check 91, lineup-guard 392, bridge-lineup 51, test-extension 369, notify-check 167, bell-check 145; live curl of js/auto-lineup.js.
+- **Open:** real ESPN lineup write unseen; trade plan questions a–e; Tim to send his liked custom trades.
