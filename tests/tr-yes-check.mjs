@@ -26,6 +26,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LIKELY_AT, UNLIKELY_BELOW } from '../js/accept.js';
+import { LABELS } from '../js/trade-fit.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -98,6 +99,22 @@ for (const r of rows) {
   ok(`${r.key}: the goal cell's card ends on the word and its %`, !!g && WORD.test(g.word), r.goalCard);
   ok(`${r.key}: that word is the % against the cut-offs`, !!g && wordsFor(g.pct).has(g.word), g && `${g.pct}% ${g.word}`);
 }
+
+// ------------------------------------- 2b. Tim's checklist (2026-10-31)
+// Every row, passing or a near miss, carries a tag that opens the checklist:
+// his two gates and seven checks, each marked ✓, ✗ or — (not judged).
+for (const r of rows) {
+  const card = String(r.fitCard);
+  const marks = Object.values(LABELS).map((l) => { const i = card.indexOf(l); return i < 0 ? null : card.slice(i + l.length).match(/[✓✗—]/); });
+  ok(`${r.key}: its checklist tag opens all nine items, each ✓, ✗ or —`,
+    /^Checklist /.test(card) && marks.every(Boolean), `${r.fit} | ${card.slice(0, 300)}`);
+}
+const markOf = (card, label) => { const i = String(card).indexOf(label); const m = i < 0 ? null : String(card).slice(i + label.length).match(/[✓✗—]/); return m && m[0]; };
+const nearRows = rows.filter((r) => r.near);
+ok('a near miss names the check it failed, and its card marks that gate ✗',
+  nearRows.length > 0 && nearRows.every((r) => /^✗ (You gain|Value) /.test(r.fit) &&
+    markOf(r.fitCard, r.fit.startsWith('✗ You') ? LABELS.you : LABELS.value) === '✗'),
+  JSON.stringify(nearRows.map((r) => r.fit)));
 
 // ------------------------------------------------- 3/4. pop-up: parts add up, his input is flat
 const top = rows.find((r) => r.key === 'f:0') || rows[0];

@@ -1745,6 +1745,13 @@
       <span class="switch-track" aria-hidden="true"></span>
       <span class="switch-text">Bench value</span>
     </label>
+    <!-- Tim, 2026-10-31: buy a cheap high-Value bench man that another manager
+         needs, to flip him later. Wording is Tim's. -->
+    <label class="switch" for="flipSwitch">
+      <input type="checkbox" role="switch" id="flipSwitch" data-flip-switch>
+      <span class="switch-track" aria-hidden="true"></span>
+      <span class="switch-text">Flip</span>
+    </label>
     <p class="lede">Rows sharing a rank (=) are too close to separate. Tap a row for its weeks.</p>
     <p class="panel-note" id="assumeNote" hidden></p>
     <div class="row mb-12">
@@ -1788,6 +1795,10 @@
       <tbody></tbody>
     </table></div>
     <div class="empty hidden" id="tradeEmpty"></div>
+    <!-- Tim's checklist (2026-10-31): deals one check short, and the line naming
+         deals left out as near-copies of an offer you sent. -->
+    <div id="tradeNear" hidden></div>
+    <p class="panel-note" id="tradeSentNote" hidden></p>
     <p class="panel-note" id="tradeCount"></p>
     <p class="panel-note bye-key" id="tradeByeKey" hidden></p>
     <p class="panel-note avg-key" id="tradeAvgKey" hidden></p>

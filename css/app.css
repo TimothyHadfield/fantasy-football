@@ -2421,3 +2421,13 @@ header.site .wrap:not(:has(.site-bell)) nav { margin-right: 42px; }
 .nt-opts .switch:has(input:disabled) { cursor: default; opacity: 0.55; }
 .nt-row[data-kind="auto-lineup"] .nt-detail { white-space: normal; }
 /* ===================================================== end of auto-set lineup */
+
+/* ===================================== Trade: Tim's checklist (2026-10-31)
+   The tag under a row's manager ("✓ 4/7", a near miss's gate, "Flip to …"):
+   the cu-pend line's look; its card lists every check. */
+.fit-tag { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 400; color: var(--dim); white-space: normal; line-height: 1.35; cursor: help; }
+.fit-tag.flip { color: var(--text); }
+.near-line { margin: 14px 0 0; }
+#tradeNear .table-scroll { margin-top: 4px; }
+#tradeNearTable tbody tr { opacity: 0.8; }
+/* ====================================================== end of checklist */

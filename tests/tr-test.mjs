@@ -4902,7 +4902,9 @@ SCENARIOS.yesWords = async function yesWords() {
   const $ = (id) => document.getElementById(id);
   await settleGoal(document);
   const goalOn = text(document.querySelector('#goalToggle button.on'));
-  const rows = [...document.querySelectorAll('#tradeTable tbody tr.offer')].slice(0, 12).map((tr) => {
+  // The finder's rows and, since Tim's checklist (2026-10-31), its near misses
+  // under it: the same rows, one gate short (the demo passes only a few).
+  const rows = [...document.querySelectorAll('#tradeTable tbody tr.offer, #tradeNearTable tbody tr.offer')].slice(0, 12).map((tr) => {
     const td = tr.querySelector('.hv.goal-cell');
     const word = td && td.querySelector('[data-rc="yes"]');
     return {
@@ -4915,6 +4917,9 @@ SCENARIOS.yesWords = async function yesWords() {
       goalCard: td ? popText(td) : '',
       their: text(tr.querySelector('.hv.their-gain')),
       theirCard: popText(tr.querySelector('.hv.their-gain')),
+      near: !!tr.closest('#tradeNearTable'),
+      fit: text(tr.querySelector('.fit-tag')),
+      fitCard: tr.querySelector('.fit-tag') ? popText(tr.querySelector('.fit-tag')) : '',
     };
   });
 
@@ -4955,6 +4960,58 @@ SCENARIOS.yesWords = async function yesWords() {
 };
 
 /**
+ * TIM'S CHECKLIST ON THE FINDER (2026-10-31; tests/tr-fit-check.mjs). Stubbed
+ * live league, you = Ana (1). `TF_FLIP=1` boots with the Flip switch saved on;
+ * `TR_SENT` seeds the offers you sent (`ff.trades.sent.*`). Reads the finished
+ * finder: its rows (manager, tag, men), the near misses, the sent note, the
+ * switch, and each row's checklist card.
+ */
+SCENARIOS.fitFinder = async function fitFinder() {
+  const prefs = { 'trade.source': 'live', 'trade.team': 1 };
+  if (process.env.TF_FLIP) prefs['trade.flip'] = true;
+  const seed = {
+    'ff.connection': JSON.stringify({ leagueId: '1241838', season: 2026, teamId: 1 }),
+    'ff.prefs': JSON.stringify(prefs),
+  };
+  if (process.env.TR_SENT) seed['ff.trades.sent.1241838-2026'] = process.env.TR_SENT;
+  const { document, errors } = await boot('trade.html', '', seed);
+  const $ = (id) => document.getElementById(id);
+  await settleGoal(document);
+  // Final: ranked, or the search finished with nothing to show (no ranking
+  // runs on an empty list, so `data-ranked` never comes).
+  const emptyDone = () => !$('tradeEmpty').hidden && !/Trying/.test(text($('tradeEmpty')));
+  for (let i = 0; i < 400 && !$('tradeTable').hasAttribute('data-ranked') && !emptyDone(); i++) await settle(50);
+  await settle(300);
+  const read = (sel) => [...document.querySelectorAll(sel)].map((tr) => {
+    const tag = tr.querySelector('.fit-tag');
+    const deal = tr.querySelector('.deal');
+    return {
+      key: tr.getAttribute('data-key'),
+      partner: text(tr.querySelector('td.name .mgr')),
+      name: text(tr.querySelector('td.name')),
+      tag: text(tag),
+      tagCls: tag ? String(tag.getAttribute('class') || '') : '',
+      card: tag ? popText(tag) : '',
+      deal: text(deal),
+    };
+  });
+  const sw = $('flipSwitch');
+  return {
+    errors,
+    ranked: $('tradeTable').hasAttribute('data-ranked'),
+    title: text($('finderTitle')),
+    flipOn: !!(sw && sw.checked),
+    benchOn: !!($('benchValue') && $('benchValue').checked),
+    rows: read('#tradeTable tbody tr.offer'),
+    nearHidden: !!($('tradeNear') && $('tradeNear').hidden),
+    nearLine: text(document.querySelector('#tradeNear .near-line')),
+    near: read('#tradeNearTable tbody tr.offer'),
+    sentNote: $('tradeSentNote') && !$('tradeSentNote').hidden ? text($('tradeSentNote')) : '',
+    empty: emptyDone() ? text($('tradeEmpty')) : '',
+  };
+};
+
+/**
  * THIS WEEK (Tim, 2026-10-28: "Add a new column that shows this week's proj
  * change with the top bar being mine and the bottom being theirs"). Read by
  * tr-thisweek-check.mjs: every finder row's This week halves and their cards,
@@ -4970,7 +5027,7 @@ SCENARIOS.thisWeek = async function thisWeek() {
       card: hv ? popText(hv) : '' } : null;
   };
   const heads = (id) => [...document.querySelectorAll(`#${id} thead th`)].map((th) => text(th));
-  const rows = [...document.querySelectorAll('#tradeTable tbody tr.offer')].slice(0, 12).map((tr) => {
+  const rows = [...document.querySelectorAll('#tradeTable tbody tr.offer, #tradeNearTable tbody tr.offer')].slice(0, 12).map((tr) => {
     const td = tr.querySelector('td.wkproj');
     const kids = [...tr.children];
     return {

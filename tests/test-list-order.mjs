@@ -156,20 +156,25 @@ if (have) {
     return src.slice(at, next < 0 ? undefined : next);
   };
   const finish = src.slice(src.indexOf('const finish = () => {'), src.indexOf('const finish = () => {') + 900);
-  ok(/byNetIncreaseGuarded\(offers\.filter\(finderGoalOk\)/.test(finish),
+  // Since 2026-10-31 (Tim's checklist) the order is `finderOrder`: the checklist
+  // (js/trade-fit.js `compareFit`, the goal guard its first key), or the
+  // guarded net increase under the bench-value switch.
+  ok(/finderOrder\(offers\.filter\(finderGoalOk\)/.test(finish),
     'the final ranking (runGoalRank finish) gates and orders with the guard', finish.slice(0, 300));
-  ok(/byNetIncreaseGuarded\(offers\.slice\(0, scored\)\.filter\(finderGoalOk\)/.test(body('stageGoalRank')),
+  ok(/finderOrder\(offers\.slice\(0, scored\)\.filter\(finderGoalOk\)/.test(body('stageGoalRank')) &&
+    /byNetIncreaseGuarded\(list\)/.test(body('finderOrder')) && /lowers: lowersGoal\(o\)/.test(body('orderByFit')),
     'the staged top ten (stageGoalRank) gates and orders with the guard');
   ok(/orderWithGoalGuard\(/.test(body('byNetIncreaseGuarded')), 'byNetIncreaseGuarded is orderWithGoalGuard on the row key');
   ok(/lowersGoal\(o\)/.test(body('markTies')), 'markTies never joins a lowering row to the group above it');
-  ok(/goalGateOk\(o\)/.test(src) && /const finderGoalOk = \(o\) => state\.benchValue \|\| goalGateOk\(o\)/.test(src),
+  ok(/goalGateOk\(o\)/.test(src) && /const finderGoalOk = \(o\) => state\.benchValue \|\| state\.flip \|\| goalGateOk\(o\)/.test(src),
     'the +1 gate\'s goal half applies when the bench-value switch is off');
 
   // ------------------------------------------- 5. the custom box's Suggested list
   const sug = body('findSuggestions');
   ok(sug.length > 0, 'findSuggestions is found in js/trade-page.js');
-  ok(/return byNetIncreaseGuarded\(offers\);/.test(sug),
-    'the Suggested list is put in the guarded order (byNetIncreaseGuarded), not plain byNetIncrease',
+  ok(/lowers: lowersGoal\(o\)/.test(sug) && /if \(x\.lowers !== y\.lowers\) return x\.lowers \? 1 : -1;/.test(sug) &&
+      /tfit\.compareFit\(x, y\)/.test(sug),
+    'the Suggested list is put in the guarded checklist order (goal guard first, then compareFit)',
     (sug.match(/return [^\n]*/g) || []).join(' | '));
   // The figure the guard reads is on the row, so a reader of the page (tr-test)
   // can check the guarded order: the goal cell prints whole percent, which can

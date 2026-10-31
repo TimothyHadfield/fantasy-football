@@ -94,6 +94,8 @@ import { movesFor } from './trade-moves.js';
 import { pastTradeBars, undoesPastTrade } from './past-trades.js';
 import { tradeHistory, STATUS_WORDS as HISTORY_WORDS } from './trade-history.js';
 import { readSent } from './trade-outcome.js';
+// TIM'S OWN CHECKLIST (2026-10-31, docs/trade-fit-plan.md): gates, order, cap, Flip, not sent twice. Pure.
+import * as tfit from './trade-fit.js';
 // The custom box's orange / red boxes and each side's needs (Tim, 2026-10-15). Pure.
 import { hintSteps } from './custom-hint.js';
 import { slotAverages, positionNeeds } from './slot-needs.js';
@@ -302,6 +304,7 @@ const state = {
   kind: 'all',         // which package shapes the finder searches
   bothWin: false,      // the finder keeps only deals that raise BOTH lineups (the switch)
   benchValue: false,   // the finder keeps and orders deals by YOUR bench value gain (the switch)
+  flip: false,         // the finder lists Flip buys (Tim, 2026-10-31; js/trade-fit.js `flipOf`)
   sugPlayoffs: false,  // the Suggested list targets YOUR playoff-week gain (its switch)
   partner: 'all',      // limit the results to one manager
   search: null,        // the last finder result
@@ -4068,7 +4071,58 @@ function gainScales(rows) {
   };
 }
 
-const tradeRow = (offer, i, scales) => offerRow(offer, i, `f:${i}`, { ...scales, goal: true });
+const tradeRow = (offer, i, scales) => offerRow(offer, i, `f:${i}`, { ...scales, goal: true, nameTag: fitTagHtml(offer) });
+
+/**
+ * THE CHECKLIST ON A ROW (Tim, 2026-10-31), not a column: a short tag under the
+ * manager — "✓ 4/7", a near miss's failed gate, or "Flip to Jonas (needs QB)" —
+ * whose card (`data-rc="fit"`) lists every check ✓ / ✗ / —.
+ */
+function fitTagHtml(offer) {
+  if (!offer) return '';
+  if (offer.flip) {
+    const to = offer.flip.toNames.filter(Boolean);
+    const who = to.length > 1 ? `${to[0]} +${to.length - 1}` : to[0] || '';
+    return `<span class="fit-tag flip" data-rc="fit" tabindex="0">Flip to ${esc(who)} (needs ${esc(offer.flip.pos)})</span>`;
+  }
+  if (!offer.fit) return '';
+  return `<span class="fit-tag${offer.fit.pass ? '' : ' miss'}" data-rc="fit" tabindex="0">${esc(tfit.fitTag(offer.fit))}</span>`;
+}
+
+/** The near misses under the list, and the line naming deals left out as near-copies of a sent offer. */
+function renderFinderExtras() {
+  const host = $('tradeNear');
+  const note = $('tradeSentNote');
+  const search = !state.searching && state.search ? state.search : null;
+  const mine = (list) => (list || []).filter((o) => state.partner === 'all' || String(o.partner.id) === String(state.partner));
+  const near = search ? mine(search.near) : [];
+  state.nearRows = near;
+  if (host) {
+    host.hidden = !near.length;
+    if (near.length) {
+      // The finder's own headings, without its sort controls or ids.
+      const head = $('tradeTable').querySelector('thead').cloneNode(true);
+      for (const th of head.querySelectorAll('th')) {
+        for (const a of ['id', 'data-sort', 'tabindex', 'role', 'aria-sort']) th.removeAttribute(a);
+        th.classList.remove('sortable', 'sorted', 'asc');
+      }
+      const scales = gainScales(near);
+      host.innerHTML = `<p class="panel-note near-line"><strong>Near misses</strong> · one check short</p>` +
+        `<div class="table-scroll"><table id="tradeNearTable" class="offers near-table">` +
+        `<thead>${head.innerHTML}</thead><tbody>` +
+        near.map((o, i) => offerRow(o, i, `n:${i}`, { ...scales, goal: true, nameTag: fitTagHtml(o) })).join('') +
+        `</tbody></table></div>`;
+    } else host.innerHTML = '';
+  }
+  if (note) {
+    const hidden = search ? mine(search.sentHidden) : [];
+    note.hidden = !hidden.length;
+    note.textContent = hidden.length
+      ? `Left out, close to an offer you sent: ${[...new Map(hidden.map((h) =>
+        [h.offer.partner.id, `${h.offer.partner.name} (sent ${tfit.shortDate(h.when)})`])).values()].join(', ')}.`
+      : '';
+  }
+}
 
 // ======================================================================
 // "ASK AI" (Tim, 2026-09-30)
@@ -4368,7 +4422,8 @@ function renderFinder() {
   // every offer in the list makes him worse. WORDING IS TIM'S — this is the
   // placeholder from the plan (question f), and it follows the goal he picked
   // rather than naming the title under both.
-  const finderTitle = state.benchValue ? 'Trades ranked by bench value' : 'Trades ranked by net increase';
+  const finderTitle = state.benchValue ? 'Trades ranked by bench value'
+    : state.flip ? 'Flip trades' : 'Trades ranked by your checklist';
   $('finderTitle').textContent = me ? `${finderTitle} · ${me.name}` : finderTitle;
 
   // The two gain columns are the page's most dangerous numbers, because the
@@ -4405,6 +4460,7 @@ function renderFinder() {
   // are kept for the Notifications page (`keepTradeNotes`).
   keepTradeNotes(final);
 
+  renderFinderExtras();
   if (state.searching) {
     state.rows = [];
     body.innerHTML = '';
@@ -4501,9 +4557,8 @@ function goalMethodHtml(span) {
   const base = r.base ? goalChanceOf(r.base, state.myTeamId) : null;
   const sigma = r.spread && Number.isFinite(r.spread.sigma) ? r.spread.sigma : null;
   return (
-    `<strong>Your goal: ${esc(g.label)}.</strong> The list is ordered by <strong>You gain + He gains</strong>, ` +
-    `largest first, except that a deal which lowers your ${esc(g.chance)} by more than ${bandText()} of a ` +
-    `point goes below the rest; equal sums share a rank. Each offer is played out in the <strong>same season simulation as the Schedule ` +
+    `<strong>Your goal: ${esc(g.label)}.</strong> A deal which lowers your ${esc(g.chance)} by more than ` +
+    `${bandText()} of a point goes below the rest. Each offer is played out in the <strong>same season simulation as the Schedule ` +
     `page</strong>, ${GOAL_RUNS.toLocaleString('en-US')} seasons, once as the league stands and ` +
     `once with the deal made, on the same seed, so the difference is the deal and not two ` +
     `different runs of luck. ` +
@@ -4732,7 +4787,9 @@ function renderFinderNote(scales = finderScales) {
   // no chance column.
   const net = state.benchValue
     ? ` · <strong>ranked by bench value</strong> (the Value your bench gains).`
-    : ` · <strong>ranked by net increase</strong> (You gain + He gains).`;
+    : state.flip
+      ? ` · <strong>ranked by Value change</strong>, at most two per manager.`
+      : ` · <strong>ranked by your checklist</strong> (tap ✓), at most two per manager.`;
   const order = r.running
     ? ` · <span class="searching">playing each offer out (${r.done} of ${r.total})…</span>`
     : ranked
@@ -4763,8 +4820,16 @@ function renderFinderNote(scales = finderScales) {
       ? `<strong>Bench value is on:</strong> a trade is kept only when it raises your <strong>bench value</strong> ` +
         `(the Values of the men outside your best lineup) and your lineup loses nothing a week, and the ` +
         `list is ordered by the bench gain. `
-      : `A trade worth less than <strong>+${MIN_MY_PER_WEEK.toFixed(1)} a week to you</strong>, or that ` +
-        `lowers your ${esc(g.chance)} by more than ${bandText()} of a point, is left out, `) +
+      : state.flip
+      ? `<strong>Flip is on:</strong> a trade is kept when a man you get sits on his bench with a Value of 2 to 4, ` +
+        `your Value change is +2 to +4, You gain is −1 a week or better, and another manager needs his position. `
+      : `<strong>Your checklist:</strong> a trade worth less than <strong>+${tfit.MIN_YOU.toFixed(1)} a week to you</strong>, ` +
+        `or with a Value change under ${tfit.MIN_VALUE.toFixed(1)}, is left out (one a little short is listed under ` +
+        `Near misses), and so is one that lowers your ${esc(g.chance)} by more than ${bandText()} of a point, or ` +
+        `shares a man each way with an offer you sent in the last ${tfit.SENT_DAYS} days. The rest are ordered by how ` +
+        `many checks pass (he gains this week, he gains a week, you get a need, he gets a need, you get 💎 or near, ` +
+        `you send 🪙 or near, Value 0 or better; "near" = within 1 of the mark), then his This week, then You gain ` +
+        `(+2 to +4 alike, more after). At most two per manager. `) +
     `and so is any trade with a man ESPN lists as out for the rest of the season. ` +
     `There is no trade-value ` +
     `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
@@ -5045,6 +5110,166 @@ function benchGainOf(offer, mine, before = benchValueOf(mine)) {
   return r === 0 ? 0 : r;
 }
 
+// ======================================================================
+// TIM'S CHECKLIST (Tim, 2026-10-31: "I feel like I still have to do a lot
+// before I feel comfortable sending a trade out") — docs/trade-fit-plan.md.
+// js/trade-fit.js holds the rules; this gathers each deal's figures as its
+// row prints them. Packages of any size, 1 to 3 men a side.
+// ======================================================================
+
+/** The Flip switch (rule 9): cheap high-Value bench buys another manager needs. */
+const FLIP_ROWS = 20;
+/** Near misses shown under the list, at most. */
+const NEAR_ROWS = 6;
+
+/** Every squad's needed positions (js/slot-needs.js), cached on the rosters and weeks. */
+let fitNeeds = { key: null, avgs: null };
+function needsOfTeams(teams) {
+  const weeks = spanFor('last');
+  if (!teams || !teams.length || !weeks.length || !state.slots) return null;
+  const key = [
+    sourceKey(), state.slots.join(','), weeks.join(','),
+    weeks.filter((w) => weekly.byWeek.has(w)).length,
+    state.floors ? [...state.floors.entries()].map(([k, f]) => `${k}${f && f.value}`).join(',') : 'nofloor',
+    teams.map((t) => `${t.id}:${(t.players || []).map((p) => p.playerId).join('.')}`).join(';'),
+  ].join('|');
+  if (fitNeeds.key !== key) {
+    fitNeeds = { key, avgs: slotAverages({ teams, weeks, slots: state.slots, projOf: projFor, floors: state.floors }) };
+  }
+  const out = new Map();
+  for (const t of teams) out.set(String(t.id), positionNeeds(fitNeeds.avgs, t.id).need);
+  return out;
+}
+
+/** A man's proj − avg as the 💎 / 🪙 read it (to the tenth each), or null. */
+function outlookDeltaOf(p) {
+  if (!p || state.isDemo) return null;
+  const g = glanceFor(p);
+  const ok = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  if (!ok(g.proj) || !ok(g.avg)) return null;
+  return round1(round1(g.proj) - round1(g.avg));
+}
+
+/** Your Value change as the row prints it, or null with no Values. */
+function valueChangeOfOffer(offer) {
+  const ids = (list) => (list || []).map((p) => String(p && typeof p === 'object' ? p.playerId : p));
+  const v = customValueChange(ids(offer.send), ids(offer.receive), offer.myCut || []);
+  return v && Number.isFinite(v.a) ? v.a : null;
+}
+
+/** His This week for the checklist: null when not judged (not priced, or sent after that week). */
+function hisThisWeekOf(offer) {
+  const t = thisWeekOf(offer);
+  const d = t && t.theirs;
+  if (!d || !Number.isFinite(d.delta)) return null;
+  if (d.before === null && d.after === null) return null;
+  return d.delta;
+}
+
+/** A deal's strict key: manager, then the men's ids each way. */
+const fitKeyOf = (o) => tfit.dealKey(o.partner ? o.partner.id : '',
+  (o.send || []).map((p) => p.playerId), (o.receive || []).map((p) => p.playerId));
+
+/** One deal against Tim's checklist (js/trade-fit.js `fitOf`), `myId` the squad trading from. */
+function fitOfOffer(offer, myId = state.myTeamId, teams = state.data ? state.data.teams : []) {
+  const shown = shownGainsOf(offer);
+  const needs = needsOfTeams(teams);
+  const pos = (list) => (list || []).map((p) => p && p.position).filter(Boolean);
+  return tfit.fitOf({
+    youGain: Number.isFinite(shown.mine) ? round1(shown.mine) : null,
+    hisGain: Number.isFinite(shown.theirs) ? round1(shown.theirs) : null,
+    hisThisWeek: hisThisWeekOf(offer),
+    valueChange: valueChangeOfOffer(offer),
+    getPos: pos(offer.receive),
+    sendPos: pos(offer.send),
+    myNeed: needs ? needs.get(String(myId)) || [] : null,
+    hisNeed: needs && offer.partner ? needs.get(String(offer.partner.id)) || [] : null,
+    getDeltas: (offer.receive || []).map(outlookDeltaOf),
+    sendDeltas: (offer.send || []).map(outlookDeltaOf),
+  });
+}
+
+/** The Flip a deal is (js/trade-fit.js `flipOf`), or null. */
+function flipOfOffer(offer, teams, benchOf) {
+  if (!offer.partner || typeof valueLookup !== 'function') return null;
+  const needs = needsOfTeams(teams);
+  if (!needs) return null;
+  const bench = benchOf(offer.partner.id);
+  const shown = shownGainsOf(offer);
+  const f = tfit.flipOf({
+    youGain: Number.isFinite(shown.mine) ? round1(shown.mine) : null,
+    valueChange: valueChangeOfOffer(offer),
+    get: (offer.receive || []).map((p) => {
+      const v = valueLookup(p.playerId);
+      return { id: p.playerId, pos: p.position, value: typeof v === 'number' && Number.isFinite(v) ? v : null,
+        bench: bench.has(String(p.playerId)) };
+    }),
+    sellerId: offer.partner.id,
+    myId: state.myTeamId,
+    needs: [...needs.entries()].map(([teamId, need]) => ({ teamId, need })),
+  });
+  if (!f) return null;
+  const nameOf = (id) => ((teams.find((t) => String(t.id) === String(id)) || {}).name || '');
+  return { ...f, toNames: f.to.map(nameOf) };
+}
+
+/** A squad's bench (active men outside its best lineup on the page's measure), as ids. */
+function benchIdsOf(teams) {
+  const memo = new Map();
+  return (teamId) => {
+    const k = String(teamId);
+    if (memo.has(k)) return memo.get(k);
+    const t = teams.find((x) => String(x.id) === k);
+    const active = ((t && t.players) || []).filter((p) => p && p.lineupSlotId !== BENCH_IR_SLOT);
+    const starting = new Set(lineupValue(active, state.slots, measureFn()).starters.map((s) => String(s.playerId)));
+    const out = new Set(active.filter((p) => !starting.has(String(p.playerId))).map((p) => String(p.playerId)));
+    memo.set(k, out);
+    return out;
+  };
+}
+
+/**
+ * The offers you sent (this browser's record of them, js/trade-outcome.js, and
+ * the ones waiting on ESPN now): `{withTeamId, get, send, proposedAt, at}`.
+ * Only for your own squad; nothing on the sample league.
+ */
+function sentOffersForFit() {
+  if (state.isDemo || tradingForSomeoneElse()) return [];
+  const out = [];
+  try {
+    const cfg = savedConfig();
+    if (cfg) {
+      const rec = readSent(cfg.leagueId, cfg.season, state.myTeamId);
+      out.push(...rec.seen, ...rec.ended);
+    }
+  } catch { /* nothing remembered */ }
+  for (const o of pendingOffers || []) if (o && o.fromMe) out.push(o);
+  return out;
+}
+
+/** The offer you sent that a deal nearly repeats, or null (rule 8). */
+function sentCopyOfOffer(offer, sent, now = Date.now()) {
+  if (!sent.length || !offer.partner) return null;
+  return tfit.sentCopyOf({
+    partnerId: offer.partner.id,
+    getIds: (offer.receive || []).map((p) => p.playerId),
+    sendIds: (offer.send || []).map((p) => p.playerId),
+  }, sent, now);
+}
+
+/** The checklist order (or Flip's), goal guard on top; a new array. */
+function orderByFit(list) {
+  if (state.flip) {
+    const items = new Map(list.map((o) => [o, { key: fitKeyOf(o), valueChange: valueChangeOfOffer(o), youGain: shownGainsOf(o).mine }]));
+    return list.slice().sort((a, b) => tfit.compareFlip(items.get(a), items.get(b)));
+  }
+  const items = new Map(list.map((o) => [o, { key: fitKeyOf(o), lowers: lowersGoal(o), fit: o.fit || (o.fit = fitOfOffer(o)) }]));
+  return list.slice().sort((a, b) => tfit.compareFit(items.get(a), items.get(b)));
+}
+
+/** Which list the finder is: Tim's checklist, unless a switch says otherwise. */
+const onChecklist = () => !state.benchValue && !state.flip;
+
 function runSearch({ keepDeal = false } = {}) {
   // An assumed trade's rosters first, so the search starts from them.
   syncAssumed();
@@ -5145,12 +5370,17 @@ function runSearch({ keepDeal = false } = {}) {
       //
       // THE BENCH-VALUE SWITCH: kept and ordered by YOUR bench value gain
       // instead, and your side need only not lose (`myMin` 0).
+      // THE FLIP SWITCH (Tim, 2026-10-31): kept by YOUR Value change, and your
+      // side may lose up to a point a week (`myMin`, on the span; the printed
+      // figure is held to −1 below).
       rankBy: state.benchValue
         ? (o) => { o.benchGain = benchGainOf(o, myPlayers, benchBefore); return o.benchGain; }
+        : state.flip
+        ? (o) => valueChangeOfOffer(o) ?? -Infinity
         : W
         ? (o) => { const v = verdictOf(o, weeks); return o.goalPoints * (v ? v.p : 1); }
         : null,
-      myMin: state.benchValue ? 0 : null,
+      myMin: state.benchValue ? 0 : state.flip && weeks ? -2 * weeks.length : null,
       // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
       // the yes-chance all read this — the base run, so it costs nothing.
       theirReach: ctx && ctx.base ? (id) => reachFor(id, weeks) : null,
@@ -5173,9 +5403,40 @@ function runSearch({ keepDeal = false } = {}) {
     // figure the row prints as Him.
     const hisMin = W && !state.bothWin ? (o) => THEIR_MIN_PER_WEEK * hisSideOf(o, weeks || undefined).weeks : () => 0.1;
     const hisOk = (o) => { const h = hisSideOf(o, weeks || undefined); return !Number.isFinite(h.gain) || h.gain >= hisMin(o) - 0.05; };
-    result.offers = result.offers.filter((o) => hisOk(o) && totalOk(o) && valueGapOk(o) && !pastTradeBarred(o) && (state.benchValue
-      ? Number.isFinite(o.benchGain) && o.benchGain >= 0.1 && myPerWeekShown(o, weeks) >= 0
-      : myPerWeekShown(o, weeks) >= MIN_MY_PER_WEEK)).slice(0, FINDER_ROWS);
+    const kept = result.offers.filter((o) => hisOk(o) && totalOk(o) && valueGapOk(o) && !pastTradeBarred(o));
+    result.near = [];
+    result.sentHidden = [];
+    if (state.benchValue) {
+      result.offers = kept.filter((o) => Number.isFinite(o.benchGain) && o.benchGain >= 0.1 &&
+        myPerWeekShown(o, weeks) >= 0).slice(0, FINDER_ROWS);
+    } else {
+      // TIM'S CHECKLIST (2026-10-31): his two gates on top of every gate above
+      // (You gain +2 a week, Value change −1 or better), the deals that miss one
+      // by a little kept apart as near misses, nothing close to an offer you
+      // sent in the last week, ordered by his checks, at most two per manager.
+      // THE FLIP SWITCH instead keeps cheap high-Value bench buys another
+      // manager needs (js/trade-fit.js `flipOf`).
+      const sent = sentOffersForFit();
+      const now = Date.now();
+      const bench = state.flip ? benchIdsOf(teams) : null;
+      const pass = [];
+      const near = [];
+      for (const o of kept) {
+        if (state.flip) {
+          o.flip = flipOfOffer(o, teams, bench);
+          if (!o.flip) continue;
+        } else {
+          o.fit = fitOfOffer(o);
+          if (!o.fit.pass && !o.fit.near) continue;
+        }
+        const copy = sentCopyOfOffer(o, sent, now);
+        if (copy) { result.sentHidden.push({ offer: o, when: copy.when }); continue; }
+        (state.flip || o.fit.pass ? pass : near).push(o);
+      }
+      const partnerOf = (o) => (o.partner ? o.partner.id : '');
+      result.offers = tfit.capPerManager(orderByFit(pass), partnerOf).slice(0, state.flip ? FLIP_ROWS : FINDER_ROWS);
+      result.near = state.flip ? [] : tfit.capPerManager(orderByFit(near), partnerOf).slice(0, NEAR_ROWS);
+    }
     // The bench gains kept, on the table, for a test (invisible; nothing reads it).
     $('tradeTable').setAttribute('data-bench-gains', state.benchValue ? result.offers.map((o) => o.benchGain).join(',') : '');
     // Whether this search had the goal to work with — even when the weights
@@ -5385,7 +5646,7 @@ function runGoalRank() {
     // NET-INCREASE ORDER FROM THE START (Tim, 2026-10-09), so the list reads the
     // same way before the offers are played out and when they cannot be. A new
     // array, as at the end: the combo panel may be holding the finder's own.
-    search.offers = byNetIncrease(search.offers.slice());
+    search.offers = onChecklist() || state.flip ? orderByFit(search.offers) : byNetIncrease(search.offers.slice());
   }
   r.staged = 0;
   if (basis() !== 'weeks') {
@@ -5452,8 +5713,11 @@ function runGoalRank() {
     for (const o of offers) o.goalUnranked = false;
     // A NEW ARRAY, not a sort in place: the combo panel may be holding the old
     // one, and its own order is its own business.
-    search.offers = byNetIncreaseGuarded(offers.filter(finderGoalOk).sort(compareByGoalNet));
+    search.offers = finderOrder(offers.filter(finderGoalOk).sort(compareByGoalNet));
     search.goalRanked = true;
+    // The near misses get their chance too (at most NEAR_ROWS of them), in place.
+    for (const o of search.near || []) if (!o.goalScore) o.goalScore = scoreGoal(o, me, span);
+    search.near = (search.near || []).filter(finderGoalOk);
     markTies(search.offers);
     // The preview of the other goal follows, after the ranked column is done —
     // marked as still being worked out in this repaint, then filled in place.
@@ -5604,11 +5868,20 @@ function byNetIncreaseGuarded(list) {
  * not to fall"): once a deal has been played out, a fall in your chance beyond
  * the band leaves it out. Only the +1 gate: the bench-value switch has its own.
  */
-const finderGoalOk = (o) => state.benchValue || goalGateOk(o);
+const finderGoalOk = (o) => state.benchValue || state.flip || goalGateOk(o);
+
+/**
+ * THE FINDER'S ORDER NOW (Tim, 2026-10-31): his checklist (js/trade-fit.js
+ * `compareFit`, the goal guard on top) — replacing net increase — or Flip's;
+ * the bench-value switch keeps its own.
+ */
+function finderOrder(list) {
+  return onChecklist() || state.flip ? orderByFit(list) : byNetIncreaseGuarded(list);
+}
 
 function stageGoalRank(search, offers, scored) {
   const r = state.goalRank;
-  const top = byNetIncreaseGuarded(offers.slice(0, scored).filter(finderGoalOk).sort(compareByGoalNet));
+  const top = finderOrder(offers.slice(0, scored).filter(finderGoalOk).sort(compareByGoalNet));
   markTies(top);
   const rest = offers.slice(scored);
   // Marked as a group, not by "has no score yet": a row scored after this
@@ -5636,6 +5909,26 @@ function stageGoalRank(search, offers, scored) {
  * reason the band is not in the comparator (see `compareByGoal`).
  */
 function markTies(offers) {
+  // TIM'S CHECKLIST: a row shares the rank of the row above when every key
+  // but the strict one is equal (js/trade-fit.js `sameFitPlace`).
+  if (onChecklist()) {
+    let place = 0;
+    let lead = null;
+    const marks = offers.map((o, i) => {
+      const item = { lowers: lowersGoal(o), fit: o.fit || (o.fit = fitOfOffer(o)) };
+      if (!lead || !tfit.sameFitPlace(lead, item)) { place = i + 1; lead = item; }
+      return place;
+    });
+    const size = new Map();
+    for (const p of marks) size.set(p, (size.get(p) || 0) + 1);
+    offers.forEach((o, i) => {
+      const known = Number.isFinite(o.goalScore?.value);
+      o.goalPlace = known ? marks[i] : null;
+      o.goalLevel = known ? size.get(marks[i]) > 1 : false;
+      o.goalTieSize = size.get(marks[i]);
+    });
+    return offers;
+  }
   // The list is in net-increase order since 2026-10-09, so the rank is the
   // row's place in THAT order and "=" is an equal net increase (band 0).
   // A deal that lowers your chance sits in a lower group, so it is never "="
@@ -9595,17 +9888,24 @@ function findSuggestions() {
     o.sendAfter = sendCut;
     o.goalScore = scoreGoalCached(o, c.a, weeks);
     o.altGoal = altScore(o, c.a);
+    // Tim's checklist (2026-10-31), from the box's own squad: the row's ✓ tag.
+    o.fit = fitOfOffer(o, c.a, teams);
   }
   // Playoffs: largest playoff-week gain first (stable, so equal ones keep the
   // search's order) — the list's whole point, so no other key goes above it.
   if (byPlayoffs) return offers.sort((x, y) => y.poGain - x.poGain);
-  if (offers.every((o) => o.goalScore)) offers.sort(compareByGoalNet);
-  // Then by net increase, as the finder's list is (Tim, 2026-10-09), with the
-  // finder's goal guard (Tim, 2026-10-14: "Yes, add that guard"): a suggestion
-  // that lowers your chance by more than the band never sits above one that
-  // does not. Order only — NOT the +1 gate: this list has no floor and keeps
-  // its "at least 3", so nothing is dropped here.
-  return byNetIncreaseGuarded(offers);
+  // TIM'S CHECKLIST (2026-10-31), as the finder: the goal guard on top, then
+  // the deals that pass his two gates, then his checks' order. Order only:
+  // this list keeps its "at least 3" (Tim, 2026-10-01), so a deal short of a
+  // gate stays, below, its tag naming the gate it misses.
+  const items = new Map(offers.map((o) => [o, { key: fitKeyOf(o), lowers: lowersGoal(o), fit: o.fit }]));
+  return offers.slice().sort((a, b) => {
+    const x = items.get(a);
+    const y = items.get(b);
+    if (x.lowers !== y.lowers) return x.lowers ? 1 : -1;
+    if (x.fit.pass !== y.fit.pass) return x.fit.pass ? -1 : 1;
+    return tfit.compareFit(x, y);
+  });
 }
 
 function renderCustomSuggest() {
@@ -9683,7 +9983,7 @@ function drawCustomSuggest() {
   state.cuSugRows = rows || [];
   const scales = rows ? gainScales(rows) : {};
   $('cuSugRows').innerHTML = (rows || []).map((o, i) =>
-    offerRow(o, i, `sg:${i}`, { ...scales, goal: true, attrs: ' data-sg="1"' })).join('');
+    offerRow(o, i, `sg:${i}`, { ...scales, goal: true, attrs: ' data-sg="1"', nameTag: fitTagHtml(o) })).join('');
   host.setAttribute('data-rows', rows ? String(rows.length) : '');
   // Each row's playoff-week gain under the Playoffs switch (read by tests).
   if (rows && rows.length && rows.every((o) => Number.isFinite(o.poGain))) {
@@ -10873,8 +11173,27 @@ $('bothWin').addEventListener('change', (e) => {
 $('benchValue').addEventListener('change', (e) => {
   state.benchValue = !!e.target.checked;
   prefs.set('benchValue', state.benchValue);
+  // One list at a time: Bench value and Flip are two different lists.
+  if (state.benchValue && state.flip) { state.flip = false; prefs.set('flip', false); syncFlipSwitches(); }
   runSearch();
 });
+// THE FLIP SWITCH (Tim, 2026-10-31: "Robert has a QB, Jonas needs a QB, I buy
+// roberts QB for cheap to trade with Jonas"). Every box carrying it agrees.
+function syncFlipSwitches() {
+  for (const el of document.querySelectorAll('input[data-flip-switch]')) el.checked = state.flip;
+  if (!state.flip) return;
+  const bv = $('benchValue');
+  if (bv) bv.checked = state.benchValue;
+}
+for (const el of document.querySelectorAll('input[data-flip-switch]')) {
+  el.addEventListener('change', (e) => {
+    state.flip = !!e.target.checked;
+    prefs.set('flip', state.flip);
+    if (state.flip && state.benchValue) { state.benchValue = false; prefs.set('benchValue', false); }
+    syncFlipSwitches();
+    runSearch();
+  });
+}
 // The Suggested list's Playoffs switch: only that list is searched again (its key changes).
 $('sugPlayoffs').addEventListener('change', (e) => {
   state.sugPlayoffs = !!e.target.checked;
@@ -10983,7 +11302,7 @@ function offerByKey(key) {
   if (key === 'cu-build') return state.customOffer || null;
   const [k, n] = String(key).split(':');
   if (k === 'asm') return assume.offer || null;
-  const rows = { f: state.rows, cu: state.customRows, sg: state.cuSugRows }[k];
+  const rows = { f: state.rows, cu: state.customRows, sg: state.cuSugRows, n: state.nearRows }[k];
   return rows ? rows[Number(n)] || null : null;
 }
 
@@ -11071,6 +11390,31 @@ function rowCardSpec(cell) {
       ...link,
     };
   }
+  if (kind === 'fit') {
+    // TIM'S CHECKLIST (2026-10-31): every gate and check, ✓ / ✗ / —.
+    if (offer.flip) {
+      const f = offer.flip;
+      const man = (offer.receive || []).find((p) => String(p.playerId) === String(f.manId));
+      const v = man && typeof valueLookup === 'function' ? valueLookup(man.playerId) : null;
+      return {
+        title: 'Flip', sub,
+        rows: [
+          { label: `${man ? man.name : 'He'} (${f.pos})`, note: 'his bench, Value', value: Number.isFinite(v) ? fmt(v) : '—' },
+          { label: 'Your Value change', value: signedText(valueChangeOfOffer(offer)) },
+          { label: 'You gain /wk', value: signedText(shownGainsOf(offer).mine) },
+          ...f.toNames.map((n) => ({ label: n, note: `needs ${f.pos}`, value: '✓' })),
+        ],
+        ...link,
+      };
+    }
+    if (!offer.fit) return null;
+    return {
+      title: 'Checklist', sub,
+      rows: tfit.checklistRows(offer.fit),
+      foot: offer.fit.pass ? '' : 'A near miss: one gate short.',
+      ...link,
+    };
+  }
   if (kind === 'wkm' || kind === 'wkt') {
     const t = thisWeekOf(offer);
     const d = t ? (kind === 'wkm' ? t.mine : t.theirs) : null;
@@ -11135,7 +11479,7 @@ function wireRowCards(el) {
 
 /** The team card on every manager's name (`teamCardAttr`). */
 function wireAllTeamCards() {
-  for (const id of ['projAvgTable', 'tradeTable', 'customPanel', 'assumedPanel']) {
+  for (const id of ['projAvgTable', 'tradeTable', 'tradeNear', 'customPanel', 'assumedPanel']) {
     const el = $(id);
     if (el) wireTeamCards(el);
   }
@@ -11143,7 +11487,7 @@ function wireAllTeamCards() {
 
 /** Every preview on the page, wired once at boot: the containers outlive their repaints. */
 function wirePreviews() {
-  for (const id of ['tradeTable', 'customPanel', 'assumedPanel']) wireRowCards($(id));
+  for (const id of ['tradeTable', 'tradeNear', 'customPanel', 'assumedPanel']) wireRowCards($(id));
   // The pop-up's yes-word (`yesLineHtml`, key 'deal-yes') — its only `data-rc`.
   if ($('dealBody')) wirePops($('dealBody'), { selector: '[data-rc="yes"]', card: rowCardSpec });
   wireAllTeamCards();
@@ -11581,6 +11925,8 @@ function wireOfferClicks(el, rowsFor) {
 }
 
 wireOfferClicks($('tradeTable'), () => state.rows);
+// The near misses under it (Tim's checklist, 2026-10-31).
+wireOfferClicks($('tradeNear'), () => state.nearRows || []);
 // The custom box's "Suggested" rows open the same pop-up (2026-10-01).
 wireOfferClicks($('cuSug'), () => state.cuSugRows);
 
@@ -11744,6 +12090,7 @@ enableSort($('tradeTable'));
 wireTips($('depthTable'));
 wireTips($('spareStrip'));
 wireTips($('tradeTable'));
+if ($('tradeNear')) wireTips($('tradeNear'));
 wireTips($('dealPanel'));
 wirePreviews();
 
@@ -12133,6 +12480,8 @@ state.bothWin = prefs.get('bothWin', false) === true;
 $('bothWin').checked = state.bothWin;
 state.benchValue = prefs.get('benchValue', false) === true;
 $('benchValue').checked = state.benchValue;
+state.flip = !state.benchValue && prefs.get('flip', false) === true;
+syncFlipSwitches();
 state.sugPlayoffs = prefs.get('sugPlayoffs', false) === true;
 $('sugPlayoffs').checked = state.sugPlayoffs;
 const rememberedKind = prefs.get('kind', null);
