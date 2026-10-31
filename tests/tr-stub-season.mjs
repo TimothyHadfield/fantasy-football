@@ -431,7 +431,7 @@ function specOf(team, i) {
     if (team.id === 3 && i === 0) return P('Cy QB1', 'QB', SLOT.QB, flat(2), 2);
   }
   // TR_QB_HOLES=1: Di and Bo want a quarterback too, and each has spare men
-  // Ana wants back (Di's bench RB3 16 and WR4 15; Bo's bench RB4 16 behind
+  // Ana wants back (Di's bench RB3 16, WR4 15 and TE2 15; Bo's bench RB4 16 behind
   // three 17s). Ana's slot 11 is a fourth quarterback, `Ana QB4`. The finder
   // keeps at most two rows per manager (2026-10-31), so the notification's cap
   // of three can only be proved across more than one manager.
@@ -441,6 +441,7 @@ function specOf(team, i) {
   if (env.TR_QB_HOLES && team.id === 4 && i === 0) return P('Di QB1', 'QB', SLOT.QB, flat(2), 2);
   if (env.TR_QB_HOLES && team.id === 4 && i === 10) return P('Di RB3', 'RB', SLOT.BE, flat(16), 16);
   if (env.TR_QB_HOLES && team.id === 4 && i === 11) return P('Di WR4', 'WR', SLOT.BE, flat(15), 15);
+  if (env.TR_QB_HOLES && team.id === 4 && i === 9) return P('Di TE2', 'TE', SLOT.BE, flat(15), 15);
   if (env.TR_QB_HOLES && team.id === 1 && i === 11) return P('Ana QB4', 'QB', SLOT.BE, flat(14), 14);
   if (env.TR_QB_HOLES && team.id === 2) {
     if (i === 0) return P('Bo QB1', 'QB', SLOT.QB, flat(2), 2);

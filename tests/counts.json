@@ -214,7 +214,7 @@
       "assertions": 37
     },
     "tr-yes-check.mjs": {
-      "assertions": 42
+      "assertions": 43
     },
     "test-trade-cut.mjs": {
       "assertions": 3254
@@ -251,6 +251,12 @@
     },
     "test-trade-suggest.mjs": {
       "assertions": 339
+    },
+    "test-trade-fit.mjs": {
+      "assertions": 62
+    },
+    "tr-fit-check.mjs": {
+      "assertions": 26
     },
     "test-trade-three.mjs": {
       "assertions": 28

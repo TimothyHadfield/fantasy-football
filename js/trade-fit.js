@@ -190,11 +190,18 @@ export function capPerManager(list, partnerOf, max = PER_MANAGER) {
  * @param {*} f.myId
  * @param {Array<{teamId, need:string[]}>} f.needs every manager's needed positions
  */
+/**
+ * Flip's two figures alone (You gain −1 to under +2, Value change +2 to +4):
+ * cheap, so the search can hold a deal to it before the man is looked at.
+ */
+export function flipBand(youGain, valueChange) {
+  const you = num(youGain) ? r1(youGain) : null;
+  const val = num(valueChange) ? r1(valueChange) : null;
+  return you !== null && you >= -1 && you < MIN_YOU && val !== null && val >= 2 && val <= 4;
+}
+
 export function flipOf(f = {}) {
-  const you = num(f.youGain) ? r1(f.youGain) : null;
-  const val = num(f.valueChange) ? r1(f.valueChange) : null;
-  if (you === null || you < -1 || you >= MIN_YOU) return null;
-  if (val === null || val < 2 || val > 4) return null;
+  if (!flipBand(f.youGain, f.valueChange)) return null;
   let best = null;
   for (const m of f.get || []) {
     if (!m || !m.bench || !num(m.value) || m.value < 2 || m.value > 4) continue;

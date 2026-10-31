@@ -4735,7 +4735,7 @@ function renderFinderNote(scales = finderScales) {
   const shown = state.rows.length;
   const kindNote =
     state.kind === 'all'
-      ? 'every shape up to two for two'
+      ? 'every shape up to three for three'
       : state.kind === 'even'
         ? 'one-for-one swaps only'
         : state.kind === 'consolidate'
@@ -5150,6 +5150,12 @@ function outlookDeltaOf(p) {
   return round1(round1(g.proj) - round1(g.avg));
 }
 
+/** Your You gain /wk as the row prints it (to the tenth), or null. */
+function gateYouOf(offer) {
+  const s = shownGainsOf(offer).mine;
+  return Number.isFinite(s) ? round1(s) : null;
+}
+
 /** Your Value change as the row prints it, or null with no Values. */
 function valueChangeOfOffer(offer) {
   const ids = (list) => (list || []).map((p) => String(p && typeof p === 'object' ? p.playerId : p));
@@ -5373,13 +5379,24 @@ function runSearch({ keepDeal = false } = {}) {
       // THE FLIP SWITCH (Tim, 2026-10-31): kept by YOUR Value change, and your
       // side may lose up to a point a week (`myMin`, on the span; the printed
       // figure is held to −1 below).
+      // CHECKLIST: a deal that passes both gates outranks every near miss, so
+      // when the dedupe keeps one of several siblings it keeps a passing one.
       rankBy: state.benchValue
         ? (o) => { o.benchGain = benchGainOf(o, myPlayers, benchBefore); return o.benchGain; }
         : state.flip
         ? (o) => valueChangeOfOffer(o) ?? -Infinity
-        : W
-        ? (o) => { const v = verdictOf(o, weeks); return o.goalPoints * (v ? v.p : 1); }
-        : null,
+        : (o) => {
+          const base = W ? (() => { const v = verdictOf(o, weeks); return o.goalPoints * (v ? v.p : 1); })()
+            : Number.isFinite(o.goalPoints) ? o.goalPoints : Number.isFinite(o.netGain) ? o.netGain : o.myGain;
+          return (o.gatePass ? 1e6 : 0) + (Number.isFinite(base) ? base : 0);
+        },
+      // TIM'S GATES BEFORE THE DEDUPE (engine `keep`, 2026-10-31): the deals
+      // that pass, and the near misses (one gate short) so they can be shown.
+      // Flip: its two figures. Bench value: none.
+      keep: state.benchValue ? null
+        : state.flip
+        ? (o) => tfit.flipBand(gateYouOf(o), valueChangeOfOffer(o))
+        : (o) => { const g = tfit.fitOf({ youGain: gateYouOf(o), valueChange: valueChangeOfOffer(o) }); o.gatePass = g.pass; return g.pass || g.near; },
       myMin: state.benchValue ? 0 : state.flip && weeks ? -2 * weeks.length : null,
       // HIS side over the weeks he will play (Phase 3): the gate, "He gains" and
       // the yes-chance all read this — the base run, so it costs nothing.
