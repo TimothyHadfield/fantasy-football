@@ -584,7 +584,97 @@ async function connect({ again = false } = {}) {
   if (res.ok && source === 'espn') {
     maybeAutoSync();
     maybeCapture();
+    maybeAutoLineup();
   }
+}
+
+// =========================================================================
+// AUTO-SET BEST LINEUP, FROM ANY PAGE (Tim, 2026-10-31)
+// =========================================================================
+//
+// "fix all future ESPN lineups … automatically sets all my lineups on espn so
+// that the players with the highest proj that week are in and playing". ESPN
+// takes the CURRENT week only, so every page load on the laptop with the
+// extension sets this week's — when the switch on Notifications is on. What
+// is decided, and why, is js/auto-lineup.js; this only hands it the reads.
+
+/** The week being played next: the first with a game not yet final (Home's and Notifications' rule). */
+function weekBeingPlayed(schedule) {
+  return (schedule.weeks || []).find((w) => (schedule.byWeek.get(w) || []).some((g) => !g.played)) ?? null;
+}
+
+/**
+ * One run of the auto-set. Silent; never the page's problem. `force` skips
+ * the two-minute spacing (the switch was just turned on).
+ * @returns {Promise<Object|null>} js/auto-lineup.js `runAutoLineup`'s answer
+ */
+async function maybeAutoLineup({ force = false } = {}) {
+  if (!bridge.isAvailable() || state.source !== 'espn') return null;
+  if (pastSeason()) return null;
+  if (!/^\d+$/.test(String(state.leagueId))) return null;
+  let result = null;
+  try {
+    const [auto, prefs, forecast, projection, startSit] = await Promise.all([
+      import('./auto-lineup.js'), import('./prefs.js'), import('./forecast.js'),
+      import('./projection.js'), import('./start-sit.js'),
+    ]);
+    let week = null;
+    result = await auto.runAutoLineup({
+      cfg: { leagueId: state.leagueId, season: state.season, teamId: state.teamId ?? null },
+      on: prefs.scope('notify').get('autoLineup', false) === true,
+      force,
+      canWrite: () => bridge.canSetLineup(),
+      setLineup: (req) => bridge.setLineup(req),
+      store: {
+        get: (k) => JSON.parse(localStorage.getItem(k) || 'null'),
+        set: (k, v) => localStorage.setItem(k, JSON.stringify(v)),
+      },
+      readWeek: async () => {
+        // Imported here for the reason given in `maybeCapture()`.
+        const season = await import('./season.js');
+        week = weekBeingPlayed(await season.fetchSchedule());
+        if (week === null) return null;
+        // ESPN's lineup as it is NOW (never the store's), with the real squads
+        // (never a trade only assumed on the Trade page).
+        const rosters = await season.fetchWeekRosters(week, { fresh: true, assumed: false });
+        const teams = (rosters && rosters.teams) || [];
+        const team = teams.find((t) => String(t.id) === String(state.teamId));
+        const counts = projection.slotCountsFromLineups(teams);
+        if (!team || !counts) return null;
+        let byes = null;
+        let kickoffs = null;
+        try {
+          if (typeof season.fetchByeWeeks === 'function') byes = await season.fetchByeWeeks();
+          if (typeof season.fetchProKickoffs === 'function') kickoffs = await season.fetchProKickoffs();
+        } catch { /* unknown: the roster's own evidence still locks who has played */ }
+        const now = Date.now();
+        const isLocked = (p) => {
+          if (startSit.hasPlayed(p)) return true;
+          const at = kickoffs && kickoffs[p.proTeamId] && kickoffs[p.proTeamId][week];
+          return Number.isFinite(at) && at <= now;
+        };
+        return { week, players: team.players || [], slots: forecast.slotsFromCounts(counts), byes, isLocked };
+      },
+    });
+    if (result && result.act === 'set') {
+      // The store's copy of this week is now out of date: read it again, then
+      // let every page on screen draw the new lineup.
+      try {
+        const season = await import('./season.js');
+        if (week !== null) await season.fetchWeekRosters(week, { fresh: true, assumed: false });
+      } catch { /* the pages read it themselves */ }
+      announceRefresh();
+    }
+  } catch {
+    result = null;
+  }
+  document.dispatchEvent(new CustomEvent('ff:autolineup', { detail: result }));
+  return result;
+}
+
+/** The Notifications switch was just turned on: run now, not on the next page load. */
+export function autoLineupNow() {
+  return maybeAutoLineup({ force: true });
 }
 
 // =========================================================================

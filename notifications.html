@@ -48,6 +48,18 @@
   <h1>Notifications <span id="modeBadge" class="badge demo">Demo</span></h1>
 
   <section class="panel nt-panel" id="panelNotes">
+    <!-- AUTO-SET BEST LINEUP (Tim, 2026-10-31): each week's ESPN lineup set to
+         the highest projections once that week is current, on the laptop with
+         the extension. Off by default; js/notifications-page.js says why when
+         it cannot work here. -->
+    <div class="nt-opts">
+      <label class="switch" for="ntAutoLineup">
+        <input type="checkbox" role="switch" id="ntAutoLineup">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-text">Auto-set best lineup</span>
+      </label>
+      <span class="nt-why" id="ntAutoWhy" hidden></span>
+    </div>
     <!-- One sentence when there is no list to show (an earlier season, nobody
          set as you), and the sample league's one-line label. -->
     <p class="nt-say" id="ntSay" hidden></p>

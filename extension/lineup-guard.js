@@ -75,6 +75,20 @@ globalThis.LineupGuard = (() => {
   const MAX_MOVES = 4;
 
   /**
+   * THE WHOLE LINEUP AT ONCE (Tim, 2026-10-31: "fix all future ESPN lineups …
+   * automatically sets all my lineups on espn so that the players with the
+   * highest proj that week are in and playing"). The site's "Auto-set best
+   * lineup" re-sorts starters and bench in ONE request, marked `full: true`.
+   * Every man on a roster moves at most once (a repeated man is refused), and
+   * the rosters measured run 17–19 entries (public league 1241838, 2026-10-11),
+   * so 20 covers a full re-sort. Only a request marked `full` gets it;
+   * every other request keeps MAX_MOVES. Everything else is checked exactly
+   * as for a swap, and on top of that the lineup the moves leave must fit the
+   * league's slot counts (`check`).
+   */
+  const MAX_FULL_MOVES = 20;
+
+  /**
    * The one page that may ask for a write. Narrower than the read bridge on
    * purpose: localhost and 127.0.0.1 may READ, and may never write.
    */
@@ -85,7 +99,7 @@ globalThis.LineupGuard = (() => {
   const LEAGUE_ID_RE = /^\d{1,12}$/;
   const SWID_RE = /^\{[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}$/;
 
-  const REQUEST_FIELDS = new Set(['type', 'leagueId', 'season', 'week', 'teamId', 'moves']);
+  const REQUEST_FIELDS = new Set(['type', 'leagueId', 'season', 'week', 'teamId', 'moves', 'full']);
   const MOVE_FIELDS = new Set(['type', 'playerId', 'fromSlotId', 'toSlotId']);
 
   const no = (reason) => ({ ok: false, reason });
@@ -146,8 +160,12 @@ globalThis.LineupGuard = (() => {
     if (!isInt(msg.week) || msg.week < 1 || msg.week > 25) return no('bad-request');
     if (!isInt(msg.teamId) || msg.teamId < 1 || msg.teamId > 9999) return no('bad-request');
 
+    // `full` is a plain true or absent; anything else means something upstream is confused.
+    if ('full' in msg && msg.full !== true) return no('bad-request');
+    const full = msg.full === true;
+
     if (!Array.isArray(msg.moves) || msg.moves.length < 1) return no('bad-request');
-    if (msg.moves.length > MAX_MOVES) return no('too-many');
+    if (msg.moves.length > (full ? MAX_FULL_MOVES : MAX_MOVES)) return no('too-many');
 
     const seen = new Set();
     const moves = [];
@@ -169,7 +187,7 @@ globalThis.LineupGuard = (() => {
 
     return {
       ok: true,
-      request: { leagueId, season: Number(seasonText), week: msg.week, teamId: msg.teamId, moves },
+      request: { leagueId, season: Number(seasonText), week: msg.week, teamId: msg.teamId, moves, full },
     };
   }
 
@@ -232,6 +250,20 @@ globalThis.LineupGuard = (() => {
       });
     }
 
+    // A WHOLE-LINEUP REQUEST must leave a lineup the league allows: no starting
+    // slot holding more men than the league has of it. ESPN would refuse such a
+    // request whole anyway; this keeps it from being sent at all.
+    if (request.full) {
+      const at = new Map(entries.map((e) => [e.playerId, e.lineupSlotId]));
+      for (const m of request.moves) at.set(m.playerId, m.toSlotId);
+      const used = {};
+      for (const slot of at.values()) used[slot] = (used[slot] || 0) + 1;
+      for (const [slot, n] of Object.entries(used)) {
+        if (slot === '20' || slot === '21') continue;   // bench and IR: ESPN's own rules
+        if (n > Number(counts[slot] || 0)) return no('bad-slot');
+      }
+    }
+
     return {
       ok: true,
       body: {
@@ -263,7 +295,7 @@ globalThis.LineupGuard = (() => {
   }
 
   return {
-    MAX_MOVES, LIVE_ORIGIN, LIVE_PATH,
+    MAX_MOVES, MAX_FULL_MOVES, LIVE_ORIGIN, LIVE_PATH,
     senderIsLiveSite, normalizeSwid, parseRequest, check, outcome,
   };
 })();

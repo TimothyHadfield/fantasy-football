@@ -21,15 +21,24 @@
 // goes only when ESPN shows the change. Everywhere else — a phone, the switch
 // off, any failure — the button is a plain link to ESPN's own lineup screen.
 //
+// AUTO-SET BEST LINEUP (Tim, 2026-10-31: "fix all future ESPN lineups"). A
+// switch in the panel (`ff.prefs` → `notify.autoLineup`, per league), off by
+// default, working only where `bridge.canSetLineup()` says yes; elsewhere it is
+// drawn disabled with a few words why. The setting itself happens on every page
+// load (js/connection.js → js/auto-lineup.js); this page draws the switch and,
+// at the top of "This week", what the auto-set last did this week.
+//
 // A line disappears when its cause does: no read mark. An offer of yours that
 // ended (2026-10-22) has two buttons instead of one: Follow up (saved as a
 // trade, opened in the Trade page's builder) and Dismiss; either is remembered.
 
 import * as bridge from './bridge.js';
-import { onConnection, savedConfig } from './connection.js';
+import { onConnection, savedConfig, autoLineupNow } from './connection.js';
 import { load, forgetEnded } from './notify-load.js';
 import { LEVELS } from './notify.js';
 import { scope } from './prefs.js';
+import { memoryKey, noteFor } from './auto-lineup.js';
+import { espnLineupHref } from './links.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -115,8 +124,11 @@ function draw() {
   // even empty, so it can be seen that it was checked (Tim, 2026-10-22: "also
   // in the notifications setting show pending trades aswell").
   const listed = s.status === 'live' || s.status === 'demo';
+  const auto = autoNote(s);
   for (const level of LEVELS) {
     const mine = notes.filter((n) => n.level === level);
+    // What the auto-set did this week heads "This week".
+    if (level === 'now' && auto) mine.unshift(auto);
     if (!mine.length && level === 'pending' && listed) {
       html += `<div class="nt-group" data-level="pending">${HEADINGS.pending}</div>` +
         '<div class="nt-row nt-wait nt-none" data-empty="pending">No pending trades or claims right now.</div>';
@@ -133,6 +145,52 @@ function draw() {
 }
 
 const keyOf = (c) => (c ? `${c.leagueId}|${c.season}|${c.teamId ?? ''}` : 'demo');
+
+// ------------------------------------------------------- auto-set best lineup
+
+const notifyPrefs = scope('notify');
+const autoOn = () => notifyPrefs.get('autoLineup', false) === true;
+
+/** The auto-set's line for the week on screen (your league only, switch on), or null. */
+function autoNote(s) {
+  if (!s || s.status !== 'live' || !s.league || s.week === null || s.week === undefined) return null;
+  if (!autoOn() || s.teamId === null || s.teamId === undefined) return null;
+  let memory = null;
+  try {
+    memory = JSON.parse(localStorage.getItem(memoryKey(s.league.leagueId, s.league.season, s.teamId)) || 'null');
+  } catch { memory = null; }
+  const href = espnLineupHref({ ...s.league, teamId: s.teamId, week: s.week });
+  return noteFor(memory, { week: s.week, href });
+}
+
+/**
+ * The switch: what is saved, and whether it can work here. The few words say
+ * why not — a phone (no extension), the extension's own lineup switch off, or
+ * no league connected.
+ */
+function drawSwitch(can, present = true) {
+  const input = $('ntAutoLineup');
+  const why = $('ntAutoWhy');
+  if (!input || !why) return;
+  input.checked = autoOn();
+  const reason = can === null ? ''
+    : can === true ? (!savedConfig() ? 'Connect your league first' : '')
+      : !present ? 'Laptop with the extension only'
+        : 'Turn on the lineup switch in the extension';
+  input.disabled = can !== true || Boolean(reason);
+  why.textContent = reason;
+  why.hidden = !reason;
+}
+
+$('ntAutoLineup')?.addEventListener('change', (e) => {
+  const on = e.target.checked === true;
+  notifyPrefs.set('autoLineup', on);
+  draw();
+  if (on) autoLineupNow().catch(() => {});
+});
+
+// The auto-set ran (this page load, or the switch just turned on): draw its line.
+document.addEventListener('ff:autolineup', () => draw());
 
 function show(state) {
   // A line dismissed or followed up while a run was still in the air stays gone.
@@ -258,15 +316,25 @@ document.addEventListener('ff:refresh', (e) => {
 
 // May the extension set a lineup? Until it answers yes, every lineup button is
 // the link to ESPN — which is also what a phone always shows.
+drawSwitch(null);
 if (typeof bridge.canSetLineup === 'function' && typeof bridge.setLineup === 'function') {
   Promise.resolve()
     .then(() => bridge.canSetLineup())
-    .then((yes) => {
-      if (yes !== true) return;
+    .then(async (yes) => {
+      if (yes !== true) {
+        // Why not: no extension at all (a phone), or its lineup switch is off.
+        let present = false;
+        try { present = (await bridge.settled()) === true || bridge.isAvailable() === true; } catch { present = false; }
+        drawSwitch(false, present);
+        return;
+      }
+      drawSwitch(true);
       view.canWrite = true;
       draw();
     })
-    .catch(() => { /* no: the links stay */ });
+    .catch(() => { drawSwitch(false, false); /* no: the links stay */ });
+} else {
+  drawSwitch(false, false);
 }
 
 run();

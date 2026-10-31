@@ -130,6 +130,21 @@ const current = ({ allowed, set }) => ({
   same(asked.filter((r) => r.type === 'SET_LINEUP').length, 1, 'and it was sent once');
 }
 
+// ---- a whole-lineup re-sort carries `full: true`, and only then (2026-10-31) --
+{
+  const { bridge, asked } = await page(current({ allowed: true, set: { ok: true } }));
+  same(await bridge.setLineup({ ...CALL, full: true }), { ok: true }, 'full: a re-sort comes back {ok:true}');
+  const sent = asked.filter((r) => r.type === 'SET_LINEUP');
+  same(sent.length, 1, 'full: sent once');
+  same(sent[0].full, true, 'full: the request is marked full');
+  for (const full of [false, 'true', 1, undefined]) {
+    await bridge.setLineup({ ...CALL, full });
+  }
+  const rest = asked.filter((r) => r.type === 'SET_LINEUP').slice(1);
+  same(rest.length, 4, 'four more requests sent');
+  same(rest.filter((r) => 'full' in r).length, 0, 'anything but true sends no `full` at all');
+}
+
 // ---- a page the extension will not write for (localhost) -------------------
 {
   const { bridge } = await page(current({ allowed: false, set: { ok: false, reason: 'origin' } }));

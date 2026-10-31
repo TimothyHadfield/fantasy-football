@@ -277,6 +277,7 @@ export function stageTrade({
 //     leagueId, season,
 //     week,            // ESPN's CURRENT scoring period — any other is refused
 //     teamId,          // YOUR team id (a number); any other is refused
+//     full,            // optional true: a whole-lineup re-sort, 1–20 moves
 //     moves: [         // 1–4; a swap is BOTH men, each with his own slots
 //       { playerId: 4429023, fromSlotId: 20, toSlotId: 2 },
 //       { playerId: 4568490, fromSlotId: 2, toSlotId: 20 },
@@ -326,7 +327,7 @@ export async function canSetLineup() {
 }
 
 /** Change the lineup. See the contract above. Never rejects. */
-export async function setLineup({ leagueId, season, week, teamId, moves, timeoutMs } = {}) {
+export async function setLineup({ leagueId, season, week, teamId, moves, full = false, timeoutMs } = {}) {
   try {
     if (!(await settled())) return { ok: false, reason: 'no-extension' };
     const res = await ask({
@@ -335,6 +336,11 @@ export async function setLineup({ leagueId, season, week, teamId, moves, timeout
       season: Number(season),
       week: Number(week),
       teamId: Number(teamId),
+      // A WHOLE-LINEUP re-sort ("Auto-set best lineup", 2026-10-31): up to 20
+      // moves instead of 4. Sent only when true, so a swap's message is exactly
+      // what it always was (and an extension before 0.5.3 refuses a full one as
+      // `bad-request`, never half-applies it).
+      ...(full === true ? { full: true } : {}),
       // Shallow, as in stageTrade: numbers made numbers, and the extension
       // refuses whatever is left. The type is fixed here; there is no other.
       moves: (Array.isArray(moves) ? moves : []).map((m) => ({

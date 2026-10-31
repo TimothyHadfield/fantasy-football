@@ -69,10 +69,13 @@
       "assertions": 7
     },
     "test-lineup-guard.mjs": {
-      "assertions": 357
+      "assertions": 392
     },
     "test-bridge-lineup.mjs": {
-      "assertions": 46
+      "assertions": 51
+    },
+    "auto-lineup-check.mjs": {
+      "assertions": 91
     },
     "test-espn-tick.mjs": {
       "assertions": 82
@@ -357,8 +360,8 @@
       "assertions": 86
     },
     "notify-check.mjs": {
-      "assertions": 147,
-      "scenarios": 12
+      "assertions": 167,
+      "scenarios": 15
     },
     "bell-check.mjs": {
       "assertions": 145,

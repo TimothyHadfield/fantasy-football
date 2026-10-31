@@ -750,7 +750,7 @@ eq(
     b.ask();
     eq(b.sent.length, 0, `content-site forwards nothing ${why}`);
   }
-  eq(MANIFEST.version, '0.5.2', 'the trade tick without a success badge ships as 0.5.2');
+  eq(MANIFEST.version, '0.5.3', 'the whole-lineup write (Auto-set best lineup) ships as 0.5.3');
 }
 
 // ---- the mirror: the site's choices, to the ESPN tabs and back (0.5.0) ----

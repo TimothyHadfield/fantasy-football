@@ -34,7 +34,7 @@ const NAV_LINKS = ((readFileSync(path.join(REPO, 'index.html'), 'utf8')
   .match(/<header class="site">[\s\S]*?<nav>([\s\S]*?)<\/nav>/) || ['', ''])[1].match(/<a\s/g) || []).length;
 const LEAGUE = '99';
 const ME = 4;
-const SCENARIOS = ['demo', 'live', 'farHoles', 'lineupOk', 'lineupStale', 'lineupRefused', 'synced', 'syncedHeld', 'past', 'noTeam', 'over', 'ended'];
+const SCENARIOS = ['demo', 'live', 'farHoles', 'lineupOk', 'lineupStale', 'lineupRefused', 'synced', 'syncedHeld', 'past', 'noTeam', 'over', 'ended', 'autoOn', 'autoBlocked', 'autoSwitch'];
 
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -308,6 +308,67 @@ if (process.argv[2]) {
       eq(p.rows().find((x) => x.kind === 'bad-start') && p.rows().find((x) => x.kind === 'bad-start').id, 'bad-405', 'the other lines are still there');
       const rec = p.saved(season);
       eq(rec && [rec.now, rec.soon], [1, 1], 'and the saved count is one line shorter');
+      ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
+    }
+
+    // AUTO-SET BEST LINEUP (Tim, 2026-10-31: "fix all future ESPN lineups"):
+    // the switch on and the extension allowed — the bar's per-load job sets
+    // this week's lineup in ONE full request (to the stub; nothing real), and
+    // "This week" opens with what it did.
+    const prefsOn = (on) => ({ 'ff.prefs': { 'notify.autoLineup': on, '@league': `${LEAGUE}-${season}` } });
+    const sw = (p) => p.document.getElementById('ntAutoLineup');
+    const why = (p) => p.document.getElementById('ntAutoWhy');
+    if (scenario === 'autoOn') {
+      const p = await boot({ conn, stub: { lineup: { can: true, result: { ok: true }, applies: true } }, store: prefsOn(true) });
+      await waitFor(() => p.calls('setLineup').length >= 1 && p.rows().some((x) => x.kind === 'auto-lineup') && p.settled(), 8000);
+      await tick(60);
+      const sent = p.calls('setLineup');
+      eq(sent.length, 1, 'auto: ONE request');
+      const req = sent[0] && sent[0][1];
+      eq(req && [req.leagueId, req.season, req.week, req.teamId, req.full], [LEAGUE, season, 5, ME, true],
+        'auto: this league, the current week (5), your team, marked full');
+      ok(req && SWAP.every((m) => req.moves.some((x) => x.playerId === m.playerId && x.fromSlotId === m.fromSlotId && x.toSlotId === m.toSlotId)),
+        'auto: it holds the swap the start line names', req && req.moves);
+      ok(p.calls('week').some((c) => c[1] === 5 && c[2] === 'fresh'), 'auto: decided on a FRESH read of week 5', p.calls('week'));
+      const order = p.order();
+      eq(order.slice(0, 2), ['[This week]', 'auto-lineup'], 'auto: its line heads This week', order);
+      const a = p.rows().find((x) => x.kind === 'auto-lineup');
+      eq(a && [a.title, a.label, a.href, a.target], ['Lineup set for week 5', 'Open ESPN', ESPN(season), '_blank'],
+        'auto: "Lineup set for week 5" and a link to ESPN’s lineup page');
+      ok(a && /^Start T4 Man 09 \(RB\)/.test(a.detail) && /bench T4 Man 02/.test(a.detail), 'auto: the moves in short', a && a.detail);
+      ok(!p.rows().some((x) => x.id === 'start-409-402'), 'auto: the swap line is gone once ESPN shows it', p.order());
+      const mem = p.map.get(`ff.autolineup.${LEAGUE}-${season}-${ME}`);
+      ok(mem && JSON.parse(mem).last.kind === 'set' && JSON.parse(mem).week === 5, 'auto: remembered as set for week 5', mem);
+      eq([sw(p).checked, sw(p).disabled, why(p).hidden], [true, false, true], 'auto: the switch is on, working, with no excuse beside it');
+      ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
+    }
+
+    if (scenario === 'autoBlocked') {
+      // The extension's own lineup switch is off: nothing is set, and the switch says why.
+      const p = await boot({ conn, stub: { lineup: { can: false } }, store: prefsOn(true) });
+      // The words wait for the extension's hello to settle (up to 0.8 s).
+      await waitFor(() => !why(p).hidden, 4000);
+      await tick(300);
+      eq(p.calls('setLineup').length, 0, 'blocked: nothing is set');
+      ok(!p.rows().some((x) => x.kind === 'auto-lineup'), 'blocked: no auto line');
+      eq([sw(p).disabled, why(p).hidden, text(why(p))], [true, false, 'Turn on the lineup switch in the extension'],
+        'blocked: the switch is disabled and says why in a few words');
+      ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
+    }
+
+    if (scenario === 'autoSwitch') {
+      // Off by default; turning it on runs at once and is remembered per league.
+      const p = await boot({ conn, stub: { lineup: { can: true, result: { ok: true }, applies: true } } });
+      await waitFor(() => sw(p) && !sw(p).disabled, 4000);
+      eq([sw(p).checked, sw(p).disabled], [false, false], 'switch: off by default, and usable here');
+      await tick(200);
+      eq(p.calls('setLineup').length, 0, 'switch off: nothing is set on load');
+      sw(p).checked = true;
+      p.fire(sw(p), 'change');
+      await waitFor(() => p.calls('setLineup').length >= 1, 8000);
+      eq(p.calls('setLineup')[0][1].full, true, 'switch turned on: the full request goes at once');
+      const prefs = JSON.parse(p.map.get('ff.prefs') || '{}');
+      eq([prefs['notify.autoLineup'], prefs['@league']], [true, `${LEAGUE}-${season}`], 'switch: remembered for this league');
       ok(p.errors.length === 0, 'nothing thrown', p.errors.join(' | '));
     }
 

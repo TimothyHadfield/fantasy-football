@@ -72,6 +72,7 @@ const SUITES = [
   ['test-bridge-settle.mjs', 'a private league’s first read waits for the extension’s hello'],
   ['test-lineup-guard.mjs', 'the one write: a lineup change on your own team, this week, switch on, live site only — every refusal and the exact body sent'],
   ['test-bridge-lineup.mjs', 'the site’s half of the lineup change: canSetLineup and setLineup never reject, and say why not'],
+  ['auto-lineup-check.mjs', 'Auto-set best lineup: the highest-projection legal lineup (bye 0, locked and IR untouched, ties kept), one full request, his own edits left alone, never on the sample league or with the switch off'],
   ['test-espn-tick.mjs', 'ticking your own side on ESPN’s trade page — and never submitting'],
   ['test-espn-tabs.mjs', 'the Analysis and Trade tabs on ESPN’s league pages: ESPN’s own nav markup, the framed pages and their seed, back/forward, re-renders'],
   ['test-espn-embed.mjs', 'the site pages framed by those tabs: only when ESPN frames them, the seed, which panels stay, the luck picker, the scoped skin'],

@@ -2412,3 +2412,12 @@ header.site .wrap:not(:has(.site-bell)) nav { margin-right: 42px; }
 /* 16px: iOS zooms the page into a smaller form control when it is focused. */
 @media (max-width: 760px) { .pa-find { max-width: none; } .pa-find input { font-size: 16px; } }
 /* ====================================================== end of Player analysis */
+/* ============ AUTO-SET BEST LINEUP (notifications.html, 2026-10-31)
+ * The switch sits in the panel above the list, with a few dim words beside it
+ * when it cannot work here. Its line in "This week" lets the moves wrap so
+ * every name can be read. */
+.nt-opts { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; margin-bottom: 8px; }
+.nt-why { font-size: 13px; color: var(--dim); }
+.nt-opts .switch:has(input:disabled) { cursor: default; opacity: 0.55; }
+.nt-row[data-kind="auto-lineup"] .nt-detail { white-space: normal; }
+/* ===================================================== end of auto-set lineup */

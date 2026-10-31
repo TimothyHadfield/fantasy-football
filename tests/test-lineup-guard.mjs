@@ -276,6 +276,39 @@ refuses(withMoves([...SWAP,
 refuses(withMoves(Array.from({ length: 19 }, (_, i) => ({ type: 'LINEUP', playerId: p(i), fromSlotId: 20, toSlotId: 2 }))),
   'too-many', 'the whole roster');
 
+// ---- a whole-lineup re-sort: `full` (Auto-set best lineup, 2026-10-31) ------
+const FULL = [
+  { type: 'LINEUP', playerId: START_RB, fromSlotId: 2, toSlotId: 20 },
+  { type: 'LINEUP', playerId: BENCH_RB, fromSlotId: 20, toSlotId: 2 },
+  { type: 'LINEUP', playerId: START_WR, fromSlotId: 4, toSlotId: 20 },
+  { type: 'LINEUP', playerId: BENCH_WR, fromSlotId: 20, toSlotId: 4 },
+  { type: 'LINEUP', playerId: START_QB, fromSlotId: 0, toSlotId: 20 },
+  { type: 'LINEUP', playerId: p(11), fromSlotId: 20, toSlotId: 0 },
+];
+{
+  const res = judge({ ...MSG, moves: FULL, full: true });
+  ok(res.ok && res.body.items.length === 6, 'full: six moves re-sorting the lineup are allowed', JSON.stringify(res).slice(0, 160));
+  ok(res.ok && !('full' in res.body), 'full: the flag is not sent to ESPN');
+  eq(G.MAX_FULL_MOVES, 20, 'full: at most 20 moves');
+  eq(G.MAX_MOVES, 4, 'every other request keeps four');
+}
+refuses({ ...MSG, moves: FULL }, 'too-many', 'the same six moves without `full`');
+refuses({ ...MSG, full: true, moves: Array.from({ length: 21 }, (_, i) => ({ type: 'LINEUP', playerId: 1000 + i, fromSlotId: 20, toSlotId: 2 })) },
+  'too-many', 'full: twenty-one moves');
+for (const full of [false, 'true', 1, null, {}]) {
+  refuses({ ...MSG, moves: FULL, full }, 'bad-request', `full given as ${JSON.stringify(full)}`);
+}
+refuses({ ...MSG, full: true, moves: [{ type: 'LINEUP', playerId: BENCH_RB, fromSlotId: 20, toSlotId: 2 }] },
+  'bad-slot', 'full: a lineup left with three men in two RB slots');
+refuses({ ...MSG, full: true, moves: FULL }, 'stale', 'full: ESPN already on another week', { league: (() => {
+  const l = makeLeague(); l.scoringPeriodId = 6; return l; })() });
+{
+  const locked = makeLeague();
+  locked.teams[3].roster.entries[3].playerPoolEntry.lineupLocked = true;
+  refuses({ ...MSG, moves: FULL, full: true }, 'locked', 'full: one locked man refuses the whole re-sort', { league: locked });
+  refuses({ ...MSG, moves: FULL, full: true, teamId: 5 }, 'not-your-team', 'full: another manager’s team');
+}
+
 // ---- the shape ------------------------------------------------------------
 for (const [patch, why] of [
   [{ playerId: String(BENCH_RB) }, 'a player id as a string'],
@@ -494,6 +527,25 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   eq(w.cookieAsks.length, 1, 'the cookie is asked for once');
   same(w.cookieAsks[0], { url: READ + '/', name: 'SWID' }, 'the SWID, by name, through a host the extension holds');
   ok(!JSON.stringify(res).includes(ME.slice(1, 9)), 'and his member id is not handed back to the page');
+}
+
+// ---- a whole-lineup re-sort through the worker: still one read, one POST ----
+{
+  const w = makeWorker();
+  same(await w.send({ ...MSG, moves: FULL, full: true }), { ok: true }, 'full: the re-sort answers {ok:true}');
+  eq(w.calls.length, 2, 'full: one fresh read, one write');
+  const body = JSON.parse(w.calls[1].body);
+  eq(body.items.length, 6, 'full: every move in the one POST');
+  eq(body.isLeagueManager, false, 'full: isLeagueManager still false');
+  ok(!('full' in body), 'full: the flag never reaches ESPN');
+  const off = makeWorker({ on: false });
+  same(await off.send({ ...MSG, moves: FULL, full: true }), { ok: false, reason: 'off' }, 'full: the switch off → off');
+  eq(off.calls.length, 0, 'full: switch off, no request');
+  const local = makeWorker();
+  same(await local.send({ ...MSG, moves: FULL, full: true },
+    { id: EXT_ID, origin: 'http://localhost:8000', url: 'http://localhost:8000/notifications.html', tab: { id: 1 }, frameId: 0 }),
+  { ok: false, reason: 'origin' }, 'full: localhost → origin');
+  eq(local.calls.length, 0, 'full: localhost, no request');
 }
 
 // ---- the switch -----------------------------------------------------------

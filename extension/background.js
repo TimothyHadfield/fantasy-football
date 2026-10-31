@@ -486,7 +486,9 @@ function takeStagedTrade(msg) {
 //      not this extension's own popup. The sender is Chrome's, not the page's.
 //   2. THE SWITCH. chrome.storage.local "allowLineup" must be exactly true. Only
 //      the popup sets it; a page cannot reach extension storage.
-//   3. THE SHAPE. 1–4 moves, each a LINEUP move with whole-number slot ids.
+//   3. THE SHAPE. 1–4 moves, each a LINEUP move with whole-number slot ids
+//      (1–20 for a request marked `full`: the site's "Auto-set best lineup",
+//      2026-10-31, which must also leave a lineup the league's slots allow).
 //   4. ONE AT A TIME. A second request while one is in flight is refused.
 //   5. WHO HE IS. His ESPN member id, read from his own SWID cookie.
 //   6. A FRESH READ of the league, made here, now.
