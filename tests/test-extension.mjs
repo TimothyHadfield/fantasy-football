@@ -750,7 +750,7 @@ eq(
     b.ask();
     eq(b.sent.length, 0, `content-site forwards nothing ${why}`);
   }
-  eq(MANIFEST.version, '0.5.3', 'the whole-lineup write (Auto-set best lineup) ships as 0.5.3');
+  eq(MANIFEST.version, '0.5.4', 'the relay that stops quietly after an extension reload ships as 0.5.4');
 }
 
 // ---- the mirror: the site's choices, to the ESPN tabs and back (0.5.0) ----

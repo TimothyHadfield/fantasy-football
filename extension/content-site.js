@@ -88,14 +88,24 @@ function relayFromSite() {
   const startPrefs = localStorage.getItem('ff.prefs');
   let last = '';
 
+  let timer = null;
   const push = () => {
+    // A tab left open across an extension reload keeps this script running
+    // with its link to the extension cut ("Extension context invalidated",
+    // Tim 2026-10-31 on chrome://extensions). Stop quietly; a refresh of the
+    // tab brings a live copy.
     const keys = readKeys((k) => MIRROR_KEY.test(k));
     const text = JSON.stringify(keys);
     if (text === last) return;
     last = text;
     const at = Date.now();
     try { localStorage.setItem(RELAY_AT, String(at)); } catch { /* fine */ }
-    area.set({ [MIRROR]: { at, from: 'site', keys } });
+    try {
+      area.set({ [MIRROR]: { at, from: 'site', keys } });
+    } catch {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    }
   };
 
   // A choice made in an ESPN tab since this browser last showed the site:
@@ -112,7 +122,7 @@ function relayFromSite() {
       } catch { /* fine */ }
     }
     push();
-    setInterval(push, POLL_MS);
+    timer = setInterval(push, POLL_MS);
     window.addEventListener('pagehide', push);
   });
 }
