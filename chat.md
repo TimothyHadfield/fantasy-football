@@ -146,3 +146,10 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** espn-proj-log repo (first run green); Auto-set best lineup 50329fa (ext 0.5.3); ext 0.5.4 2ec3b8d (orphaned-tab relay stops quietly); docs/trade-fit-plan.md (NOTHING BUILT, reviewed).
 - **Verified how:** proj log local double run (0 changes 2nd) + cloud run green; auto-lineup-check 91, lineup-guard 392, bridge-lineup 51, test-extension 369, notify-check 167, bell-check 145; live curl of js/auto-lineup.js.
 - **Open:** real ESPN lineup write unseen; trade plan questions a–e; Tim to send his liked custom trades.
+
+## 2026-10-31 (late) — "set up the new trade algorithm … combinations of 3 for 3"
+- **Asked:** build the trade-fit plan; look at his two saved trades (screenshots: Nolan and Robert, both 3-for-3).
+- **Decided:** a–e at recommended answers; from his trades, Value gate ≥ −1 (not ≥ 0), his This week = order only, new check "he gains /wk".
+- **Built:** engine 1–3 a side + `keep` hook (ff-tfit-engine); page checklist/near misses/Flip/sent-offer hiding (ff-tfit-page, js/trade-fit.js); merged → main 4905938, deploy-now, live curl of js/trade-fit.js 200.
+- **Verified how:** full tr-test 1222/1222 on merged branch; test-trade-fit 62, tr-fit-check 26, test-trade-three 28, list-order 129, yes-check 46, thisweek 69, notify-trades 76; demo screenshots 393 + desktop (looked).
+- **Open:** not seen on 1241838 live; empty-week wording; "3 for 3" shape button; worktrees ff-tfit-* to remove.
