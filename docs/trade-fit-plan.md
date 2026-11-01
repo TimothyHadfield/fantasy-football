@@ -5,10 +5,19 @@
 > the first consideration is of course is it going to benifite me. This is looking at my change in future proj as well as change in value. I try to get a trade that has positive change in future proj by about +2 or more, and a equal or positive change in value. The rest of the consideration is all about trying to find something that is appealing to the opposite user. I won't send a trade out if I think they don't actually have a change of accepting. When finding players that I want, It's usually in the position that I need it in the most (pretty much just what you tell me I have/am misisng). Now, It's important to know that the coin and diamond affect my decision a lot because I want to buy low and not high. Also this week's proj affects my decision because of a similar aspect of buying low. When finding players to send, I try to find players that have a coin on my side (or close to a coin) and players that my opponent needs. Overall, My value change should be 0 or positive, my change in future proj should be +2-4, and my opponents change in this week's proj should be positive. I sometimes try to find specific bench players with high value (2-4) and buy them for low, even if my change in future proj is slightly negative (-0-1) so that I can have a positive change in value (+2-4), which I can use to trade with other players (Robert has a QB, Jonas needs a QB, I buy roberts QB for cheap to trade with Jonas. If no one needs a QB, then I won't buy it). I also try to ballence my trades and make them relatively sparce so that I don't annoy people with too many trades or anything that's repetitive. Just thing about that for now and make a plan. I think I'm also gonna make some custom trades I like and have you look over them before we rebuild."
 > **Instruction:** plan only. Tim will make custom trades he likes for review before the rebuild.
 
-**Status:** NOTHING IS BUILT · Read first: The answer, Tim's checklist, Phases.
+**Status:** BUILT 2026-10-31 (phases 1–3; see BUILT section) · Read first: The answer, Tim's checklist, Phases.
 
 ## Decided by Tim
 - 2026-10-31 · His process is the spec: the numbers below are his, not Claude's.
+- 2026-10-31 · "set up the new trade algorithm … notice how there's combinations of 3 for 3 players." → BUILDING (engine + page builders); packages up to 3-for-3. Questions a–e taken at the recommended answers.
+
+## Phase 0 — Tim's two saved trades (screenshots 2026-10-31)
+| With | You send | You get | You /wk | Him /wk | This wk you / him | Value | Appeal | Total |
+|---|---|---|---|---|---|---|---|---|
+| Nolan Larsen | Cook RB 18.6, Wilson WR 12.7, Warren TE 11.4 🪙 | Bowers TE 15.2 🪙, Coker WR 14.6, Evans WR 14.5 | +3.8 | +1.2 | +9.5 / −1.1 | +0.1 | +1.5 | +2.7 |
+| Robert Lane | Cook RB 18.6, Warren TE 11.4 🪙, Pollard RB 14.7 | St. Brown WR 20.1, Pitts TE 10.6, Lawrence QB 20.6 | +3.2 | +1.9 | +8.9 / −0.8 | −0.5 | +3.4 | +5.3 |
+
+What they settle: (e) "+2" = printed You gain (both in +2–4). Rule 2 gate loosened to **Value ≥ −1.0** (−0.5 counts as "equal"); ≥ 0 is an order plus. **Rule 3 is order-only** (his This week is slightly negative in both). New appeal check: **his future gain > 0** (both have it). Shape: 3-for-3 with mixed positions and mid-tier men (Pitts 10.6/wk), so 3-man packs must not be cut to the top 8 by projection.
 
 ## The answer (one sentence)
 Turn the finder from "best by our model" into "deals that pass **Tim's own checklist**": gates for his side (future proj +2 to +4 a week, Value ≥ 0), added on top of every existing gate, an order by how appealing it looks to the other manager (his this-week gain, buying 💎 / sending 🪙, filling his need), a ✓ checklist on every row, a cap per manager, and a separate "Flip" mode for cheap high-Value buys that another manager needs.
@@ -85,6 +94,13 @@ e. "+2 future proj" = the printed You gain (which subtracts his gain in weeks yo
 
 ## Review 2026-10-31 (plan-reviewer)
 Fixed: existing gates kept and listed; Flip remapped (man's own Value 2–4 on seller's bench, buyer ≠ seller); rule 18 replacement tied to (a) + strict tiebreak (rule 19); rule 7 merged into 3; "closest to +3" dropped; missing This week = not judged; 💎/🪙 order-only and ±2 marks untouched; Phase 1 test = pure checklist function, not stub rank; measurement step added; both "Suggested" readings stated; test fallout named; checklist as hover card; Phase 3 limited to the site's sent store.
+
+## BUILT 2026-10-31
+- Engine (js/trade.js, 4603f9d/1cf92ae): 1–3 men a side; 3-man packs from a per-position pool (QB 2, RB 3, WR 3, TE 2 + ticked men); `keep(o)` hook runs before dedupe so gate-passing variants survive; search 1.6–1.8 s → 0.6–1.0 s per partner (measured, 1241838, Chrome/WebKit).
+- Page (js/trade-fit.js new, js/trade-page.js, trade.html): hard gates You ≥ +2/wk, Value ≥ −1 + all old gates, passed into `keep`; checklist order; ≤ 2 per manager; near misses under a line; checklist hover card / tap sheet; Flip switch; near-copies of offers sent in the last 7 days left out with "sent <date>".
+- Tests: test-trade-fit 62 (Tim's T1/T2 as fixtures), tr-fit-check 26, test-trade-three 28, full tr-test 1222/1222 on the merged branch.
+- Plan wrong about: Value gate (≥ 0 → ≥ −1) and rule 3 (gate → order only), both from Tim's own trades.
+- Open: no "3 for 3" shape button (Any shape covers it); empty-week message "No trade here helps your goal" now sits above near misses (wording is Tim's); Flip and sent-offer hiding not checked on a live league.
 
 ## Sources
 - Code read 2026-10-31 (js/trade.js, js/trade-page.js, js/accept.js, js/outlook-mark.js, js/slot-needs.js, js/past-trades.js).
