@@ -4819,18 +4819,19 @@ function renderFinderNote(scales = finderScales) {
     (state.benchValue
       ? `<strong>Bench value is on:</strong> a trade is kept only when it raises your <strong>bench value</strong> ` +
         `(the Values of the men outside your best lineup) and your lineup loses nothing a week, and the ` +
-        `list is ordered by the bench gain. `
+        `list is ordered by the bench gain. A trade with a man ESPN lists as out for the rest of the season is left out. `
       : state.flip
       ? `<strong>Flip is on:</strong> a trade is kept when a man you get sits on his bench with a Value of 2 to 4, ` +
-        `your Value change is +2 to +4, You gain is −1 a week or better, and another manager needs his position. `
+        `your Value change is +2 to +4, You gain is −1 a week or better, and another manager needs his position. ` +
+        `A trade with a man ESPN lists as out for the rest of the season is left out. `
       : `<strong>Your checklist:</strong> a trade worth less than <strong>+${tfit.MIN_YOU.toFixed(1)} a week to you</strong>, ` +
-        `or with a Value change under ${tfit.MIN_VALUE.toFixed(1)}, is left out (one a little short is listed under ` +
-        `Near misses), and so is one that lowers your ${esc(g.chance)} by more than ${bandText()} of a point, or ` +
-        `shares a man each way with an offer you sent in the last ${tfit.SENT_DAYS} days. The rest are ordered by how ` +
+        `or with a Value change under ${signedText(tfit.MIN_VALUE)}, or that lowers your ${esc(g.chance)} by more ` +
+        `than ${bandText()} of a point, or that shares a man each way with an offer you sent in the last ` +
+        `${tfit.SENT_DAYS} days, is left out (one a little short is listed under Near misses), ` +
+        `and so is any trade with a man ESPN lists as out for the rest of the season. The rest are ordered by how ` +
         `many checks pass (he gains this week, he gains a week, you get a need, he gets a need, you get 💎 or near, ` +
         `you send 🪙 or near, Value 0 or better; "near" = within 1 of the mark), then his This week, then You gain ` +
         `(+2 to +4 alike, more after). At most two per manager. `) +
-    `and so is any trade with a man ESPN lists as out for the rest of the season. ` +
     `There is no trade-value ` +
     `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
     `starter to somebody else, which is why a deal can help both sides at once. ` +

@@ -239,7 +239,7 @@ async function settleGoal(document, idleMax = 45000) {
   };
   while (Date.now() - t0 < max) {
     const count = txt('tradeCount');
-    const done = /ranked by net increase/.test(count) && !/playing each offer out/.test(count);
+    const done = /ranked by (?:net increase|your checklist|Value change|bench value)/.test(count) && !/playing each offer out/.test(count);
     const empty = !document.querySelector('#tradeTable tbody tr') && !/Trying every swap/.test(txt('tradeEmpty')) &&
       txt('tradeEmpty').length > 0;
     if (done || empty) break;
@@ -513,6 +513,8 @@ function readOfferRows(table) {
       partner: text(name.querySelector('.mgr') || name),
       merged: !!tr.querySelector('.merged-tag'),
       mergedText: text(tr.querySelector('.merged-tag')),
+      // Tim's checklist tag (2026-10-31): "✓ 4/7", "✗ You gain +1.4", "Flip to …".
+      fit: text(tr.querySelector('.fit-tag')),
       fromTag: text(tr.querySelector('.from-tag')),
       // The removed "Deal" (2-for-1) column: a cell of that class which is NOT
       // the Send split. '' now, always.
@@ -745,6 +747,31 @@ const guardNetOrdered = (rows) => rows.length > 0 && rows.every((t) => Number.is
     const lt = lowersOf(t) ? 1 : 0;
     return lp < lt || (lp === lt && netOf(p) >= netOf(t));
   });
+// TIM'S CHECKLIST (2026-10-31, js/trade-fit.js): the finder keeps a deal worth
+// +2.0 a week to you or more, ordered by how many of the seven checks it meets
+// (the row's "✓ n/7" tag), goal-lowering rows below, at most two per manager.
+const fitCount = (t) => { const m = String(t.fit || '').match(/^✓ (\d)\/7$/); return m ? Number(m[1]) : NaN; };
+const twoPerManager = (rows) => [...rows.reduce((m, t) => m.set(t.partner, (m.get(t.partner) || 0) + 1), new Map()).values()].every((n) => n <= 2);
+/** Checklist order: every row tagged and worth +2.0 a week, lowering rows below, counts never rising, two per manager. */
+const fitOrdered = (rows) => rows.length > 0 && rows.every((t) => Number.isFinite(fitCount(t)) && headTenths(t.gainText) >= 20) &&
+  twoPerManager(rows) && rows.every((t, i, a) => {
+    if (i === 0) return true;
+    const lp = lowersOf(a[i - 1]) ? 1 : 0;
+    const lt = lowersOf(t) ? 1 : 0;
+    return lp < lt || (lp === lt && fitCount(a[i - 1]) >= fitCount(t));
+  });
+/** The custom box's Suggested order: lowering rows below; above them passing rows first, by count. Nothing dropped. */
+const sugFitOrdered = (rows) => rows.length > 0 && rows.every((t) => /^[✓✗] /.test(String(t.fit || ''))) &&
+  rows.every((t, i, a) => {
+    if (i === 0) return true;
+    const key = (x) => [lowersOf(x) ? 1 : 0, /^✓/.test(x.fit) ? 0 : 1, /^✓/.test(x.fit) ? -fitCount(x) : 0];
+    const kp = key(a[i - 1]);
+    const kt = key(t);
+    for (let j = 0; j < 3; j++) if (kp[j] !== kt[j]) return kp[j] < kt[j];
+    return true;
+  });
+/** "Cy ✓ 4/7 | Bo ✗ You gain +1.4 lowers | …" for a failure message. */
+const fitLine = (rows) => rows.map((t) => `${t.partner} ${t.fit}${lowersOf(t) ? ' lowers' : ''}`).join(' | ');
 /** Rows with one net increase stay in the goal's order (the order before 2026-10-09). */
 const netTiesKeepGoal = (rows) => rows.every((t, i, a) => i === 0 || netOf(a[i - 1]) !== netOf(t) ||
   a[i - 1].goal.v >= t.goal.v - 0.0001);
@@ -2086,9 +2113,19 @@ const SCENARIOS = {
     }
     // A card inside the deal pop-up — the trade preview Tim named as the one
     // where the glance line matters most.
-    const dealCard = document.getElementById('dealModal').hidden
-      ? null
-      : openCard(document, '#dealModal [data-tip]');
+    // The first man in it WITH A VALUE (2026-10-31): since the checklist the
+    // deal opened here can name a bench man the sample's Value list does not
+    // carry (Vance Ferraro, measured), whose card rightly prints no Value.
+    let dealCard = null;
+    if (!document.getElementById('dealModal').hidden) {
+      for (const el of document.querySelectorAll('#dealModal [data-tip]')) {
+        el.setAttribute('data-probe', '1');
+        const c = openCard(document, '#dealModal [data-probe]');
+        el.removeAttribute('data-probe');
+        if (!dealCard) dealCard = c;
+        if (c && /^Value /.test(c.glance || '')) { dealCard = c; break; }
+      }
+    }
 
     return {
       errors, fetchCalls, before, after, deal, dealRoute, card, dealCard, ownDeal, ownOpened, dealRowGain,
@@ -2588,8 +2625,24 @@ const SCENARIOS = {
       .dispatchEvent(new globalThis.Event('click', { bubbles: true }));
     espnClick.outcomeDismissed = !!document.getElementById('espnOutcome').hidden;
 
+    // A DEFENCE ON SCREEN, last so nothing above is disturbed. No suggestion
+    // hands over a D/ST (Tim, 2026-10-16), and since the checklist (2026-10-31)
+    // no pop-up of the few rows left shows one either, so the reader ticks his
+    // own spare one (Bills D/ST, 112) in the custom box: a package draws him.
+    const cuBox = (list, id) => [...document.querySelectorAll(`#${list} input[type="checkbox"]`)]
+      .find((x) => String(x.value) === id);
+    const bills = cuBox('cuListA', '112');
+    const hisMan = [...document.querySelectorAll('#cuListB input[type="checkbox"]')][1];
+    for (const box of [bills, hisMan]) {
+      if (box) { box.checked = true; box.dispatchEvent(new globalThis.Event('change', { bubbles: true })); }
+    }
+    await settle(800);
+    document.getElementById('cuSave').dispatchEvent(new globalThis.Event('click', { bubbles: true }));
+    await settle(800);
+    const customMen = readOfferRows(document.getElementById('cuTable')).flatMap((t) => [...t.send, ...t.receive]);
+
     return {
-      errors, before, after, scalar, deal, dealLinkKeyed, espnClick, liveCard,
+      errors, before, after, scalar, deal, dealLinkKeyed, espnClick, liveCard, customMen,
       sendCard, getCard, topOffer,
       openWeek: Number(document.getElementById('weekSelect').value),
       offer: idx >= 0 ? after.trades[idx] : null,
@@ -2654,7 +2707,13 @@ SCENARIOS.weekPeek = async function weekPeek() {
   await settleGoal(document);
 
   const trades = readTrades(document);
-  const idx = trades.findIndex((t) => t.partner === 'Cy');
+  // The first Cy offer in which Cy sends one of his STARTERS, so his side has
+  // a man marked OUT (the checklist order, 2026-10-31, can put a bench-only
+  // deal first); any Cy offer when none does.
+  const cy = stub.TEAMS.find((t) => t.id === 3);
+  const cyStarter = (id) => Math.floor(id / 100) === 3 && cy.players[id % 100] && cy.players[id % 100].slot !== 20;
+  let idx = trades.findIndex((t) => t.partner === 'Cy' && t.receive.some((m) => cyStarter(m.id)));
+  if (idx < 0) idx = trades.findIndex((t) => t.partner === 'Cy');
   // RE-QUERIED EVERY TIME, never held. `paint()` rewrites the finder's tbody,
   // so a row captured before a repaint is a detached element whose click
   // bubbles to nothing — which is a silent no-op rather than a failure, and
@@ -2836,6 +2895,13 @@ SCENARIOS.threeForThree = async function threeForThree() {
       partner: t.partner,
       send: t.send.map((m) => m.id),
       receive: t.receive.map((m) => m.id),
+      fit: t.fit,
+    })),
+    near: readOfferRows(document.getElementById('tradeNearTable')).map((t) => ({
+      partner: t.partner,
+      send: t.send.map((m) => m.id),
+      receive: t.receive.map((m) => m.id),
+      fit: t.fit,
     })),
   };
 };
@@ -3322,6 +3388,8 @@ SCENARIOS.goalTitle = async function goalTitle() {
     count: text(document.getElementById('tradeCount')),
     ranked: document.getElementById('tradeTable').getAttribute('data-ranked'),
     trades: readTrades(document),
+    empty: text(document.getElementById('tradeEmpty')),
+    near: readOfferRows(document.getElementById('tradeNearTable')),
   };
   return {
     errors, fetchCalls, title, deal, dealGoal, ticked, cuPreview, cuRow, cuHeads,
@@ -3720,7 +3788,11 @@ SCENARIOS.assumeTrade = async function assumeTrade() {
   const boxes = (id) => [...$(id).querySelectorAll('input[type="checkbox"]')];
   // A 1-for-1 with the first manager the builder offers: each side's second man.
   const partner = $('cuTeamB').value;
-  const a = boxes('cuListA')[1]; a.checked = true; fire(a, 'change');
+  // Since the checklist (2026-10-31) the finder lists only a few deals, so the
+  // man you send is one it offers: then "before assuming, it offered him" bites.
+  const offered = readTrades(document).flatMap((t) => t.send.map((m) => String(m.id)));
+  const a = boxes('cuListA').find((x) => offered.includes(String(x.value))) || boxes('cuListA')[1];
+  a.checked = true; fire(a, 'change');
   const b = boxes('cuListB')[1]; b.checked = true; fire(b, 'change');
   const sent = String(a.value);
   const got = String(b.value);
@@ -3825,7 +3897,7 @@ SCENARIOS.customSuggest = async function customSuggest() {
       rows: readOfferRows($('cuSugTable')).map((r) => ({
         partner: r.partner, send: r.send.map((m) => String(m.id)), receive: r.receive.map((m) => String(m.id)),
         myGain: r.myGain, theirGain: r.theirGain, gainText: r.gainText, theirText: r.theirText, goal: r.goal && r.goal.head,
-        goalGain: r.goal ? r.goal.gain : NaN, alt: r.alt && r.alt.head,
+        goalGain: r.goal ? r.goal.gain : NaN, alt: r.alt && r.alt.head, fit: r.fit,
       })),
       buttons: [...h.querySelectorAll('tbody tr')].map((tr) => ({
         load: !!tr.querySelector('button[data-cu-load]'),
@@ -4173,7 +4245,7 @@ SCENARIOS.goalStaged = async function goalStaged() {
     const running = /playing each offer out/.test(s.count);
     if (running) sawRunning = true;
     if (running && s.trades.some((t) => t.goal && t.goal.place)) { staged = s; break; }
-    if (sawRunning && !running && /ranked by net increase/.test(s.count)) break;
+    if (sawRunning && !running && /ranked by (?:net increase|your checklist|Value change|bench value)/.test(s.count)) break;
     await settle(20);
   }
   await settleGoal(document);
@@ -4212,7 +4284,7 @@ SCENARIOS.searchOnce = async function searchOnce() {
   const max = scaledBudget(150000, machineFactor());
   const t0 = Date.now();
   const line = () => (document.getElementById('tradeCount')?.textContent || '').replace(/\s+/g, ' ');
-  const ranked = () => /ranked by net increase/.test(line()) && !/ yet: /.test(line()) &&
+  const ranked = () => /ranked by (?:net increase|your checklist|Value change|bench value)/.test(line()) && !/ yet: /.test(line()) &&
     /^(title|last)$/.test(document.getElementById('tradeTable').getAttribute('data-ranked') || '') &&
     !/playing each offer out/.test(line());
   while (Date.now() - t0 < max && !ranked()) await settle(250);
@@ -4422,7 +4494,7 @@ SCENARIOS.twoGoals = async function twoGoals() {
   const line = () => text(document.getElementById('tradeCount'));
   // The status line no longer names the goal (the order is net increase since
   // 2026-10-09), so the goal the finished ranking ran on is read off `data-ranked`.
-  const rankedOn = (chance) => /ranked by net increase/.test(line()) &&
+  const rankedOn = (chance) => /ranked by (?:net increase|your checklist|Value change|bench value)/.test(line()) &&
     document.getElementById('tradeTable').getAttribute('data-ranked') === (/title/.test(chance) ? 'title' : 'last') &&
     !/ yet: /.test(line()) && !/playing each offer out/.test(line());
   const altPending = () => document.querySelectorAll('#tradeTable .hv.alt-goal-cell.goal-wait').length;
@@ -5456,7 +5528,7 @@ if (!fresh.boot) {
   // These scenarios open on "Don't finish last" (`boot`).
   eq(
     fresh.panels.map((p) => p.heading).join(' > '),
-    'Data source > Trades ranked by net increase > All teams > Custom trades',
+    'Data source > Trades ranked by your checklist > All teams > Custom trades',
     'the panels read finder, all teams, custom — under the toolbar, and no Best combo'
   );
   ok('and the finder no longer claims a trade helps both squads — it cannot, and does not',
@@ -5520,9 +5592,10 @@ if (!fresh.boot) {
       JSON.stringify(fresh.trades.map((t) => t.theirGain)));
     // Since 2026-10-09 (Tim: "order them from top to bottom by net increase
     // (your dif+op dif)") the order is the two printed gains added, not the goal.
-    ok('offers are ranked by net increase (You gain + He gains, as printed), largest first',
-      /ranked by net increase/.test(fresh.count) && netOrdered(fresh.trades),
-      `${fresh.count.slice(0, 160)} · ${netLine(fresh.trades)}`);
+    // Since 2026-10-31 (Tim: "set up the new trade algorithm") the order is his checklist.
+    ok('offers are ranked by your checklist, most checks first, at most two per manager',
+      /ranked by your checklist/.test(fresh.count) && fitOrdered(fresh.trades),
+      `${fresh.count.slice(0, 160)} · ${fitLine(fresh.trades)}`);
   }
 
   ok('every offer names who it is with',
@@ -5583,13 +5656,14 @@ if (!fresh.boot) {
     ok('FLOOR: and the list still holds no more than forty rows', rows.length <= 40, String(rows.length));
     ok('FLOOR: the method note says so, in those words',
       // Trade audit Phase 2 (2026-10-15) added the goal-chance clause to it.
-      /A trade worth less than \+1\.0 a week to you, or that lowers your .+? by more than 0\.4 of a point, is left out/.test(fresh.tradeNote),
+      // Tim's checklist (2026-10-31): +2.0 a week and a Value change of −1.0 or better.
+      /a trade worth less than \+2\.0 a week to you, or with a Value change under −1\.0, or that lowers your .+? by more than 0\.4 of a point, .*?is left out/.test(fresh.tradeNote),
       fresh.tradeNote.slice(0, 600));
     // OUT FOR THE SEASON (2026-10-12): the same sentence goes on to say such a
     // man is in no trade. The rule itself is held in test-trade-moves.mjs and
     // test-out-for-season.mjs (2026-10-14: ESPN's own out-for-season flag).
     ok('FLOOR: and that a trade with a man out for the rest of the season is left out too',
-      /is left out, and so is any trade with a man ESPN lists as out for the rest of the season\./
+      /is left out \(one a little short is listed under Near misses\), and so is any trade with a man ESPN lists as out for the rest of the season\./
         .test(fresh.tradeNote), fresh.tradeNote.slice(300, 900));
     // THE ORDER IS NET INCREASE (2026-10-09), so the note may not say the yes-
     // chance or a rival's gain ranks a deal (audit 2026-10-14, notes fix).
@@ -5599,7 +5673,7 @@ if (!fresh.boot) {
       !/marked down by how likely he is to say yes/.test(fresh.tradeNote), fresh.tradeNote.slice(0, 600));
     ok('NOTE: a rival made stronger costs you in the chance columns, said not to be the order',
       /in the chance columns \(not the order\) a deal that makes a rival stronger costs you/.test(fresh.tradeNote) &&
-        /ordered by You gain \+ He gains/.test(fresh.tradeNote),
+        /The rest are ordered by how many checks pass/.test(fresh.tradeNote),
       fresh.tradeNote.slice(600, 1800));
     {
       const html = readFileSync(path.join(REPO, 'trade.html'), 'utf8');
@@ -7338,7 +7412,7 @@ if (!live.boot) {
     const p = team ? team.players[id % 100] : null;
     return p ? p.position : null;
   };
-  const named = [...live.men, ...live.menBefore].filter((m) => m.id !== null);
+  const named = [...live.men, ...live.menBefore, ...(live.customMen || [])].filter((m) => m.id !== null);
   const defences = named.filter((m) => posOf(m.id) === 'DST');
   const quarterbacks = named.filter((m) => posOf(m.id) === 'QB');
 
@@ -8980,14 +9054,14 @@ if (!gt.boot) {
   // "for the recommended trades, could you order them from top to bottom by net
   // increase (your dif+op dif)". It was the goal's order until then: expected
   // change in your chance (Δ chance × the chance he says yes), best first.
-  ok('the status line says the list is ranked by net increase, and names the two columns',
-    /ranked by net increase \(You gain \+ He gains\)/.test(T.count), T.count.slice(0, 300));
+  ok('the status line says the list is ranked by your checklist, two per manager',
+    /ranked by your checklist \(tap ✓\), at most two per manager/.test(T.count), T.count.slice(0, 300));
   const scored = T.trades.filter((t) => t.goal && Number.isFinite(t.goal.v) && /%/.test(t.goal.head));
   ok('every offer was played out — each goal cell holds a percentage',
     scored.length === T.trades.length, `${scored.length} of ${T.trades.length}`);
-  ok('and the rows run from the largest net increase to the smallest — the two printed gains added',
-    netOrdered(T.trades), netLine(T.trades));
-  ok('under both goals', netOrdered(gt.last.trades), netLine(gt.last.trades));
+  ok('and the rows run by the checklist — most checks met first, lowering rows below',
+    fitOrdered(T.trades), fitLine(T.trades));
+  ok('under both goals', fitOrdered(gt.last.trades), fitLine(gt.last.trades));
   ok('which is NOT the goal\'s order it had before: the expected change goes UP somewhere down the list',
     T.trades.some((t, i, a) => i > 0 && a[i - 1].goal.v < t.goal.v - 0.0001),
     T.trades.map((t) => t.goal.v.toFixed(4)).join(','));
@@ -8996,28 +9070,36 @@ if (!gt.boot) {
   // finder's points order and say "Ranked by points". It is net increase too.
   {
     const W = gt.oneWeek;
-    ok('a list the goal cannot play out is in net-increase order as well',
-      W.ranked === 'points' && W.trades.length > 5 && netOrdered(W.trades), `${W.ranked} · ${netLine(W.trades)}`);
+    // On the sample league one week is worth less than +2.0 to you in every
+    // deal (measured 2026-10-31: +1.0 to +1.7), so the list may be empty and
+    // the close ones sit under Near misses — the checklist holds there too.
+    const nearOk = W.near.length >= 2 && twoPerManager(W.near) &&
+      W.near.every((t) => /^✗ /.test(String(t.fit || '')));
+    ok('a list the goal cannot play out is in checklist order as well',
+      W.trades.length >= 2 ? W.ranked === 'points' && fitOrdered(W.trades) : W.ranked !== 'title' && W.ranked !== 'last' && nearOk,
+      `${W.ranked} · ${fitLine(W.trades)} · near ${fitLine(W.near)}`);
     // REPLACED, 2026-10-12. Was "which there too is not the order of your own
     // gain". With every row under +1.0 a week to you left out, the few rows
     // this one-week list keeps on the sample league run the same way by either
     // order, so that claim has nothing to stand on here (it is still held on
     // the full list above, against the goal's order). What is new on this list
     // is the floor itself.
-    ok('and on that list too no row is worth less than +1.0 a week to you',
-      W.trades.every((t) => headTenths(t.gainText) >= 10), netLine(W.trades));
-    ok('and its line says the order, and why there is no chance to show',
-      /ranked by net increase \(You gain \+ He gains\)\. No title chance yet: /.test(W.count) ||
-        /ranked by net increase \(You gain \+ He gains\)\. No chance of finishing last yet: /.test(W.count),
-      W.count.slice(0, 240));
+    ok('and on that list too no row is worth less than +2.0 a week to you',
+      W.trades.every((t) => headTenths(t.gainText) >= 20), netLine(W.trades));
+    ok('and its line says the order, and why there is no chance to show (or, with no row, that none helps)',
+      W.trades.length ? /ranked by your checklist \(tap ✓\), at most two per manager\. No title chance yet: /.test(W.count) ||
+        /ranked by your checklist \(tap ✓\), at most two per manager\. No chance of finishing last yet: /.test(W.count)
+        : /^No trade here helps/.test(W.empty) && nearOk,
+      (W.count || W.empty).slice(0, 240));
     ok('with nothing left saying "Ranked by points"', !/Ranked by points|not ranked by your/.test(W.count), W.count.slice(0, 240));
   }
   ok('NOR the order of your own gain alone — the other side really does count',
     T.trades.some((t, i, a) => i > 0 && a[i - 1].myGain < t.myGain),
     T.trades.map((t) => t.myGain).join(','));
-  ok('and rows with the SAME net increase keep the goal\'s order between them',
-    T.trades.some((t, i, a) => i > 0 && netOf(a[i - 1]) === netOf(t)) && netTiesKeepGoal(T.trades),
-    T.trades.map((t) => `${netOf(t) / 10}:${t.goal.v.toFixed(4)}`).join(' '));
+  // REPLACED, 2026-10-31: "rows with the same net increase keep the goal's
+  // order" — the order is the checklist now (Tim: "set up the new trade algorithm").
+  ok('and no manager has more than two rows, under either goal',
+    T.trades.length > 0 && twoPerManager(T.trades) && twoPerManager(gt.last.trades), fitLine(T.trades));
   // No yes word on the row since 2026-10-28 (Tim); it is in the cell's card.
   ok('each cell says before → after and nothing else',
     scored.every((t) => /^\d+% → \d+%$/.test(t.goal.sub)),
@@ -9078,7 +9160,7 @@ if (!gt.boot) {
     // on the row is that the column is NOT there. (The week table in the
     // pop-up is held to "after − before" just above.)
     ok('finder: no row carries a lineup before-and-after cell, and no heading names one',
-      T.trades.length > 3 && T.trades.every((t) => !t.hasLineup && t.beforeAfter === '') &&
+      T.trades.length >= 2 && T.trades.every((t) => !t.hasLineup && t.beforeAfter === '') &&
         !/Your lineup/i.test(T.heads.join(' | ')),
       `${T.heads.join(' | ')} · ${JSON.stringify(T.trades.slice(0, 2).map((t) => t.beforeAfter))}`);
     ok('finder: no figure on a row is a signed zero',
@@ -9146,7 +9228,7 @@ if (!gt.boot) {
 
   // (1) THE PANEL SAYS WHAT IT FINDS. "Trades that help both squads" / "Every
   // swap that raises both starting lineups" described the old points finder.
-  eq(T.finderTitle.split(' · ')[0], 'Trades ranked by net increase',
+  eq(T.finderTitle.split(' · ')[0], 'Trades ranked by your checklist',
     'the finder is titled by what it ranks on, not by a rule it dropped');
   ok('and neither the heading nor the lede claims both squads gain',
     !/both squads/i.test(T.finderTitle) && !/both starting lineups/i.test(T.lede),
@@ -9169,19 +9251,22 @@ if (!gt.boot) {
   // increase is the same to the tenth printed. The demo list has such rows;
   // without one there is nothing to assert, so its absence is a failure.
   const levelled = T.trades.filter((t) => t.goal && t.goal.level);
-  ok('a row is marked "=" exactly when a neighbour has the same net increase',
-    T.trades.every((t, i, a) => t.goal.level ===
-      ((i > 0 && netOf(a[i - 1]) === netOf(t)) || (i + 1 < a.length && netOf(a[i + 1]) === netOf(t)))),
-    T.trades.map((t) => `${t.goal.place}:${netOf(t) / 10}`).join(' '));
-  ok('and rows share a rank number exactly when they share a net increase',
-    T.trades.every((t, i, a) => i === 0 || (a[i - 1].goal.place === t.goal.place) === (netOf(a[i - 1]) === netOf(t))),
-    T.trades.map((t) => `${t.goal.place}:${netOf(t) / 10}`).join(' '));
-  ok('the sample league really does produce a group of level offers',
-    levelled.length > 1, `${levelled.length} rows marked level`);
-  ok('a level group shares ONE rank number, and every row in it is marked "="',
-    levelled.length > 1 && new Set(levelled.map((t) => t.goal.place)).size >= 1 &&
-      levelled.every((t) => /=$/.test(t.goal.place)),
-    levelled.map((t) => t.goal.place).join(','));
+  // SINCE 2026-10-31 LEVEL MEANS THE SAME CHECKLIST PLACE (js/trade-fit.js
+  // `sameFitPlace`: checks met, his This week, the You-gain band). The tag
+  // carries the first of those, so a level row shares it with a neighbour.
+  ok('a row is marked "=" only when a neighbour has the same checklist count',
+    T.trades.every((t, i, a) => !t.goal.level ||
+      ((i > 0 && fitCount(a[i - 1]) === fitCount(t)) || (i + 1 < a.length && fitCount(a[i + 1]) === fitCount(t)))),
+    T.trades.map((t) => `${t.goal.place}:${t.fit}`).join(' '));
+  ok('and rows sharing a rank number share a checklist count',
+    T.trades.every((t, i, a) => i === 0 || a[i - 1].goal.place !== t.goal.place || fitCount(a[i - 1]) === fitCount(t)),
+    T.trades.map((t) => `${t.goal.place}:${t.fit}`).join(' '));
+  ok('every finder row carries its checklist tag, "✓ n/7"',
+    T.trades.length > 0 && T.trades.every((t) => Number.isFinite(fitCount(t))), fitLine(T.trades));
+  ok('a level row is marked "=", and a rank number is never shared without it',
+    levelled.every((t) => /=$/.test(t.goal.place)) &&
+      T.trades.every((t, i, a) => i === 0 || a[i - 1].goal.place !== t.goal.place || /=$/.test(t.goal.place)),
+    T.trades.map((t) => t.goal.place).join(','));
   {
     // Rows sharing a rank must sit next to each other AND keep the strict order.
     const groups = new Map();
@@ -9215,7 +9300,9 @@ if (!gt.boot) {
     T.note.slice(T.note.indexOf('It still moves'), T.note.indexOf('It still moves') + 700));
   ok('and says how the list is ordered now, not how it was',
     // Trade audit Phase 2 (2026-10-15): the goal-chance guard is part of the order.
-    /The list is ordered by You gain \+ He gains, largest first, except that a deal which lowers your .+? by more than 0\.4 of a point goes below the rest; equal sums share a rank\./.test(T.note) &&
+    // Tim's checklist (2026-10-31).
+    /The rest are ordered by how many checks pass/.test(T.note) && /At most two per manager\./.test(T.note) &&
+      !/ordered by You gain \+ He gains/.test(T.note) &&
       !/The list is ranked by what each deal does/.test(T.note) && !/shown as level/.test(T.note),
     T.note.slice(0, 300));
   ok('and no column heading still says the list is ranked by a chance',
@@ -9310,8 +9397,8 @@ if (!gt.boot) {
     JSON.stringify(L.trades.slice(0, 2).map((t) => t.goal && [t.goal.index, t.goal.half])));
   ok('and the span drops back to the regular season — the playoffs cannot move last place',
     L.heads.some((h) => h === `Gain a week (weeks ${firstWeek}–13)`), L.heads.join(' | '));
-  ok('the status line still says net increase under the new goal',
-    /ranked by net increase \(You gain \+ He gains\)\./.test(L.count), L.count.slice(0, 300));
+  ok('the status line still says the checklist under the new goal',
+    /ranked by your checklist \(tap ✓\), at most two per manager\./.test(L.count), L.count.slice(0, 300));
   ok('and the method says why the regular season alone is priced',
     /regular-season<\/strong>|regular-season table/.test(L.note) || /bottom of the regular-season/.test(L.note),
     L.note.slice(0, 500));
@@ -9741,8 +9828,9 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
       ['assumed', sg.asm.rows], ['assumed, sending the man you got', sg.asm.gotRows]]) {
       // With the finder's goal guard (Tim, 2026-10-14): a row that lowers your
       // goal chance by more than the band sits below every row that does not.
-      ok(`SUGGESTED: ${what} - the rows run from the largest net increase (You gain + He gains) down, goal-lowering rows below`,
-        guardNetOrdered(L.rows), `${netLine(L.rows)} · goal ${L.rows.map((r) => `${(r.goal && r.goal.head) || r.goal}`
+      // Tim's checklist (2026-10-31): passing rows first, by checks met; nothing dropped.
+      ok(`SUGGESTED: ${what} - the rows run by the checklist (passing rows first, most checks first), goal-lowering rows below`,
+        sugFitOrdered(L.rows), `${fitLine(L.rows)} · goal ${L.rows.map((r) => `${(r.goal && r.goal.head) || r.goal}`
           + ` [${Number.isFinite(r.goalGain) ? (r.goalGain * 100).toFixed(2) : '?'}${lowersOf(r) ? ' lowers' : ''}]`).join(', ')}`);
     }
     ok('SUGGESTED: and somewhere that is not the order of your own gain',
@@ -9910,8 +9998,13 @@ if (!gs.boot) {
   ok('no console errors while ranking in stages', gs.errors.length === 0, gs.errors.slice(0, 2).join(' | '));
   ok('the page was caught while it was still playing offers out', gs.sawRunning);
   const S = gs.staged;
-  ok('goal-ranked rows reach the table BEFORE the whole list is scored', !!S,
-    'the table showed no rank number until the ranking had finished');
+  // Since the checklist (2026-10-31) the demo finder lists only a few deals,
+  // two per manager at most, so the staged top ten IS the whole list: it is
+  // ranked in one go. The staged repaint is checked whenever a list runs longer.
+  const short = gs.final.trades.length <= 10;
+  ok(short ? 'a list of ten or fewer is ranked in one go, never shown half-ranked'
+    : 'goal-ranked rows reach the table BEFORE the whole list is scored', short ? !S : !!S,
+  short ? `${gs.final.trades.length} rows, staged ${!!S}` : 'the table showed no rank number until the ranking had finished');
   if (S) {
     const m = S.count.match(/\((\d+) of (\d+)\)/);
     ok('and it was genuinely part-way: fewer offers played out than there are',
@@ -9921,8 +10014,8 @@ if (!gs.boot) {
     ok('the ranked rows are the top of the table, in one block',
       ranked.length >= 10 && S.trades.slice(0, ranked.length).every((t) => t.goal && t.goal.place),
       S.trades.map((t) => (t.goal && t.goal.place) || '·').join(' '));
-    ok('in the order of their net increase, largest first',
-      netOrdered(ranked), netLine(ranked));
+    ok('in checklist order (most checks first), two per manager',
+      fitOrdered(ranked), fitLine(ranked));
     ok('every row under them is marked unranked', firstUnranked === ranked.length &&
       S.rows.slice(ranked.length).every((r) => r.unranked),
       `first unranked ${firstUnranked}, ranked ${ranked.length}, rows ${S.rows.length}`);
@@ -9934,16 +10027,16 @@ if (!gs.boot) {
     // are not: every row on screen, faded or not, is already in that order.
     ok('the status line says it is still playing offers out, and no longer speaks of points order',
       /playing each offer out \(\d+ of \d+\)/.test(S.count) && !/points order/.test(S.count), S.count);
-    ok('and the faded rows are ALREADY in net-increase order, under the ranked ones',
-      netOrdered(S.trades), netLine(S.trades));
+    ok('and the faded rows are ALREADY in checklist order, under the ranked ones',
+      fitOrdered(S.trades), fitLine(S.trades));
   }
   const F = gs.final;
   ok('once finished, nothing is left marked unranked', F.rows.length > 0 && F.rows.every((r) => !r.unranked),
     `${F.rows.filter((r) => r.unranked).length} of ${F.rows.length}`);
   ok('and every row has its rank', F.trades.every((t) => t.goal && t.goal.place),
     F.trades.map((t) => (t.goal && t.goal.place) || '·').join(' '));
-  ok('with the line back to plain "ranked by net increase"',
-    /ranked by net increase/.test(F.count) && !/points order/.test(F.count), F.count);
+  ok('with the line back to plain "ranked by your checklist"',
+    /ranked by (?:net increase|your checklist|Value change|bench value)/.test(F.count) && !/points order/.test(F.count), F.count);
 }
 
 // ---- ONE WEEKLY SEARCH PER LOAD (trade plan Phase 3, 2026-09-24) -----------
@@ -9958,7 +10051,7 @@ for (const goal of ['title', 'last']) {
   ok(`search-once (${goal}): no console errors`, so.errors.length === 0, so.errors.slice(0, 2).join(' | '));
   eq(so.searches, 1, `a live load under "${goal}" runs ONE weekly search, not a points search and then another`);
   ok(`search-once (${goal}): and it still ends ranked by the goal, with offers`,
-    so.trades > 0 && /ranked by net increase/.test(so.count) && !/ yet: /.test(so.count), so.count.slice(0, 200));
+    so.trades > 0 && /ranked by (?:net increase|your checklist|Value change|bench value)/.test(so.count) && !/ yet: /.test(so.count), so.count.slice(0, 200));
 }
 
 // ---- THE PAGE STAYS ALIVE WHILE IT RANKS (2026-10-06) ----------------------
@@ -10039,10 +10132,10 @@ if (!gl.boot) {
     JSON.stringify(gl.trades.slice(0, 2).map((t) => t.goal && t.goal.half)));
   ok('and every live offer was played out and ranked',
     gl.trades.length > 0 && gl.trades.every((t) => t.goal && /%/.test(t.goal.head)) &&
-      /ranked by net increase/.test(gl.count),
+      /ranked by (?:net increase|your checklist|Value change|bench value)/.test(gl.count),
     `${gl.count.slice(0, 200)} · ${JSON.stringify(gl.trades.slice(0, 2).map((t) => t.goal))}`);
-  ok('in order of the net increase (You gain + He gains, as printed), largest first',
-    netOrdered(gl.trades), netLine(gl.trades));
+  ok('in checklist order (most checks first), two per manager',
+    fitOrdered(gl.trades), fitLine(gl.trades));
   ok('and rows with the same net increase keep the goal\'s order',
     netTiesKeepGoal(gl.trades), netLine(gl.trades));
   ok('and the live bracket weeks (15–16) are in the priced span',
@@ -10104,8 +10197,8 @@ if (!gl.boot) {
     ok('and the sample league offers both colours there, or the check above is vacuous',
       A.trades.some((t) => /\bpos\b/.test((t.alt || NA).cls)) || A.trades.some((t) => /\bneg\b/.test((t.alt || NA).cls)),
       A.trades.map((t) => (t.alt || NA).cls).slice(0, 8).join(' '));
-    ok('the ranking is unchanged by the preview column: still net increase, largest first',
-      netOrdered(A.trades), netLine(A.trades));
+    ok('the ranking is unchanged by the preview column: still checklist order',
+      fitOrdered(A.trades), fitLine(A.trades));
     ok('the method names what the preview column is and what it is priced over',
       /Δ last chance/.test(A.note) && /regular season/.test(A.note.slice(A.note.indexOf('Δ last chance'))),
       A.note.slice(A.note.indexOf('Δ last chance'), A.note.indexOf('Δ last chance') + 300));
@@ -10200,7 +10293,7 @@ if (!gl.boot) {
         t.chance.halves[0].label === 'First' && t.chance.halves[0].cls.includes('goal-cell') &&
         t.chance.halves[1].label === 'Last' && t.chance.halves[1].cls.includes('alt-goal-cell')),
       JSON.stringify(A.trades.slice(0, 2).map((t) => t.chance && t.chance.halves.map((h) => [h.label, h.cls.join('.')]))));
-    ok('and the list is ranked again', /ranked by net increase/.test(B.count), B.count.slice(0, 200));
+    ok('and the list is ranked again', /ranked by (?:net increase|your checklist|Value change|bench value)/.test(B.count), B.count.slice(0, 200));
     {
       const key = (t) => `${t.partner}|${names(t.send)}|${names(t.receive)}`;
       ok('in exactly the order the top control produces',
@@ -10460,9 +10553,14 @@ if (!gl.boot) {
   ok('the 3-for-3 scenario boots', !three.boot, three.boot);
   if (!three.boot) {
     ok('no console errors on the 3-for-3 stub', three.errors.length === 0, three.errors.slice(0, 2).join(' | '));
-    const all = three.trades.map((t) => `${t.partner}: ${t.send.join(',')} > ${t.receive.join(',')}`).join(' | ');
-    const row = three.trades.find((t) => t.partner === 'Di' && t.send.length === 3 && t.receive.length === 3);
-    ok('a finder row is a 3-for-3 with Di', !!row, all);
+    // Since the checklist (2026-10-31, at most two rows per manager, You gain
+    // +2/wk) the stub's 3-for-3 with Di is worth +1.0 a week to Ana, so it is a
+    // near miss (measured): it must still reach the page, as a row or under
+    // Near misses.
+    const shown = [...three.trades, ...(three.near || [])];
+    const all = shown.map((t) => `${t.partner}: ${t.send.join(',')} > ${t.receive.join(',')} ${t.fit}`).join(' | ');
+    const row = shown.find((t) => t.partner === 'Di' && t.send.length === 3 && t.receive.length === 3);
+    ok('a finder row or near miss is a 3-for-3 with Di', !!row, all);
     ok('three of Ana men for three of Di men', !!row &&
       row.send.every((id) => Math.floor(id / 100) === 1) && row.receive.every((id) => Math.floor(id / 100) === 4), all);
     ok('with Pitts, the ~10-a-week TE, in it', !!row && row.receive.includes(405), all);
@@ -10470,8 +10568,10 @@ if (!gl.boot) {
 }
 
 if (fails.length) {
-  for (const f of fails.slice(0, 25)) console.log('FAIL ' + f);
-  if (fails.length > 25) console.log(`… and ${fails.length - 25} more`);
+  // TR_FAIL_CAP: how many failures to print (25 unless set).
+  const cap = Number(process.env.TR_FAIL_CAP) || 25;
+  for (const f of fails.slice(0, cap)) console.log('FAIL ' + f);
+  if (fails.length > cap) console.log(`… and ${fails.length - cap} more`);
 }
 console.log(`${pass} passed, ${fails.length} failed`);
 process.exit(fails.length ? 1 : 0);
