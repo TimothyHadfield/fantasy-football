@@ -390,10 +390,27 @@ const fmt = (n) =>
 
 const OUT_MARKS = { OUT: 'OUT', INJURY_RESERVE: 'IR', SUSPENSION: 'SUSP' };
 
-/** 'OUT' / 'IR' / 'SUSP' for a man ESPN has ruled out, '' for anyone else. */
-export function outMark(status) {
-  return OUT_MARKS[status] || '';
+/**
+ * 'OUT' / 'IR' / 'SUSP' for a man ESPN has ruled out, '' for anyone else.
+ *
+ * HE IS DUE BACK (Tim, 2026-11-04: "mark those weeks as back wk 12"): given
+ * the week and his return week (`backWeek`, set by js/season.js on every week
+ * from the current one on), a week before it reads "back wk 12" instead.
+ */
+export function outMark(status, week = null, backWeek = null) {
+  const mark = OUT_MARKS[status] || '';
+  if (mark && Number.isFinite(backWeek) && week !== null && Number(week) < backWeek) return `back wk ${backWeek}`;
+  return mark;
 }
+
+/**
+ * A week's projection that is OUR ESTIMATE, not ESPN's (`projEst`, js/season.js
+ * "HE IS DUE BACK"): the number with a "~" in front, the way the site already
+ * writes an approximate return date ("~Nov 25").
+ */
+export const estText = (v) => `~${fmt(v)}`;
+/** The words for an estimated week, for a title or an aria-label. */
+export const EST_WORDS = 'estimate: ESPN has no projection for him yet (his last one before he was hurt)';
 
 /**
  * His NFL team's bye week, or null when it is not known.
@@ -422,7 +439,7 @@ export function byeWeekOf(p, byes) {
  * @param {*} v the week's value
  * @param {{week?:number, byeWeek?:number|null, injuryStatus?:string, demo?:boolean}} ctx
  */
-export function zeroKind(v, { week = null, byeWeek = null, injuryStatus = null, demo = false } = {}) {
+export function zeroKind(v, { week = null, byeWeek = null, injuryStatus = null, demo = false, backWeek = null } = {}) {
   // NO NUMBER AT ALL in his known bye week is a bye too: ESPN sends no D/ST
   // projection for a bye week already past (verified 2026-09-16). Only with
   // the bye week known — an unknown bye never turns a null into a claim.
@@ -434,6 +451,8 @@ export function zeroKind(v, { week = null, byeWeek = null, injuryStatus = null, 
     if (!Number.isFinite(byeWeek)) return 'bye';
     if (week === byeWeek) return 'bye';
   }
+  // Due back by this week (`backWeek`): a plain 0, never labelled IR.
+  if (Number.isFinite(backWeek) && week !== null && Number(week) >= backWeek) return 'zero';
   return outMark(injuryStatus) ? 'out' : 'zero';
 }
 
@@ -462,7 +481,9 @@ export function projToken(v, demo = false, ctx = {}) {
   if (zero === 'bye') return { text: 'Bye', kind: 'bye' };
   // A ruled-out zero is the number AND the word, and a class of its own: the
   // word is what says it is not a bye, so colour is never the only cue.
-  if (zero === 'out') return { text: fmt(v), kind: 'out', mark: outMark(ctx.injuryStatus) };
+  if (zero === 'out') return { text: fmt(v), kind: 'out', mark: outMark(ctx.injuryStatus, ctx.week ?? null, ctx.backWeek ?? null) };
+  // Our estimate for a week ESPN leaves at 0 after his return (js/season.js).
+  if (ctx.est === true && typeof v === 'number') return { text: estText(v), kind: 'num', est: true };
   return { text: fmt(v), kind: 'num' };
 }
 
@@ -566,6 +587,11 @@ export function weekRun({
   // and the centre is the old one (future weeks above 0). A card being opened
   // gets it from the page's value source (`centredRun`).
   fill = null,
+  // HE IS DUE BACK (Tim, 2026-11-04): his return week (one, or one per week as
+  // the roster entries carry it, `backWeek`), and which weeks' numbers are our
+  // estimate rather than ESPN's (`projEst`). See js/season.js "HE IS DUE BACK".
+  backWeek = null,
+  estimates = null,
 } = {}) {
   if (!weeks.length) return null;
 
@@ -615,8 +641,15 @@ export function weekRun({
 
   // The tokens first, because the scale is built out of them: what counts as a
   // number is `projToken`'s answer and nobody else's.
+  const backAt = (i) => {
+    const b = Array.isArray(backWeek) ? backWeek[i] : backWeek;
+    return Number.isFinite(b) ? b : null;
+  };
   const tokens = weeks.map((week, i) =>
-    projToken(projections[i], demo, { week, byeWeek, injuryStatus: statusAt(i) }));
+    projToken(projections[i], demo, {
+      week, byeWeek, injuryStatus: statusAt(i), backWeek: backAt(i),
+      est: Array.isArray(estimates) && estimates[i] === true,
+    }));
 
   // THE BASELINE IS HIS WEEKS STILL TO COME (Tim, 2026-10-22: "make it so that
   // the base number everything is being judged off of is just future proj weeks
@@ -724,6 +757,7 @@ export function weekRun({
   RUN_ARGS.set(out, {
     heading, weeks, projections, actuals, currentWeek, demo, byeWeek, injuryStatus,
     playoffWeeks, starts, splitAfter, startsNote, vsWeeks, vsName, deadlineWeek, heat, fill,
+    backWeek, estimates,
   });
   return out;
 }
@@ -1119,6 +1153,18 @@ const touchSkips = (cell) => coarsePointer() && cell.hasAttribute(TIP_HOVER_ATTR
 
 const numOr = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
+/**
+ * `weekRun`'s `backWeek` and `estimates`, off his entry in each week (null =
+ * not read / not held): what js/season.js put there for a man due back.
+ */
+export function returnArgs(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  return {
+    backWeek: list.map((q) => (q && Number.isFinite(q.backWeek) ? q.backWeek : null)),
+    estimates: list.map((q) => !!q && q.projEst === true && q.done !== true),
+  };
+}
+
 export function playerCardFromWeeks(weekTeams, player, {
   weeks = null, currentWeek = null, byes = null, demo = false, playoffWeeks = [],
   heading = null, href = undefined, openLabel = null, id = null,
@@ -1180,6 +1226,7 @@ export function playerCardFromWeeks(weekTeams, player, {
     byeWeek: byeWeekOf(p, byes),
     injuryStatus: found.map((q) => (q && q.injuryStatus) || p.injuryStatus || null),
     playoffWeeks,
+    ...returnArgs(found),
   });
 
   // ESPN's three numbers: off the current week's entry, else the latest week
@@ -1432,9 +1479,11 @@ function lineHtml(cols, vsName = '') {
   const projs = cols
     .map((c) => {
       const h = c.heat;
-      const label = h ? ` aria-label="${esc(`${c.proj.text} — ${h.words}`)}"` : '';
+      const words = [c.proj.est ? EST_WORDS : '', h ? h.words : ''].filter(Boolean).join('; ');
+      const label = words ? ` aria-label="${esc(`${c.proj.text} — ${words}`)}"` : '';
       return `<td${extra(c, `k-${c.proj.kind}${h ? ` ${h.cls}` : ''}`)}${label}>${esc(c.proj.text)}` +
-        `${c.proj.mark ? `<span class="tc-mk">${esc(c.proj.mark)}</span>` : ''}</td>`;
+        // "back wk 12" stacks on two lines ("back" / "wk 12") so the column keeps its width.
+        `${c.proj.mark ? `<span class="tc-mk">${esc(c.proj.mark).replace(/^back /, 'back<br>')}</span>` : ''}</td>`;
     }).join('');
   const acts = cols
     .map((c) => `<td${extra(c, `a-${c.act.kind}`)}>${esc(c.act.text)}</td>`).join('');

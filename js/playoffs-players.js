@@ -54,6 +54,7 @@ import { enableSort, resort } from './sortable.js';
 // The site's one zero rule — a 0.00 is a bye, a man ruled out, or a real zero.
 import {
   zeroKind, byeWeekOf, outMark, playerCardFromWeeks, registerRun, tipAttr, wireTips, clearRuns, setValueSource,
+  estText, EST_WORDS,
 } from './player-card.js';
 import { wirePops, hidePop } from './pop.js';
 import { playerHref, tradeManHref } from './links.js';
@@ -266,6 +267,7 @@ async function mount(host, opts = {}) {
     proj: new Map(),          // week -> Map(playerId -> number|null)
     held: new Map(),          // week -> the squads and the wire as read, for the player card
     status: new Map(),        // week -> Map(playerId -> his injury status THAT week)
+    ret: new Map(),           // week -> Map(playerId -> { back, est }): due back from IR (js/season.js)
     failed: new Set(),        // weeks with neither read
     read: { done: 0, of: 0 },
     error: '',
@@ -308,6 +310,7 @@ async function mount(host, opts = {}) {
     state.proj = new Map();
     state.held = new Map();
     state.status = new Map();
+    state.ret = new Map();
     state.failed = new Set();
     state.teams = [];
     state.owners = new Map();
@@ -330,12 +333,16 @@ async function mount(host, opts = {}) {
   function absorb(week, teams, wire) {
     const byId = state.proj.get(week) || new Map();
     const status = state.status.get(week) || new Map();
+    const ret = state.ret.get(week) || new Map();
     const take = (p) => {
       if (p.playerId === null || p.playerId === undefined) return;
       const v = p.done === true && num(p.pregame) !== null ? p.pregame : p.projected;
       if (!byId.has(p.playerId) || byId.get(p.playerId) === null) {
         byId.set(p.playerId, num(v));
         status.set(p.playerId, p.injuryStatus || null);
+        if (Number.isFinite(p.backWeek)) {
+          ret.set(p.playerId, { back: p.backWeek, est: p.projEst === true && p.done !== true });
+        }
       }
     };
     for (const t of teams || []) for (const p of t.players || []) take(p);
@@ -345,6 +352,13 @@ async function mount(host, opts = {}) {
     state.held.set(week, [...(teams || []), { players: wire || [] }]);
     state.proj.set(week, byId);
     state.status.set(week, status);
+    state.ret.set(week, ret);
+  }
+
+  /** His IR return in that week, if js/season.js gave him one: `{ back, est }` or null. */
+  function retFor(p, week) {
+    const m = state.ret.get(week);
+    return (m && m.get(p.playerId)) || null;
   }
 
   /** Who is listed, and whose: the anchor week's squads, then the wire's men nobody holds. */
@@ -819,8 +833,10 @@ async function mount(host, opts = {}) {
         ? `<td class="muted" title="Week ${week} did not load — ESPN refused it. Reload the page to try again.">${dash}</td>`
         : `<td class="wait" title="Week ${week} has not been read yet.">·</td>`;
     }
+    const back = retFor(p, week);
     const zero = zeroKind(v, {
       week, byeWeek: byeWeekOf(p, state.byes), injuryStatus: statusFor(p, week), demo: state.isDemo,
+      backWeek: back ? back.back : null,
     });
     if (zero === 'bye') {
       return `<td class="bye" data-v="0" title="${esc(p.name)} is on bye in week ${week}. It counts as 0 in Playoff.">Bye</td>`;
@@ -831,7 +847,7 @@ async function mount(host, opts = {}) {
     if (v === 0) {
       const why = `${esc(p.name)} is projected at 0.0 in week ${week}. It counts as 0 in Playoff.`;
       if (zero === 'out') {
-        return `<td class="zero-out" data-v="0" title="${why}">0.0 <span class="zmark">${esc(outMark(statusFor(p, week)))}</span></td>`;
+        return `<td class="zero-out" data-v="0" title="${why}">0.0 <span class="zmark">${esc(outMark(statusFor(p, week), week, back ? back.back : null))}</span></td>`;
       }
       return `<td class="zero" data-v="0" title="${why}">0.0</td>`;
     }
@@ -842,7 +858,10 @@ async function mount(host, opts = {}) {
       return `<td title="No Value can be said at ${esc(p.position)}.">${dash}</td>`;
     }
     const heat = heatOf(n, scale);
-    return `<td${heat ? ` class="${heat.cls}"` : ''} data-v="${n}">${fmt(n)}${heatMarkHtml(heat)}</td>`;
+    const est = !!back && back.est;
+    return `<td${heat ? ` class="${heat.cls}"` : ''} data-v="${n}"` +
+      `${est ? ` data-est="1" title="${esc(p.name)}, week ${week}: ${EST_WORDS}."` : ''}>` +
+      `${est ? estText(n) : fmt(n)}${heatMarkHtml(heat)}</td>`;
   }
 
   function rowHtml(r, weeks, heat) {

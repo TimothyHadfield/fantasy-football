@@ -39,6 +39,9 @@ import * as value from './value.js';
 // file asks. See "THE TRADE OFFERS WAITING" below.
 import * as pending from './pending.js';
 import * as outcome from './trade-outcome.js';
+// A returning man's return week, and the estimate for ESPN's zeros after it:
+// pure, see "HE IS DUE BACK" below.
+import * as gains from './injury-gains.js';
 // ESPN's injury classes, read one way across the site. See "WHO IS OUT FOR THE
 // SEASON" below.
 import { healthy, injuryClass } from './injury.js';
@@ -958,7 +961,7 @@ export async function fetchWeekRosters(week, { byes, fresh = false, raw = false,
   const { final, ...got } = await readWeekRosters(week, { byes, fresh });
   if (raw) return got;
   const teams = await annotateTeams(week, got.teams, { final: final === true });
-  const out = await withInjuryDetails(teams);
+  const out = await withReturnWeeks(week, await withInjuryDetails(teams));
   return { ...got, teams: assumed ? await withAssumed(week, out) : out };
 }
 
@@ -1062,6 +1065,7 @@ let injuryHeld = null;   // { key, byId: Map, at, asked: Set, jobs: Promise[] }
 /** Forget what this page holds (Sync now, tests). */
 function forgetInjuryMemo() {
   injuryHeld = null;
+  forgetReturnMemo();
 }
 
 /**
@@ -1122,6 +1126,130 @@ async function withInjuryDetails(teams) {
       if (Array.isArray(t.starters)) out.starters = t.starters.map(tag);
       if (Array.isArray(t.bench)) out.bench = t.bench.map(tag);
       return out;
+    });
+  } catch {
+    return teams;
+  }
+}
+
+// ===========================================================================
+// HE IS DUE BACK: ESPN'S ZEROS AFTER HIS RETURN WEEK (Tim, 2026-11-04)
+// ===========================================================================
+//
+// "mark those weeks as back wk 12 … fill in those weeks 12+ with numbers that
+// aren't 0 (and still reasonably accurate), and also make sure to not label
+// those weeks as IR". The rule and the backtest behind the estimate are in
+// js/injury-gains.js ("THE WEEKS AFTER HE IS DUE BACK"); this is where it is
+// applied, ONCE, on every roster read on its way out (after `withInjuryDetails`,
+// before the assumed trade), so every page that prices a week by `projected` —
+// Value, the Trade finder, the grids, the 17-week preview — gets the same
+// number without knowing. Stored and synced copies stay exactly ESPN's.
+//
+// WHAT IT READS: his return DATE (`injuryDetails`), the NFL kickoffs to turn it
+// into a week (the synced copy's own `proKickoffs` on the phone; on a laptop
+// the bye read's payload), the current week (the schedule), and his projection
+// in the weeks before the zeros — from the synced copy, this browser's stored
+// weeks, or his line off every roster (`looseLine`). Only a laptop missing that
+// week asks ESPN for it (`fetchLooseWeeks`: one small read a week, kept for the
+// season once the week is final). The phone asks nothing (rule 20).
+
+let returnHeld = null; // { key, est: Map<id, Promise<{est,week}|null>>, inputs: Promise }
+
+function forgetReturnMemo() {
+  returnHeld = null;
+}
+
+/** The man's entry in a week's teams, or null. */
+const entryIn = (teams, id) => {
+  for (const t of teams || []) {
+    const hit = ((t && t.players) || []).find((q) => q && String(q.playerId) === String(id));
+    if (hit) return hit;
+  }
+  return null;
+};
+
+/** His projection in a played week: number, null (no line), undefined (not held). */
+function heldProjection(cfg, down, id, week) {
+  if (down) {
+    const synced = syncedWeek(down, week);
+    if (!synced) return null;
+    const q = entryIn(synced.teams, id);
+    return q ? (typeof q.projected === 'number' ? q.projected : null) : null;
+  }
+  const kept = store.peekWeek(cfg.leagueId, cfg.season, week);
+  const q = kept && kept.teams ? entryIn(kept.teams, id) : null;
+  if (q) return typeof q.projected === 'number' ? q.projected : null;
+  const l = looseLine(id, week);
+  if (l === undefined) return undefined;
+  return l && typeof l.projected === 'number' ? l.projected : null;
+}
+
+/** His estimate, once per page: see `lastHealthy`. Never throws. */
+function estimateOf(cfg, down, p, cur, bye) {
+  const key = `${cfg.leagueId}::${cfg.season}::${cur}`;
+  if (!returnHeld || returnHeld.key !== key) returnHeld = { key, est: new Map(), inputs: null };
+  const id = String(p.playerId);
+  if (!returnHeld.est.has(id)) {
+    returnHeld.est.set(id, (async () => {
+      for (let tries = 0; tries <= gains.EST_LOOKBACK; tries++) {
+        const got = gains.lastHealthy({ before: cur, bye, projOf: (w) => heldProjection(cfg, down, id, w) });
+        if (!got || !('need' in got)) return got;
+        if (down) return null;
+        await fetchLooseWeeks([id], [got.need]);
+        // A read that came back empty is null in `looseLine`: the walk goes on.
+      }
+      return null;
+    })().catch(() => null));
+  }
+  return returnHeld.est.get(id);
+}
+
+/** Kickoffs and byes for the fill: the synced copy's own, or this page's reads. */
+async function returnInputs(down) {
+  if (down) {
+    const k = down.schedule && down.schedule.proKickoffs;
+    return {
+      kickoffs: k && typeof k === 'object' && Object.keys(k).length ? k : null,
+      byes: down.byes && Object.keys(down.byes).length ? down.byes : {},
+    };
+  }
+  const [kickoffs, byes] = await Promise.all([fetchProKickoffs(), fetchByeWeeks()]);
+  return { kickoffs: kickoffs && Object.keys(kickoffs).length ? kickoffs : null, byes: byes || {} };
+}
+
+/** A week's teams with ESPN's zeros after a man's return week filled. Never throws. */
+async function withReturnWeeks(week, teams) {
+  try {
+    if (!Array.isArray(teams) || !teams.length) return teams;
+    const cfg = storable();
+    if (!cfg || pastSeason()) return teams;
+    const due = (p) => !!p && p.injuryDetails && p.injuryDetails.outForSeason === false &&
+      typeof p.injuryDetails.returnDate === 'string';
+    const men = teams.flatMap((t) => ((t && t.players) || []).filter(due));
+    if (!men.length) return teams;
+    if (!(await decidedKnown())) return teams;
+    const cur = currentWeek();
+    if (cur === null || Number(week) < cur) return teams;
+    const down = await cloudDown();
+    const { kickoffs, byes } = await returnInputs(down);
+    if (!kickoffs) return teams;
+    const backs = new Map();
+    const ests = new Map();
+    for (const p of men) {
+      const back = gains.returnWeek(p.injuryDetails, kickoffs, p.proTeamId);
+      if (typeof back !== 'number') continue;
+      backs.set(String(p.playerId), back);
+      if (Number(week) > cur && Number(week) >= back && p.projected === 0) {
+        const bye = Number(byes[p.proTeamId]) || null;
+        ests.set(String(p.playerId), await estimateOf(cfg, down, p, cur, bye));
+      }
+    }
+    if (!backs.size) return teams;
+    return gains.fillReturnWeeks(week, teams, {
+      currentWeek: cur,
+      backOf: (p) => (due(p) ? backs.get(String(p.playerId)) ?? null : null),
+      estOf: (p) => ests.get(String(p.playerId)) || null,
+      byeOf: (p) => Number(byes[p.proTeamId]) || null,
     });
   } catch {
     return teams;
@@ -1472,8 +1600,9 @@ async function weeksRostersNow(weeks, { onProgress, fresh = false, assumed = tru
       if (got) {
         noteRead(week, got.at);
         // Stored raw, handed out annotated — the same as `fetchWeekRosters`
-        // (the assumed trade included).
-        const teams = await annotateTeams(week, got.teams);
+        // (ESPN's injury word, a returning man's weeks and the assumed trade
+        // included).
+        const teams = await withReturnWeeks(week, await withInjuryDetails(await annotateTeams(week, got.teams)));
         out.set(Number(week), assumed ? await withAssumed(week, teams) : teams);
       }
       done++;

@@ -50,6 +50,7 @@
 
 import {
   weekRun, registerRun, tipAttr, clearRuns, zeroKind, byeWeekOf, outMark,
+  returnArgs, estText, EST_WORDS,
 } from './player-card.js';
 // A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
 import './loose-weeks.js';
@@ -300,6 +301,8 @@ export function seasonRunData(index, p, marks = null) {
     byeWeek: byeWeekOf(p, state.byes),
     injuryStatus: weeks.map((w) => seasonStatus(index, w, p)),
     playoffWeeks: state.poWeeks,
+    // Due back from IR: "back wk N" before, "~N" estimates from then on.
+    ...returnArgs(weeks.map((w) => returnEntry(w, p.playerId))),
   });
 }
 
@@ -362,13 +365,36 @@ export function startMarks(p, starters, hist, team) {
 /** A week cell given its man's card: a click (or Enter) opens his Players row. */
 export const withPlayerCard = (td, key) => withCard(td, tipAttr(key, { go: true }));
 
+/**
+ * His entry in that week's rosters, for what js/season.js "HE IS DUE BACK"
+ * put on it: `backWeek` (the week ESPN expects him back) and `projEst` (the
+ * week's number is our estimate, not ESPN's). Null when no roster holds him.
+ */
+export function returnEntry(week, playerId) {
+  const teams = state.seasonWeeks && state.seasonWeeks.get(week);
+  for (const t of teams || []) {
+    const q = (t.players || []).find((x) => x.playerId === playerId);
+    if (q) return q;
+  }
+  return null;
+}
+const backOf = (week, p) => {
+  const q = p && returnEntry(week, p.playerId);
+  return q && Number.isFinite(q.backWeek) ? q.backWeek : null;
+};
+const estAt = (week, p) => {
+  const q = p && returnEntry(week, p.playerId);
+  return !!q && q.projEst === true && q.done !== true;
+};
+
 /** How a zero in this man's week reads: see `zeroKind` in js/player-card.js. */
-export function zeroOf(v, week, p, status = p.injuryStatus) {
+export function zeroOf(v, week, p, status = p.injuryStatus, backWeek = backOf(week, p)) {
   return zeroKind(v, {
     week,
     byeWeek: byeWeekOf(p, state.byes),
     injuryStatus: status,
     demo: state.isDemo,
+    backWeek,
   });
 }
 
@@ -540,8 +566,10 @@ export function seasonCell(v, week, p, isNow, start = null, status = p.injurySta
         `${week}. ${esc(p.position)} has no waiver line, so he has no Value.${says}">—</td>`;
     }
     if (v !== 0) {
-      return `<td class="${cls()}" data-v="${worth}" title="${esc(name)}’s Value in week ${week} is ` +
-        `${fmt(worth)}: ESPN projects ${fmt(v)}.${says}">${fmt(worth)}</td>`;
+      const est = estAt(week, p);
+      return `<td class="${cls()}" data-v="${worth}"${est ? ' data-est="1"' : ''} title="${esc(name)}’s Value in week ${week} is ` +
+        `${fmt(worth)}: ${est ? `we estimate ${fmt(v)} (${EST_WORDS})` : `ESPN projects ${fmt(v)}`}.${says}">` +
+        `${est ? estText(worth) : fmt(worth)}</td>`;
     }
   }
   if (v === 0) {
@@ -561,15 +589,20 @@ export function seasonCell(v, week, p, isNow, start = null, status = p.injurySta
         (byeWeekOf(p, state.byes) ? `, and it is not his bye (week ${byeWeekOf(p, state.byes)})` : '') +
         (zero === 'out' ? ` — he is listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())}.` : '.');
     if (zero === 'out') {
-      return `<td class="${cls('zero-out')}" data-v="0" title="${why}${says}">0.0 ` +
-        `<span class="zmark">${esc(outMark(status))}</span></td>`;
+      const back = backOf(week, p);
+      const due = back !== null && week < back ? ` ESPN expects him back in week ${back}.` : '';
+      return `<td class="${cls('zero-out')}" data-v="0" title="${why}${due}${says}">0.0 ` +
+        `<span class="zmark">${esc(outMark(status, week, back))}</span></td>`;
     }
     return `<td class="${cls('zero')}" data-v="0" title="${why}${says}">0.0</td>`;
   }
-  return `<td class="${cls()}" data-v="${v}" ` +
+  const est = !scored && estAt(week, p);
+  return `<td class="${cls()}" data-v="${v}"${est ? ' data-est="1"' : ''} ` +
     `title="${scored
       ? `${esc(name)} scored ${fmt(v)} in week ${week}.`
-      : `ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.`}${says}">${fmt(v)}</td>`;
+      : est
+      ? `We estimate ${fmt(v)} for ${esc(name)} in week ${week} — ${EST_WORDS}.`
+      : `ESPN projects ${fmt(v)} for ${esc(name)} in week ${week}.`}${says}">${est ? estText(v) : fmt(v)}</td>`;
 }
 
 /**

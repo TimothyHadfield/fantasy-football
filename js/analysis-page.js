@@ -44,7 +44,7 @@ import { savedConfig, onConnection, coarsePointer } from './connection.js';
 // of js/player-card.js.
 import {
   registerRun, tipAttr, clearRuns, wireTips, reopenTip, clickIsPlayer,
-  byeWeekOf, outMark, setValueSource,
+  byeWeekOf, outMark, setValueSource, estText,
 } from './player-card.js';
 // A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
 import './loose-weeks.js';
@@ -1076,7 +1076,7 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
     : bye
       ? 'Bye'
       : zero === 'out'
-        ? `${fmt(v)} <span class="zmark">${esc(outMark(p.injuryStatus))}</span>`
+        ? `${fmt(v)} <span class="zmark">${esc(outMark(p.injuryStatus, state.week, p.backWeek ?? null))}</span>`
         : fmt(v);
 
   // The whole of the cell goes inside the link, the bench cell's position span
@@ -3577,8 +3577,10 @@ function slotCell(entry, row, week, bar, index) {
     : zero === 'bye'
       ? 'Bye'
       : zero === 'out'
-        ? `${fmt(v)} <span class="zmark">${esc(outMark(status))}</span>`
-        : fmt(v);
+        ? `${fmt(v)} <span class="zmark">${esc(outMark(status, week, p.backWeek ?? null))}</span>`
+        : !scored && p.projEst === true && p.done !== true
+          ? estText(v)
+          : fmt(v);
   const mark = heatMarkHtml(heat);
 
   const extra = [

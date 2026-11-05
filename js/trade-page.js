@@ -143,7 +143,7 @@ import {
 import { optimalLineup } from './forecast.js';
 import {
   weekRun, registerRun, tipAttr, clearRuns, wireTips, hideTip, clickIsPlayer,
-  zeroKind, byeWeekOf, setValueSource,
+  zeroKind, byeWeekOf, setValueSource, returnArgs,
 } from './player-card.js';
 // A card's weeks on no roster are read from ESPN as it opens (Tim, 2026-10-14).
 import './loose-weeks.js';
@@ -788,6 +788,10 @@ function indexTeams(teams) {
         // Absent on a week cached before they were parsed: null, never a crash.
         seasonAvg: typeof p.seasonAvg === 'number' ? p.seasonAvg : null,
         posRank: typeof p.posRank === 'number' ? p.posRank : null,
+        // Due back from IR (js/season.js "HE IS DUE BACK"): the week, and
+        // whether this week's number is our estimate rather than ESPN's.
+        backWeek: Number.isFinite(p.backWeek) ? p.backWeek : null,
+        projEst: p.projEst === true,
       });
     }
   }
@@ -2193,6 +2197,8 @@ function cardFor(p, ctx = null) {
         const e = weekly.byWeek.get(w)?.get(p.playerId);
         return (e && e.injuryStatus) || p.injuryStatus || null;
       }),
+      // Due back from IR: "back wk N" before, "~N" estimates from then on.
+      ...returnArgs(weeks.map((w) => weekly.byWeek.get(w)?.get(p.playerId) || null)),
       // WHICH WEEKS HE ACTUALLY STARTS (Tim, 2026-09-19). Parallel to `weeks`:
       // true = in the best lineup that week, false = not, null = not known.
       // `js/player-card.js` draws the bold; this page decides WHOSE lineup the
@@ -10683,7 +10689,8 @@ function cuSeasonTableHtml(cols, which, { rows, scales, cardKey, opp = null, vsW
       const extra = [zero === 'bye' ? 'bye' : '', h ? h.cls : '', a.assumed ? 'assumed' : ''].filter(Boolean).join(' ');
       const cls = colCls(c, `wk${extra ? ` ${extra}` : ''}`);
       if (a.value === null) return `<td class="${cls} muted">—</td>`;
-      const shown = zero === 'bye' ? 'Bye' : fmt(a.value);
+      const est = !!e && !c.played && !a.assumed && e.p.projEst === true && e.p.done !== true;
+      const shown = zero === 'bye' ? 'Bye' : est ? `~${fmt(a.value)}` : fmt(a.value);
       if (!e) {
         return `<td class="${cls}" data-v="${a.value}" data-empty="${esc(row.key)}">${shown}${heatMarkHtml(h)}</td>`;
       }

@@ -225,6 +225,9 @@
     "test-out-for-season.mjs": {
       "assertions": 18
     },
+    "test-ir-return.mjs": {
+      "assertions": 38
+    },
     "test-outlook-mark.mjs": {
       "assertions": 78
     },

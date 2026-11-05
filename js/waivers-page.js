@@ -83,7 +83,7 @@ import * as season from './season.js';
 import * as espn from './espn.js';
 // Only the zero rule — whether a 0.00 is a bye or a man ruled out — so this page
 // and the analysis and Trade pages cannot answer it differently.
-import { zeroKind, byeWeekOf, outMark } from './player-card.js';
+import { zeroKind, byeWeekOf, outMark, estText } from './player-card.js';
 // Only the glance line's markup (Avg · Proj · rank), drawn in the Actual row.
 // This page no longer opens the hover card — see "the played weeks" below.
 import { glanceHtml } from './player-card.js';
@@ -315,6 +315,7 @@ const state = {
   rosterWeeks: new Map(),        // week -> the teams array for that week
   rosterProj: new Map(),         // week -> Map(playerId -> projection | null)
   rosterStatus: new Map(),       // week -> Map(playerId -> injury status that week)
+  rosterBack: new Map(),         // week -> Map(playerId -> { back, est }) for a man due back (js/season.js)
   failedRosterWeeks: new Set(),  // roster weeks ESPN refused; also named in the note
   // GAMES ALREADY OVER in a week ESPN has not closed (Tim, 2026-10-04). For a
   // man js/season.js marks `done`, the number in the maps above IS his score;
@@ -557,6 +558,7 @@ function resetData() {
   state.rosterWeeks.clear();
   state.rosterProj.clear();
   state.rosterStatus.clear();
+  state.rosterBack.clear();
   state.weekDone.clear();
   state.rosterDone.clear();
   state.failedRosterWeeks.clear();
@@ -1525,11 +1527,13 @@ function absorbRosterWeek(teams, week) {
   const byPlayer = new Map();
   const status = new Map();
   const done = new Map();
+  const back = new Map();
   for (const team of teams || []) {
     for (const p of team.players || []) {
       if (p.playerId === null || p.playerId === undefined) continue;
       byPlayer.set(p.playerId, p.projected);
       status.set(p.playerId, p.injuryStatus || null);
+      if (Number.isFinite(p.backWeek)) back.set(p.playerId, { back: p.backWeek, est: p.projEst === true });
       const over = doneEntry(p);
       if (over) done.set(p.playerId, over);
     }
@@ -1537,6 +1541,13 @@ function absorbRosterWeek(teams, week) {
   state.rosterProj.set(week, byPlayer);
   state.rosterDone.set(week, done);
   state.rosterStatus.set(week, status);
+  state.rosterBack.set(week, back);
+}
+
+/** His return week, and whether this week's number is our estimate (js/season.js "HE IS DUE BACK"). */
+function rosterBackFor(p, week) {
+  const byWeek = state.rosterBack.get(week);
+  return (byWeek && byWeek.get(p.playerId)) || { back: null, est: false };
 }
 
 /**
@@ -2542,6 +2553,7 @@ function leftOutWord(p, v, week, roster) {
     byeWeek: byeWeekOf(p, state.byes),
     injuryStatus: roster ? rosterStatusFor(p, week) : p.injuryStatus,
     demo: roster && state.isDemo,
+    backWeek: roster ? rosterBackFor(p, week).back : null,
   });
   return zero === 'bye' ? 'bye' : zero === 'out' ? 'ruled out' : 'projected 0.0';
 }
@@ -3569,6 +3581,14 @@ function paRun(p, wire) {
     playoffWeeks: state.playoffWeeks,
     splitAfter: last,
     fill: value.fillOf(state.value.base, p.position),
+    // A man due back: "back wk N" before it, our estimate after (js/season.js).
+    ...(wire ? {} : (() => {
+      const r = weeks.map((w) => (played.has(w) ? null : rosterBackFor(p, w)));
+      return {
+        backWeek: r.map((x) => (x ? x.back : null)),
+        estimates: r.map((x, i) => !!x && x.est && !doneFor(p.playerId, weeks[i], true)),
+      };
+    })()),
   });
 }
 
@@ -4169,11 +4189,13 @@ function cell(v, week, p, roster = false, starts = false, scale = null, done = n
     // The sample wire carries each man's bye week; the sample ROSTERS mean
     // "ruled out" by a zero and never a bye, which is what `demo` says.
     const status = roster ? rosterStatusFor(p, week) : p.injuryStatus;
+    const back = roster ? rosterBackFor(p, week).back : null;
     const zero = zeroKind(v, {
       week,
       byeWeek: byeWeekOf(p, state.byes),
       injuryStatus: status,
       demo: roster && state.isDemo,
+      backWeek: back,
     });
     if (zero === 'bye') {
       return `<td class="bye" data-v="0" ` +
@@ -4183,12 +4205,13 @@ function cell(v, week, p, roster = false, starts = false, scale = null, done = n
     const bye = byeWeekOf(p, state.byes);
     const why = `${esc(name)} is projected at 0.0 in week ${week}` +
       (bye ? `, which is not his bye (week ${bye})` : '') +
-      (zero === 'out' ? ` — listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())} that week.` : '.');
+      (zero === 'out' ? ` — listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())} that week.` : '.') +
+      (Number.isFinite(back) ? ` ESPN expects him back in week ${back}.` : '');
     // A real zero. Nobody would start it, so it is never boxed; the word is
     // what says it is not a bye.
     if (zero === 'out') {
       return `<td class="zero-out" data-v="0" title="${why}">0.0 ` +
-        `<span class="zmark">${esc(outMark(status))}</span></td>`;
+        `<span class="zmark">${esc(outMark(status, week, back))}</span></td>`;
     }
     return `<td class="zero" data-v="0" title="${why}">0.0</td>`;
   }
@@ -4209,8 +4232,10 @@ function cell(v, week, p, roster = false, starts = false, scale = null, done = n
   // a card and a title on one cell would be two tooltips.
   const cls = [beats ? 'beats' : '', heat ? heat.cls : '']
     .filter(Boolean).join(' ');
-  return `<td${cls ? ` class="${cls}"` : ''} data-v="${n}" data-c="wk" data-w="${week}">` +
-    `${fmt(n)}${heatMarkHtml(heat)}</td>`;
+  // Our estimate for a week ESPN leaves at 0 after his return: "~" in front.
+  const est = roster && rosterBackFor(p, week).est;
+  return `<td${cls ? ` class="${cls}"` : ''} data-v="${n}" data-c="wk" data-w="${week}"${est ? ' data-est' : ''}>` +
+    `${est ? estText(n) : fmt(n)}${heatMarkHtml(heat)}</td>`;
 }
 
 /**

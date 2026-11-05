@@ -139,6 +139,101 @@ export function gainsWhileOut({ hurt, baseWeek, outWeeks: weeks, poolOf }) {
   return out.sort((a, b) => b.gain - a.gain).slice(0, MAX_GAINERS);
 }
 
+// ---------------------------------------------------------------------------
+// THE WEEKS AFTER HE IS DUE BACK (Tim, 2026-11-04)
+//
+// "for devante adams on the app it says Est. Return 11/25/26, which is before
+// week 12 … but our cite shows the 17 week preview being out for the season" →
+// "mark those weeks as back wk 12. Is there any way we could reasonably fill in
+// those weeks 12+ with numbers that aren't 0 (and still reasonably accurate),
+// and also make sure to not label those weeks as IR".
+//
+// ESPN projects an IR man at 0 in EVERY week left until he is activated, return
+// date or not (measured on 1241838, 2026-11-04: Adams, back 11/25, 0.0 in weeks
+// 9–17). So in a week on or after his return week (`returnWeek`) that is still
+// to come, ESPN's 0 is replaced by an ESTIMATE: his last projection before the
+// zeros, as ESPN filed it (`lastHealthy`). ESPN's own number wins the moment it
+// is above 0. Out for the season, or no return date: nothing changes.
+//
+// WHY THE LAST ONE, NOT AN AVERAGE (backtest, 2026-11-04, the 500 most-owned
+// men of 2026 weeks 1–9 on 1241838): 31 men projected ≥ 5 a week who sat at 0
+// for two weeks or more and were then projected again; against ESPN's own
+// projections in their first three weeks back (67 weeks), the last healthy
+// projection was off by 1.33 a week on average, the average of the last four by
+// 1.64, of the last two by 1.61, his actual scores by 3.55. A 10% first-week-
+// back discount made it worse (1.69). Every subset tried ranked them the same.
+
+/** How far back to look for his last projection above 0. */
+export const EST_LOOKBACK = 8;
+
+/**
+ * His last projection above 0 before `before`, walking back, his bye skipped.
+ *
+ * @param {Object} o
+ * @param {number} o.before the first week not to look at (the current week)
+ * @param {(week:number) => number|null|undefined} o.projOf his projection that
+ *   week as filed: null = no line, undefined = not held yet
+ * @param {number|null} [o.bye]
+ * @returns {{est:number, week:number}|{need:number}|null} `need` = that week is
+ *   not held and has to be read before anything can be said; null = none found
+ */
+export function lastHealthy({ before, projOf, bye = null, lookBack = EST_LOOKBACK }) {
+  for (let w = Number(before) - 1; w >= Math.max(1, Number(before) - lookBack); w--) {
+    if (w === bye) continue;
+    const v = projOf(w);
+    if (v === undefined) return { need: w };
+    if (num(v) && v > 0) return { est: Math.round(v * 100) / 100, week: w };
+  }
+  return null;
+}
+
+/**
+ * One week's teams, with each returning man's weeks marked. Pure: copies only.
+ *
+ * Every man with a return week (`backOf`) gets `backWeek` in a week that is
+ * the current one or later. In a week AFTER the current one, on or after his
+ * return week, not his bye, where ESPN says exactly 0, he also gets his
+ * estimate as `projected`, with `projEst: true` and ESPN's `espnProjected: 0`.
+ * The current week is never filled: it is the week lineups are set for, and
+ * there ESPN's own number is the one that counts.
+ *
+ * @param {number} week
+ * @param {Array} teams the week's teams (`{ players, starters?, bench? }`)
+ * @param {Object} o
+ * @param {number|null} o.currentWeek null = not known: nothing is touched
+ * @param {(p) => number|null} o.backOf his return week, or null
+ * @param {(p) => {est:number}|null} o.estOf his estimate, or null
+ * @param {(p) => number|null} [o.byeOf] his NFL team's bye week
+ */
+export function fillReturnWeeks(week, teams, { currentWeek, backOf, estOf, byeOf = () => null }) {
+  const w = Number(week);
+  if (!Array.isArray(teams) || !num(Number(currentWeek)) || currentWeek === null || w < Number(currentWeek)) return teams;
+  const conv = (p) => {
+    if (!p || typeof p !== 'object') return p;
+    const back = backOf(p);
+    if (!num(back)) return p;
+    const out = { ...p, backWeek: back };
+    if (w > Number(currentWeek) && w >= back && p.projected === 0 && w !== byeOf(p)) {
+      const e = estOf(p);
+      if (e && num(e.est) && e.est > 0) {
+        out.projected = e.est;
+        out.projEst = true;
+        out.espnProjected = 0;
+      }
+    }
+    return out;
+  };
+  return teams.map((t) => {
+    if (!t || !Array.isArray(t.players) || !t.players.some((p) => p && num(backOf(p)))) return t;
+    const seen = new Map();
+    const one = (p) => { if (!seen.has(p)) seen.set(p, conv(p)); return seen.get(p); };
+    const out = { ...t, players: t.players.map(one) };
+    if (Array.isArray(t.starters)) out.starters = t.starters.map(one);
+    if (Array.isArray(t.bench)) out.bench = t.bench.map(one);
+    return out;
+  });
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
