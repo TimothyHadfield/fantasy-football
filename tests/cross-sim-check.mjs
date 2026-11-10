@@ -54,10 +54,14 @@ const CHILDREN = {
     const title = {};
     const last = {};
     const projWins = {};
+    const playoffs = {};
+    const bye = {};
     for (const tr of document.querySelectorAll('#simTable tbody tr')) {
       const td = [...tr.children];
       title[text(td[0])] = Number(td[8].getAttribute('data-v'));
       last[text(td[0])] = Number(td[9].getAttribute('data-v'));
+      playoffs[text(td[0])] = Number(td[5].getAttribute('data-v'));
+      bye[text(td[0])] = Number(td[6].getAttribute('data-v'));
       projWins[text(td[0])] = Number(td[2].getAttribute('data-v'));
     }
     // "My season" for Manager 1, who TIED his week-2 game (AUDIT §1.6).
@@ -75,7 +79,7 @@ const CHILDREN = {
       // The page's own simulation only. "My season"'s Title ± / Last ± columns
       // play the season out again with one game forced (js/must-win.js); those
       // runs are not the one the Summary page has to match.
-      calls: (globalThis.__simCalls || []).filter((c) => !c.games.some((g) => g.forced)), title, last,
+      calls: (globalThis.__simCalls || []).filter((c) => !c.games.some((g) => g.forced)), title, last, playoffs, bye,
       note: text(document.getElementById('simNote')),
       matchupsNote: text(document.getElementById('matchupsNote')),
       forecastFor,
@@ -101,11 +105,13 @@ const CHILDREN = {
     // By header, not position: the Record column (2026-09-27) sits before it.
     const heads = [...document.querySelectorAll('#summaryTable thead th')].map((th) => text(th));
     const iTitle = heads.indexOf('Title %');
-    const iLast = heads.indexOf('Loser %');
+    // Since 2026-11-10 the last column is Chance (Bye / Playoff / Loser %,
+    // `data-pick` saying which), not Loser %.
+    const iPick = heads.indexOf('Chance');
     for (const tr of document.querySelectorAll('#summaryTable tbody tr')) {
       const td = [...tr.children];
       title[text(td[0])] = Number(td[iTitle].getAttribute('data-v'));
-      last[text(td[0])] = Number(td[iLast].getAttribute('data-v'));
+      last[text(td[0])] = { kind: td[iPick]?.getAttribute('data-pick') ?? null, v: Number(td[iPick]?.getAttribute('data-v')) };
       if (tr.classList.contains('me')) me.push(text(td[0]));
     }
     const stub = await import('./cap-stub-season.mjs');
@@ -248,9 +254,20 @@ if (!sched.boot && !summ.boot) {
     ok('AT THE SAME RUN COUNT every manager’s title % is IDENTICAL on the two pages',
       names.length === 10 && names.every((n) => full.title[n] === summ.title[n]),
       names.map((n) => `${n}: ${full.title[n]} vs ${summ.title[n]}`).join(' | '));
-    ok('and so is every chance of finishing last',
-      names.length === 10 && names.every((n) => full.last[n] === summ.last[n]),
-      names.map((n) => `${n}: ${full.last[n]} vs ${summ.last[n]}`).join(' | '));
+    // The Summary's Chance cell is one of Schedule's Playoffs % / Bye % / Last
+    // %, and it must be that figure to the last digit — and the pick the pure
+    // rule makes from Schedule's three (this 4-team field has no bye: skipped).
+    const { relevantChance } = await import(moduleUrl('js/summary-table.js'));
+    const col = { playoffs: full.playoffs, bye: full.bye, last: full.last };
+    ok('and so is every Chance figure (the Playoff / Bye / Loser % it shows)',
+      names.length === 10 && names.every((n) => summ.last[n] && col[summ.last[n].kind] &&
+        col[summ.last[n].kind][n] === summ.last[n].v),
+      names.map((n) => `${n}: ${JSON.stringify(summ.last[n])} vs P ${full.playoffs[n]} B ${full.bye[n]} L ${full.last[n]}`).join(' | '));
+    ok('and each Chance cell is the pick the rule makes from Schedule’s figures (no bye in a 4-team field)',
+      names.length === 10 && names.every((n) => summ.last[n] && summ.last[n].kind ===
+        relevantChance({ playoffs: full.playoffs[n], bye: null, last: full.last[n] })?.kind &&
+        summ.last[n].kind !== 'bye'),
+      names.map((n) => `${n}: ${summ.last[n]?.kind}`).join(' | '));
   }
 
   // YOUR ROW (the connection's "You are" team, id 1 here) is marked on the

@@ -1551,7 +1551,8 @@ if (booted(page, 'page')) {
   if (booted(sum, 'summary')) {
     ok('the real season is simulated with the Summary page’s inputs, runs and seed, to the letter',
       page.firstSim && same(page.firstSim, sum.call) && sum.call.runs === 100000, page.firstSim && [page.firstSim.runs, page.firstSim.seed]);
-    const five = (rows) => rows.map((r) => r.slice(0, 5).map((c) => c.replace(/\s*[▲▼]$/, '')));
+    // The four shared columns (Summary's fifth is Chance since 2026-11-10).
+    const five = (rows) => rows.map((r) => r.slice(0, 4).map((c) => c.replace(/\s*[▲▼]$/, '')));
     ok('so "Current" is the Summary page’s chart, row for row', same(five(page.start.summary.cur), five(sum.rows)),
       [five(page.start.summary.cur)[0], five(sum.rows)[0]]);
   }
@@ -1592,7 +1593,10 @@ const tally = (weeks, side) => {
 };
 const agree = (s) => tally(s.weeks, 'real') === s.stats.real && tally(s.weeks, 'mirror') === s.stats.mirror;
 const col4 = (rows) => rows.map((r) => r[4]);
-const bare = (rows) => rows.map((r) => r.slice(0, 5).map((c) => c.replace(/\s*[▲▼]$/, '')));
+// Member, Record, LUCK, Title %: the columns the two charts share. Since
+// 2026-11-10 Summary's fifth is Chance (Bye / Playoff / Loser %); the Decisions
+// review keeps Loser %, so the fifth is compared by neither.
+const bare = (rows) => rows.map((r) => r.slice(0, 4).map((c) => c.replace(/\s*[▲▼]$/, '')));
 const LIVE_ROWS = ['lineup-reasonable:1:all', 'lineup-perfect:1:all'];
 
 const early = child('early');

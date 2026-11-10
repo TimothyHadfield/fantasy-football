@@ -70,6 +70,9 @@
 
 /* LUCK, title and loser all read better with the digits aligned. */
 #summaryTable td.num, #summaryTable th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The Chance column's tag: which figure the cell is (BYE / PLAYOFF / LOSER). */
+#summaryTable .pick-tag { font-size: 0.68em; font-weight: 700; letter-spacing: 0.03em; color: var(--dim); }
+#summaryTable td[data-pick] { white-space: nowrap; }
 
 /* ------------------------------------------------------------------- phone
    css/app.css is linked BEFORE this block, so a page-local fixed width can only
@@ -148,7 +151,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
 
   <section class="panel">
     <h2>The chart</h2>
-    <p class="lede">Each manager&rsquo;s luck so far, chance of winning the title, and chance of finishing last.</p>
+    <p class="lede">Each manager&rsquo;s luck so far, chance of winning the title, and most open bye, playoff or last-place chance.</p>
     <div class="table-scroll"><table id="summaryTable">
       <thead><tr>
         <!-- ONE PLAIN SENTENCE A HEADING (docs/previews-plan.md). The formula,
@@ -158,7 +161,7 @@ div.panel-note > p:last-child { margin-bottom: 0; }
         <th class="num" data-sort title="Wins and losses in the weeks counted so far, with ties as a third number.">Record</th>
         <th class="num" data-sort title="How far the season has broken this manager&rsquo;s way; above zero is lucky.">LUCK</th>
         <th class="num" data-sort title="How often this manager wins the championship round in the simulated seasons.">Title %</th>
-        <th class="num" data-sort title="How often this manager finishes last in the regular-season standings.">Loser %</th>
+        <th class="num" data-sort title="Whichever of Bye %, Playoff % and Loser % is closest to 50% for this manager.">Chance</th>
       </tr></thead>
       <tbody></tbody>
     </table></div>

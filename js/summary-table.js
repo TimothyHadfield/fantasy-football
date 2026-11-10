@@ -14,7 +14,8 @@
 //     record: { w, l, t } | null,  // banked games
 //     rec,                         // capture.recordNow(record, chance, { sep: '-' }) | null — what is PRINTED
 //     luck, luckMargin,            // points | null
-//     title, last }                // 0..1 | null
+//     title, last,                 // 0..1 | null
+//     playoffs, bye }              // 0..1 | null — the Summary page's Chance column (`pick`)
 //
 // THE DIFFERENCE VIEW (`diffFrom`, the rows being compared against) is
 // row − diffFrom row for the same `id`: the record as "+1 W", LUCK in points to
@@ -67,6 +68,51 @@ export const recordText = (row) => (row.rec ? row.rec.text : '—');
 export const PCT_MIN_SPREAD = 0.005;
 
 /**
+ * THE ONE CHANCE COLUMN (Tim, 2026-11-10, a standing rule: "the columns to be
+ * record, luck, title, and then the most relevant % for that player (either
+ * bye, playoff, or loser). this means for users who have a 98% for playoffs,
+ * BYE will be shown. if you have 5% playoff and 29% loser, loser will be
+ * shown.").
+ *
+ * Read as: the most relevant of the three is the LEAST SETTLED one, the one
+ * closest to 50%. 98% playoffs is nearly settled, so the bye is the live
+ * question; 5% playoffs is nearly settled, so 29% loser is. Ties go Playoff,
+ * then Bye, then Loser (`PICK_ORDER`). A figure that is missing (null: no
+ * bracket, or a bracket with no byes) is skipped. Once every figure there is
+ * is settled (0 or 100%, a finished regular season or a clinched spot), the
+ * OUTCOME is shown instead: Bye if they got one, else Playoff if they made it,
+ * else Loser if they finished last, else Playoff (0%).
+ */
+export const PICK_ORDER = ['playoffs', 'bye', 'last'];
+export const PICK_KINDS = {
+  playoffs: { tag: 'PLAYOFF', label: 'Playoff %', counted: 'Seasons in the playoffs' },
+  bye: { tag: 'BYE', label: 'Bye %', counted: 'Seasons with a bye' },
+  last: { tag: 'LOSER', label: 'Loser %', counted: 'Seasons last' },
+};
+
+/**
+ * @param {{playoffs?:number|null, bye?:number|null, last?:number|null}} r
+ *        probabilities in 0..1, or null/undefined when missing
+ * @returns {{kind:'playoffs'|'bye'|'last', p:number}|null} null when all three are missing
+ */
+export function relevantChance(r) {
+  const fig = r || {};
+  const have = PICK_ORDER.filter((k) => Number.isFinite(fig[k]));
+  if (!have.length) return null;
+  if (have.every((k) => fig[k] <= 0 || fig[k] >= 1)) {
+    const k = ['bye', 'playoffs', 'last'].find((x) => have.includes(x) && fig[x] >= 1) ?? have[0];
+    return { kind: k, p: fig[k] };
+  }
+  let best = null;
+  for (const k of have) {
+    const d = Math.abs(fig[k] - 0.5);
+    // Strictly closer wins; a tie (to float noise) keeps the earlier kind.
+    if (best === null || d < best.d - 1e-12) best = { k, d };
+  }
+  return { kind: best.k, p: fig[best.k] };
+}
+
+/**
  * THREE SCALES, ONE PER COLUMN, AND ONE OF THEM IS INVERTED.
  *
  *   LUCK    — high is good. Only when `shadeLuck` (the Summary page holds it
@@ -84,25 +130,29 @@ export function summaryScales(rows, { shadeLuck = true, minSpread = PCT_MIN_SPRE
     luck: shadeLuck ? heatScale(rows.map((r) => r.luck)) : null,
     title: heatScale(rows.map((r) => r.title), { minSpread }),
     last: heatScale(rows.map((r) => r.last), { invert: true, minSpread }),
+    // For the Chance column: a cell is shaded on its OWN figure's scale across
+    // the league, so a BYE cell is ranked against everyone's Bye %.
+    playoffs: heatScale(rows.map((r) => r.playoffs), { minSpread }),
+    bye: heatScale(rows.map((r) => r.bye), { minSpread }),
   };
 }
 
 /** One shaded cell. The `title` is channel 3 of "never colour alone" — unless
  *  the page hangs a card on the cell (`card`), which then says where the number
  *  stands: one preview a number, so the card's attribute REPLACES the title. */
-const shaded = (v, scale, fmt, inner, card = '') => {
+const shaded = (v, scale, fmt, inner, card = '', extra = '') => {
   // No group is named: each column is one figure across the league, so the
   // title reads "2nd highest of 10 · league avg 12%", the average printed the
   // way the column prints it.
   const h = heatOf(v, scale, { fmt });
-  return `<td class="num${h ? ` ${h.cls}` : ''}" data-v="${v ?? ''}"` +
+  return `<td class="num${h ? ` ${h.cls}` : ''}"${extra} data-v="${v ?? ''}"` +
     `${card || (h ? ` title="${esc(h.words)}"` : '')}>${inner}${heatMarkHtml(h)}</td>`;
 };
 
 const nameCell = (r, card = '') =>
   `<td class="name"${card || (r.teamName ? ` title="ESPN team name: ${esc(r.teamName)}"` : '')}>${esc(r.name)}</td>`;
 
-function rowCells(r, { enough, waiting, scales, cards }) {
+function rowCells(r, { enough, waiting, scales, cards, pick }) {
   // A PREVIEW CARD PER CELL (`cards`, off unless a page asks for it — the
   // Summary page does, the Decisions review does not): the attribute the page
   // made for this row's cell, or '' for none.
@@ -129,8 +179,18 @@ function rowCells(r, { enough, waiting, scales, cards }) {
         enough && r.luck !== null && r.luckMargin ? ` <span class="muted pm">±${r.luckMargin.toFixed(0)}</span>` : ''}`,
       card('luck')),
     shaded(r.title, scales.title, pct, pctCell(r.title), card('title')),
-    shaded(r.last, scales.last, pct, pctCell(r.last), card('last')),
+    pick ? chanceCell(r, scales, waiting, card('pick'))
+      : shaded(r.last, scales.last, pct, pctCell(r.last), card('last')),
   ];
+}
+
+/** The Chance cell: the `relevantChance` figure with a tag saying which it is,
+ *  shaded on that figure's own scale (Loser turned over, as its column was). */
+function chanceCell(r, scales, waiting, card) {
+  const c = relevantChance(r);
+  if (!c) return `<td class="num" data-v="">${waiting ? '<span class="muted">…</span>' : dash}</td>`;
+  return shaded(c.p, scales[c.kind] || null, pct,
+    `<span class="pick-tag">${PICK_KINDS[c.kind].tag}</span> ${pct(c.p)}`, card, ` data-pick="${c.kind}"`);
 }
 
 /** One difference cell: signed, classed, sortable — or a dash when unknown. */
@@ -184,11 +244,16 @@ function rowDiffCells(r, c, { enough }) {
  *        card. A cell given one carries it INSTEAD of its `title` (the decimal
  *        record's basis excepted). Off by default: without it not a byte of the
  *        rows differs. The difference view takes none.
+ * @param {boolean} [o.pick] the Summary page's column set (Tim, 2026-11-10):
+ *        the last column is the Chance column (`relevantChance`: Bye, Playoff
+ *        or Loser %, tagged, `data-pick` = which) instead of Loser %. Rows then
+ *        need `playoffs` and `bye` too; its card key is `pick`. Off by default
+ *        (the Decisions review keeps Loser %).
  * @returns {string} `<tr>`s, for a `<tbody>`
  */
 export function summaryRowsHtml(rows, {
   enough = true, waiting = false, shadeLuck = true, scales = null, diffFrom = null, dim = null,
-  me = null, cards = null,
+  me = null, cards = null, pick = false,
 } = {}) {
   const sc = diffFrom ? null : scales || summaryScales(rows, { shadeLuck });
   const before = diffFrom ? new Map(diffFrom.map((r) => [r.id, r])) : null;
@@ -196,7 +261,7 @@ export function summaryRowsHtml(rows, {
   return rows.map((r) => {
     const cells = diffFrom
       ? rowDiffCells(r, before.get(r.id) || null, { enough })
-      : rowCells(r, { enough, waiting, scales: sc, cards });
+      : rowCells(r, { enough, waiting, scales: sc, cards, pick });
     const style = dimStyle(dimOf(dim, r.id));
     const drawn = style ? cells.map((c, i) => (i ? c.replace(/^<td/, `<td${style}`) : c)) : cells;
     return `

@@ -59,7 +59,7 @@ import { standingsExplain } from './standings-table.js';
 // module since 2026-10-05 so a second page (the Decisions review) draws the
 // identical chart. The formatters are imported back rather than kept twice.
 import {
-  summaryRowsHtml, summaryScales, pct, esc, recordText, signed,
+  summaryRowsHtml, summaryScales, pct, esc, recordText, signed, relevantChance, PICK_KINDS,
 } from './summary-table.js';
 import { scope } from './prefs.js';
 import { savedConfig, onConnection } from './connection.js';
@@ -119,8 +119,10 @@ export function adaptSimTeam(row) {
     title: pick('pTitle', 'titlePct'),
     last: pick('pLast', 'lastPct'),
     // Makes the playoffs: the Playoffs page's and Schedule's Playoffs %, read
-    // off this same run (same model, inputs and seed). The share card only.
+    // off this same run (same model, inputs and seed). With Bye % and Loser %
+    // it feeds the Chance column (`relevantChance`, Tim 2026-11-10).
     playoffs: pick('pPlayoffs'),
+    bye: pick('pBye'),
   };
 }
 
@@ -789,6 +791,7 @@ function render() {
  */
 function buildRows(view, sim) {
   const byId = new Map();
+  const noByes = !!(sim && sim.result && sim.result.playoff && !(sim.result.playoff.byes > 0));
   if (sim && sim.result) {
     for (const raw of sim.result.teams || []) {
       const row = adaptSimTeam(raw);
@@ -816,10 +819,13 @@ function buildRows(view, sim) {
       luckMargin: view.enough ? view.luckMarginById.get(t.id) ?? null : null,
       title: view.enough && s ? s.title : null,
       last: view.enough && s ? s.last : null,
-      // On the share card only, and NEVER in the sort below (Tim, 2026-10-26:
+      // Feeds the Chance column only, and NEVER the sort below (Tim, 2026-10-26:
       // "Add playoff % to the summary message now. Don't let it affect the
       // ordering of the players.").
       playoffs: view.enough && s ? s.playoffs : null,
+      // A bracket with no byes (four teams) has no Bye % to show: missing, so
+      // the Chance column skips it rather than reading 0% for everyone.
+      bye: view.enough && s && noByes !== true ? s.bye : null,
     };
   });
 
@@ -887,7 +893,7 @@ function renderTable(view, rows, sim, inputs) {
   clearPops(POP);
   const cards = chartCards(view, rows, sim);
 
-  tbody.innerHTML = summaryRowsHtml(rows, { enough: view.enough, waiting, scales, me, cards });
+  tbody.innerHTML = summaryRowsHtml(rows, { enough: view.enough, waiting, scales, me, cards, pick: true });
 
   resort(table);
   // The scales are kept for renderNote, which prints their thresholds under
@@ -981,6 +987,8 @@ function chartCards(view, rows, sim) {
     luck: column('luck'),
     title: column('title', { minSpread: PCT_MIN_SPREAD }),
     last: column('last', { minSpread: PCT_MIN_SPREAD }),
+    playoffs: column('playoffs', { minSpread: PCT_MIN_SPREAD }),
+    bye: column('bye', { minSpread: PCT_MIN_SPREAD }),
   };
   const standing = (key, v) => { const h = heatOf(v, ranks[key]); return h ? h.standing : ''; };
   const mean = (key) => {
@@ -1093,6 +1101,11 @@ function chartCards(view, rows, sim) {
 
     title: chance('title', 'Title %', 'Seasons won'),
     last: chance('last', 'Loser %', 'Seasons last'),
+    // The Chance column: the card of whichever figure the cell shows.
+    pick(r) {
+      const c = relevantChance(r);
+      return c ? chance(c.kind, PICK_KINDS[c.kind].label, PICK_KINDS[c.kind].counted)(r) : '';
+    },
   };
 }
 
@@ -1132,7 +1145,7 @@ function renderHeatKey(view, { heatLuck, heatTitle, heatLast, shadeLuck }) {
     // tests/text-audit.mjs summary.html` is the meter, and HANDOFF's panel
     // shape is a SMALL visible key with the method behind the toggle.
     parts.push(
-      '<strong>Green good, red bad</strong>, down each column — but <strong>Loser %</strong> ' +
+      '<strong>Green good, red bad</strong>, down each column — but <strong>LOSER</strong> ' +
       'is turned over: green is <em>low</em>. Ends carry ▲▼ and bold.'
     );
   }
@@ -1192,6 +1205,12 @@ function renderNote(view, sim, inputs) {
       `<strong>Loser %</strong> is finishing <em>last in the regular-season standings</em> — ` +
       `your league’s own rule for the wooden spoon, and nothing to do with the ` +
       `consolation ladder, which is not modelled at all.`
+    );
+    parts.push(
+      `<strong>Chance</strong> shows whichever of Bye % (a first-round bye), Playoff % and ` +
+      `Loser % is least settled for that manager — the one closest to 50%, ties going ` +
+      `Playoff, then Bye, then Loser — tagged with which it is, or, once all three are ` +
+      `settled, the outcome: bye, playoffs or last.`
     );
 
     if (sim && sim.result) {
@@ -1299,8 +1318,9 @@ function cardLines(view, sim, inputs) {
   // One fact per line. These are word-wrapped onto the card rather than
   // truncated — a definition that runs off the right-hand edge is worse than no
   // definition at all, because the reader cannot tell it was cut.
-  lines.push(`Playoff % = makes the playoffs.`);
   lines.push(`Title % = wins the championship round.`);
+  // Short on purpose: the page's word ceiling counts this text (text-audit).
+  lines.push(`Chance = Bye/Playoff/Loser % nearest to 50%.`);
   lines.push(
     `Loser % = LAST IN THE REGULAR SEASON — not the playoffs, ` +
     `not the consolation ladder.`
@@ -1354,6 +1374,12 @@ function cardLines(view, sim, inputs) {
   return lines;
 }
 
+/** The Chance column as text: "BYE 62%", or a dash when there is none. */
+function chanceText(r) {
+  const c = relevantChance(r);
+  return c ? `${PICK_KINDS[c.kind].tag} ${pct(c.p)}` : '—';
+}
+
 /** The same chart as plain text, for a laptop where pasting beats an image. */
 function buildCardText(view, rows, sim, inputs) {
   const L = state.league;
@@ -1367,12 +1393,11 @@ function buildCardText(view, rows, sim, inputs) {
     String(r.name).padEnd(w),
     recordText(r).padStart(rw),
     (r.luck === null ? '—' : `${r.luck > 0 ? '+' : ''}${r.luck.toFixed(1)}`).padStart(6),
-    (pct(r.playoffs) ?? '—').padStart(9),
     (pct(r.title) ?? '—').padStart(8),
-    (pct(r.last) ?? '—').padStart(8),
+    chanceText(r).padStart(12),
   ].join('  ');
 
-  const header = ['Member'.padEnd(w), 'Record'.padStart(rw), 'LUCK'.padStart(6), 'Playoff %'.padStart(9), 'Title %'.padStart(8), 'Loser %'.padStart(8)].join('  ');
+  const header = ['Member'.padEnd(w), 'Record'.padStart(rw), 'LUCK'.padStart(6), 'Title %'.padStart(8), 'Chance'.padStart(12)].join('  ');
 
   return [
     head + `${L.name} — week ${view.through}`,
@@ -1521,13 +1546,13 @@ function renderCard(view, rows, sim, inputs) {
   );
 
   // Columns. Names left, every number right-aligned on its own edge.
-  // PLAYOFF % (Tim, 2026-10-26) sits between LUCK and TITLE %; the card stays
-  // 760 wide, so the percentage columns step 104 rather than 112 and the name
-  // gives up the rest. 110 before it keeps its 17px heading clear of LUCK's.
-  const colLast = CARD_W - pad;
-  const colTitle = colLast - 104;
-  const colPo = colTitle - 104;
-  const colLuck = colPo - 110;
+  // RECORD, LUCK, TITLE %, CHANCE (Tim, 2026-11-10): the last column is the
+  // least settled of Bye / Playoff / Loser %, a small tag naming which before
+  // the figure. 170 for it fits "PLAYOFF 100%" (tag 14px bold + 22px figure);
+  // 110 before TITLE % keeps its 17px heading clear of LUCK's.
+  const colPick = CARD_W - pad;
+  const colTitle = colPick - 170;
+  const colLuck = colTitle - 110;
   // The record sits right after the name, right-aligned on its own edge like
   // every other figure. 100px clears LUCK's widest value ("−26.0") with room;
   // the name is clipped 90px short of the edge, which the widest record
@@ -1543,9 +1568,8 @@ function renderCard(view, rows, sim, inputs) {
   ctx.textAlign = 'right';
   ctx.fillText('RECORD', colRecord, y);
   ctx.fillText('LUCK', colLuck, y);
-  ctx.fillText('PLAYOFF %', colPo, y);
   ctx.fillText('TITLE %', colTitle, y);
-  ctx.fillText('LOSER %', colLast, y);
+  ctx.fillText('CHANCE', colPick, y);
   ctx.textAlign = 'left';
 
   y += 10;
@@ -1581,12 +1605,20 @@ function renderCard(view, rows, sim, inputs) {
       ctx.fillText(`${r.luck > 0 ? '+' : ''}${r.luck.toFixed(1)}`, colLuck, baseline);
     }
 
-    ctx.fillStyle = r.playoffs == null ? INK.dim : INK.text;
-    ctx.fillText(pct(r.playoffs) ?? '—', colPo, baseline);
     ctx.fillStyle = r.title === null ? INK.dim : INK.text;
     ctx.fillText(pct(r.title) ?? '—', colTitle, baseline);
-    ctx.fillStyle = r.last === null ? INK.dim : INK.text;
-    ctx.fillText(pct(r.last) ?? '—', colLast, baseline);
+    const c = relevantChance(r);
+    if (!c) { ctx.fillStyle = INK.dim; ctx.fillText('—', colPick, baseline); }
+    else {
+      const fig = pct(c.p);
+      ctx.fillStyle = INK.text;
+      ctx.fillText(fig, colPick, baseline);
+      const figW = typeof ctx.measureText === 'function' ? ctx.measureText(fig).width : 48;
+      ctx.font = font(14, '700');
+      ctx.fillStyle = INK.dim;
+      ctx.fillText(PICK_KINDS[c.kind].tag, colPick - figW - 7, baseline);
+      ctx.font = font(22);
+    }
     ctx.textAlign = 'left';
   });
 

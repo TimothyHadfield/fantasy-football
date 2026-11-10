@@ -132,7 +132,7 @@
       "assertions": 186
     },
     "cross-sim-check.mjs": {
-      "assertions": 36
+      "assertions": 37
     },
     "home-winpct-check.mjs": {
       "assertions": 121
@@ -168,7 +168,10 @@
       "scenarios": 34
     },
     "test-summary.mjs": {
-      "assertions": 620
+      "assertions": 666
+    },
+    "summary-pick-check.mjs": {
+      "assertions": 40
     },
     "touch-check.mjs": {
       "assertions": 353,

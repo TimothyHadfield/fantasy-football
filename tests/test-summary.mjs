@@ -270,8 +270,11 @@ function readTable(document) {
   // Columns found BY HEADER, so a column added or moved cannot silently shift
   // every other read by one. A missing column reads as -1 and its cells as null.
   const heads = [...table.querySelectorAll('thead th')].map((th) => text(th));
-  const [iName, iRec, iLuck, iTitle, iLast] =
-    ['Member', 'Record', 'LUCK', 'Title %', 'Loser %'].map((h) => heads.indexOf(h));
+  // Since 2026-11-10 (Tim) the last column is Chance: the least settled of
+  // Bye / Playoff / Loser %, `data-pick` naming which. Loser % is gone from the
+  // page, so `last` reads null; `pick` carries the Chance cell.
+  const [iName, iRec, iLuck, iTitle, iLast, iPick] =
+    ['Member', 'Record', 'LUCK', 'Title %', 'Loser %', 'Chance'].map((h) => heads.indexOf(h));
   return [...table.querySelectorAll('tbody tr')].map((tr) => {
     const td = [...tr.children];
     const v = (i) => {
@@ -291,10 +294,13 @@ function readTable(document) {
       luckText: stripMark(t(iLuck)), luck: v(iLuck),
       titleText: stripMark(t(iTitle)), title: v(iTitle),
       lastText: stripMark(t(iLast)), last: v(iLast),
-      // Which side of the scale each of the three numeric cells was painted,
+      pickText: stripMark(t(iPick)), pickV: v(iPick),
+      pickKind: iPick >= 0 && td[iPick] ? td[iPick].getAttribute('data-pick') : null,
+      pickTag: iPick >= 0 && td[iPick] ? text(td[iPick].querySelector('.pick-tag')) || null : null,
+      // Which side of the scale each of the numeric cells was painted,
       // and the words the cell carries for a phone tap.
-      heat: { luck: heatSide(td[iLuck]), title: heatSide(td[iTitle]), last: heatSide(td[iLast]) },
-      titles: [iLuck, iTitle, iLast].map((i) => (td[i] && td[i].getAttribute('title')) || ''),
+      heat: { luck: heatSide(td[iLuck]), title: heatSide(td[iTitle]), last: heatSide(td[iLast]), pick: heatSide(td[iPick]) },
+      titles: [iLuck, iTitle, iLast, iPick].filter((i) => i >= 0).map((i) => (td[i] && td[i].getAttribute('title')) || ''),
     };
   });
 }
@@ -383,6 +389,7 @@ const SCENARIOS = {
       // A bracket that could not be built hands back nulls, and null is not zero.
       noBracket: adaptSimTeam({ teamId: 7, pTitle: null, pLast: 0.4 }),
       withPlayoffs: adaptSimTeam({ teamId: 7, pTitle: 0.25, pLast: 0.1, pPlayoffs: 0.6 }),
+      withBye: adaptSimTeam({ teamId: 7, pTitle: 0.25, pLast: 0.1, pPlayoffs: 0.6, pBye: 0.3 }),
     };
 
     return { errors, fetchCalls, settled, adapter, ...readPage(document) };
@@ -615,7 +622,7 @@ const SCENARIOS = {
         open: open ? { href: open.getAttribute('href'), text: text(open) } : null,
       };
     };
-    const KEYS = ['name', 'record', 'luck', 'title', 'last'];
+    const KEYS = ['name', 'record', 'luck', 'title', 'pick'];
     const hoverAll = () => [...document.querySelectorAll('#summaryTable tbody tr')].map((tr) => {
       const out = { name: text(tr.children[0]), cells: {}, cards: {} };
       KEYS.forEach((k, i) => {
@@ -840,8 +847,12 @@ if (!fresh.boot) {
   ok('the members are the PEOPLE, not the ESPN team names',
     fresh.rows.every((r) => demo.teams.some((t) => t.name === r.name)),
     fresh.rows.map((r) => r.name).join(','));
-  eq(fresh.headers.join(' | '), 'Member | Record | LUCK | Title % | Loser %',
-    'the four columns Tim asked for, plus his win–loss Record right after Member');
+  // Tim, 2026-11-10: "the columns to be record, luck, title, and then the most
+  // relevant % for that player (either bye, playoff, or loser)".
+  eq(fresh.headers.join(' | '), 'Member | Record | LUCK | Title % | Chance',
+    'the columns are Record, LUCK, Title %, then the one Chance column (Tim, 2026-11-10)');
+  eq(ad.withPlayoffs?.bye ?? null, null, 'the adapter gives a null Bye % when the row has none');
+  eq(ad.withBye?.bye, 0.3, 'and reads pBye as a probability');
 
   // ---- THE RECORD (Tim, 2026-09-27: "each players win/loss ratio aswell
   // (4W/2L)"), re-derived from the demo's own scores over weeks 1..8 --------
@@ -879,31 +890,51 @@ if (!fresh.boot) {
   for (const r of fresh.rows) {
     const want = sim8.byName.get(r.name);
     near(r.title, want.pTitle, 1e-9, `${r.name}: title % is the simulated championship rate`);
-    near(r.last, want.pLast, 1e-9, `${r.name}: loser % is the simulated last-in-the-table rate`);
   }
 
-  // EXACTLY ONE CHAMPION AND EXACTLY ONE LAST PLACE PER SIMULATED SEASON, so
-  // both columns are a partition of the league and must total the whole of it.
-  // A column that sums to six is the playoff-qualification rate wearing the
-  // title column's hat, which is a real way for this to go wrong.
+  // EXACTLY ONE CHAMPION PER SIMULATED SEASON, so the column is a partition of
+  // the league and must total the whole of it. A column that sums to six is the
+  // playoff-qualification rate wearing the title column's hat.
   const sumTitle = fresh.rows.reduce((a, r) => a + (r.title ?? 0), 0);
-  const sumLast = fresh.rows.reduce((a, r) => a + (r.last ?? 0), 0);
   near(sumTitle * 100, 100, 1e-6, 'title % sums to 100 across the league');
-  near(sumLast * 100, 100, 1e-6, 'loser % sums to 100 across the league');
-  ok('every percentage is a real probability',
-    fresh.rows.every((r) => r.title >= 0 && r.title <= 1 && r.last >= 0 && r.last <= 1));
+  ok('every title % is a real probability',
+    fresh.rows.every((r) => r.title >= 0 && r.title <= 1));
 
-  // The two questions are genuinely different. If the page had wired the same
-  // field into both columns this would be the assertion that noticed.
-  ok('title % and loser % are different numbers, not the same one twice',
-    fresh.rows.some((r) => Math.abs(r.title - r.last) > 0.01),
-    JSON.stringify(fresh.rows.map((r) => [r.name, r.title, r.last])));
+  // ---- THE CHANCE COLUMN (Tim, 2026-11-10), re-derived ----------------------
+  // From the parent's own simulation: Playoff %, Bye % (the demo's six-team
+  // bracket gives two byes) and Loser %, through the pure pick, and compared
+  // with the cell's tag, its data-pick, its figure and its printed text.
+  {
+    const { relevantChance, pct, PICK_KINDS } = await import(moduleUrl('js/summary-table.js'));
+    eq(sim8.result.playoff?.byes, 2, '(the demo bracket has two byes, so Bye % is in play)');
+    const kinds = new Set();
+    for (const r of fresh.rows) {
+      const s = sim8.byName.get(r.name);
+      const want = relevantChance({ playoffs: s.pPlayoffs, bye: s.pBye, last: s.pLast });
+      kinds.add(want.kind);
+      eq(r.pickKind, want.kind, `${r.name}: Chance shows ${PICK_KINDS[want.kind].tag} (P ${pct(s.pPlayoffs)}, bye ${pct(s.pBye)}, loser ${pct(s.pLast)})`);
+      near(r.pickV, want.p, 1e-9, `${r.name}: and its figure is that simulated rate`);
+      eq(r.pickTag, PICK_KINDS[want.kind].tag, `${r.name}: the cell's tag names it`);
+      eq(r.pickText, `${PICK_KINDS[want.kind].tag} ${pct(want.p)}`, `${r.name}: the cell reads "${PICK_KINDS[want.kind].tag} ${pct(want.p)}"`);
+    }
+    ok('(the demo is a real test: the column shows more than one kind)', kinds.size >= 2, [...kinds].join(','));
+    // Tim's first example on real numbers: the demo's manager on 98% playoffs
+    // shows BYE. (Nolan, 94% playoffs with a 6% bye, shows PLAYOFF: 94 is
+    // nearer 50 than his bye is. The rule is closeness, not a threshold.)
+    const sure = fresh.rows.filter((r) => pct(sim8.byName.get(r.name).pPlayoffs) === '98%');
+    ok('the demo manager on 98% playoffs shows BYE, not PLAYOFF', sure.length > 0 && sure.every((r) => r.pickKind === 'bye'),
+      JSON.stringify(sure.map((r) => [r.name, r.pickKind])));
+  }
 
   // Tim, 2026-10-22: 12% title / 1% loser goes above 13% / 4%. The rows come
-  // out in title % minus loser % order, highest first.
-  ok('rows are ordered by title % minus loser %',
-    fresh.rows.every((r, i, a) => i === 0 || (a[i - 1].title - a[i - 1].last) >= (r.title - r.last) - 1e-9),
-    JSON.stringify(fresh.rows.map((r) => [r.name, r.title, r.last])));
+  // out in title % minus loser % order, highest first (Loser % re-derived, as
+  // it is no longer its own column).
+  {
+    const lastOf = (r) => sim8.byName.get(r.name).pLast;
+    ok('rows are ordered by title % minus loser %',
+      fresh.rows.every((r, i, a) => i === 0 || (a[i - 1].title - lastOf(a[i - 1])) >= (r.title - lastOf(r)) - 1e-9),
+      JSON.stringify(fresh.rows.map((r) => [r.name, r.title, lastOf(r)])));
+  }
 
   // ---- PLAYOFF % ON THE MESSAGE (Tim, 2026-10-26: "Add playoff % to the
   // summary message now. Don't let it affect the ordering of the players.") --
@@ -914,15 +945,15 @@ if (!fresh.boot) {
   {
     const { pct } = await import(moduleUrl('js/summary-table.js'));
     const cols = (name) => textRow(fresh.cardText, name).split(/\s{2,}/);
-    ok('the text copy has a Playoff % heading between LUCK and Title %',
-      /LUCK\s+Playoff %\s+Title %\s+Loser %/.test(fresh.cardText),
+    // Since 2026-11-10 the copy's columns are the page's: Title %, then Chance.
+    ok('the text copy has the headings LUCK, Title %, Chance in that order',
+      /LUCK\s+Title %\s+Chance/.test(fresh.cardText) && !/Playoff %\s/.test(fresh.cardText.split('\n')[3] || ''),
       fresh.cardText.split('\n').slice(0, 5).join(' / '));
     for (const r of fresh.rows) {
-      const want = pct(sim8.byName.get(r.name).pPlayoffs);
-      eq(cols(r.name)[3], want, `${r.name}: the text copy carries his playoff % (${want})`);
+      eq(cols(r.name)[4], r.pickText, `${r.name}: the text copy carries the same Chance cell (${r.pickText})`);
     }
-    ok('the text copy says what Playoff % is',
-      /Playoff % = makes the playoffs/.test(fresh.cardText), fresh.cardText.slice(-600));
+    ok('the text copy says what Chance is',
+      /Chance = Bye\/Playoff\/Loser % nearest to 50%/.test(fresh.cardText), fresh.cardText.slice(-600));
     // THE ORDER, re-derived without playoff % at all.
     const standing = (n) => sim8.byName.get(n).pTitle - sim8.byName.get(n).pLast;
     const wantOrder = demo.teams.map((t) => t.name).sort((a, b) =>
@@ -950,18 +981,27 @@ if (!fresh.boot) {
   for (const [label, key, goodHigh] of [
     ['LUCK', 'luck', true],
     ['Title %', 'title', true],
-    ['Loser %', 'last', false],
   ]) {
     const why = heatDirection(fresh.rows, key, goodHigh);
     ok(`${label} is shaded the right way round`, !why, why);
   }
   {
-    const byLast = [...fresh.rows].sort((a, b) => b.last - a.last);
-    ok('the manager most likely to finish last is RED, not green',
-      byLast[0].heat.last === 'dn', `${byLast[0].name} @ ${byLast[0].last} -> ${byLast[0].heat.last}`);
-    ok('and the one least likely to is GREEN',
-      byLast[byLast.length - 1].heat.last === 'up',
-      `${byLast[byLast.length - 1].name} -> ${byLast[byLast.length - 1].heat.last}`);
+    // THE CHANCE COLUMN is shaded on each cell's OWN figure across the league
+    // (a LOSER cell on everyone's Loser %, turned over). Re-derived through
+    // js/heat.js from the parent's simulation, cell by cell.
+    const { heatScale, heatOf } = await import(moduleUrl('js/heat.js'));
+    const field = { playoffs: 'pPlayoffs', bye: 'pBye', last: 'pLast' };
+    const scaleOf = (kind) => heatScale(demo.teams.map((t) => sim8.byName.get(t.name)[field[kind]]),
+      { invert: kind === 'last', minSpread: 0.005 });
+    const side = (h) => (h && /heat-up-/.test(h.cls) ? 'up' : h && /heat-dn-/.test(h.cls) ? 'dn' : null);
+    for (const r of fresh.rows) {
+      if (!r.pickKind) continue;
+      const want = side(heatOf(r.pickV, scaleOf(r.pickKind)));
+      eq(r.heat.pick, want, `${r.name}: the ${r.pickKind} cell is shaded on its own column's scale (${want})`);
+    }
+    const spoon = [...fresh.rows].sort((a, b) => sim8.byName.get(b.name).pLast - sim8.byName.get(a.name).pLast)[0];
+    eq(spoon.pickKind, 'last', 'the manager most likely to finish last shows LOSER');
+    eq(spoon.heat.pick, 'dn', 'and that LOSER cell is RED, not green');
     const byTitle = [...fresh.rows].sort((a, b) => b.title - a.title);
     ok('the title favourite is GREEN on Title %',
       byTitle[0].heat.title === 'up', `${byTitle[0].name} -> ${byTitle[0].heat.title}`);
@@ -980,8 +1020,8 @@ if (!fresh.boot) {
   // thresholds are method and belong in the toggle; "green on Loser % is a LOW
   // number" changes what the colour means, and a reader who opens nothing reads
   // the wooden-spoon favourite as the manager to beat without it.
-  ok('the key says Loser % is turned over',
-    /Loser %/.test(fresh.heatKey) && /turned over/i.test(fresh.heatKey) &&
+  ok('the key says a LOSER figure is turned over',
+    /LOSER/.test(fresh.heatKey) && /turned over/i.test(fresh.heatKey) &&
     /green is low/i.test(fresh.heatKey),
     fresh.heatKey.slice(0, 220));
   // Channel 2 named on the visible line: the glyph and the weight are what make
@@ -1008,8 +1048,12 @@ if (!fresh.boot) {
   // Every shaded cell keeps its data-v, so the column still sorts as a number
   // rather than as the string "41% ▲".
   ok('shading did not cost the columns their numeric sort',
-    fresh.rows.every((r) => r.title !== null && r.last !== null),
-    JSON.stringify(fresh.rows.map((r) => [r.title, r.last])));
+    fresh.rows.every((r) => r.title !== null && r.pickV !== null),
+    JSON.stringify(fresh.rows.map((r) => [r.title, r.pickV])));
+  // The note says what Chance is, in one sentence, with the rule and its ties.
+  ok('the note explains the Chance column (closest to 50%, ties Playoff, Bye, Loser)',
+    /Chance shows whichever of Bye %/.test(fresh.note) && /closest to 50%/.test(fresh.note) &&
+    /ties going Playoff, then Bye, then Loser/.test(fresh.note), fresh.note.slice(0, 900));
 
   // ---- A PERCENTAGE IS NOT POINTS: the flat-column guard ------------------
   //
@@ -1116,8 +1160,8 @@ if (!early.boot) {
       JSON.stringify(got.rows.map((r) => r.luckText)));
     ok(`${label}: title % is shown`, got.rows.every((r) => r.title !== null),
       JSON.stringify(got.rows.map((r) => r.titleText)));
-    ok(`${label}: loser % is shown`, got.rows.every((r) => r.last !== null),
-      JSON.stringify(got.rows.map((r) => r.lastText)));
+    ok(`${label}: the Chance column is shown`, got.rows.every((r) => r.pickV !== null && r.pickKind),
+      JSON.stringify(got.rows.map((r) => r.pickText)));
     near(got.rows.reduce((a, r) => a + r.title, 0) * 100, 100, 1e-6, `${label}: title % still sums to 100`);
     ok(`${label}: and the note says it is early`,
       /Early season/.test(got.note), got.note.slice(0, 220));
@@ -1135,8 +1179,8 @@ if (!early.boot) {
       got.rows.every((r) => r.heat.luck === null),
       JSON.stringify(got.rows.map((r) => [r.name, r.heat.luck])));
     ok(`${label}: but the two forecast columns still are`,
-      got.rows.some((r) => r.heat.title) && got.rows.some((r) => r.heat.last),
-      JSON.stringify(got.rows.map((r) => [r.heat.title, r.heat.last])));
+      got.rows.some((r) => r.heat.title) && got.rows.some((r) => r.heat.pick),
+      JSON.stringify(got.rows.map((r) => [r.heat.title, r.heat.pick])));
     ok(`${label}: and the key SAYS why LUCK is plain, rather than leaving a gap`,
       /LUCK is not shaded yet/.test(got.heatKey), got.heatKey.slice(0, 220));
   }
@@ -1150,7 +1194,7 @@ if (!early.boot) {
     !/LUCK is not shaded yet/.test(early.four.heatKey), early.four.heatKey.slice(0, 200));
 
   ok('at week 4 the numbers are there',
-    early.four.rows.every((r) => r.luck !== null && r.title !== null && r.last !== null),
+    early.four.rows.every((r) => r.luck !== null && r.title !== null && r.pickV !== null),
     JSON.stringify(early.four.rows.slice(0, 3)));
   const sum4 = early.four.rows.reduce((a, r) => a + r.title, 0);
   near(sum4 * 100, 100, 1e-6, 'and they still sum to 100 at a different cut-off');
@@ -1198,11 +1242,14 @@ if (!decided.boot) {
   // AND THE OTHER COLUMN STILL WORKS. Last in the regular-season table is a
   // fact about the table, not about the bracket — which is exactly Tim's rule,
   // and the reason the two columns cannot be computed from one number.
-  const spoon = decided.rows.filter((r) => r.last === 1);
-  eq(spoon.length, 1, 'exactly one manager is certain to finish last');
-  ok('and everybody else is certain not to',
-    decided.rows.filter((r) => r.last === 0).length === decided.rows.length - 1,
-    JSON.stringify(decided.rows.map((r) => [r.name, r.last])));
+  // The Chance column with no bracket: Playoff % and Bye % are missing, so it
+  // is Loser % for everyone, a settled 0 or 100% (the outcome).
+  const spoon = decided.rows.filter((r) => r.pickKind === 'last' && r.pickV === 1);
+  eq(spoon.length, 1, 'exactly one manager is certain to finish last (LOSER 100%)');
+  ok('and everybody else is certain not to (LOSER 0%)',
+    decided.rows.filter((r) => r.pickKind === 'last' && r.pickV === 0).length === decided.rows.length - 1,
+    JSON.stringify(decided.rows.map((r) => [r.name, r.pickKind, r.pickV])));
+  ok('the spoon reads "LOSER 100%"', spoon.length === 1 && spoon[0].pickText === 'LOSER 100%', spoon[0]?.pickText);
   ok('the page says WHY the title column is blank rather than leaving it a mystery',
     /no games left to play out/i.test(decided.note), decided.note.slice(-360));
   ok('and the image says it too, along with why the loser column is still there',
@@ -1308,7 +1355,8 @@ if (!drawn.boot) {
   ok('the week is painted', drawn.painted.some((s) => new RegExp(`Week ${THROUGH}\\b`).test(s)),
     painted.slice(0, 300));
   ok('all five column headings are painted',
-    ['MEMBER', 'RECORD', 'LUCK', 'TITLE %', 'LOSER %'].every((h) => drawn.painted.includes(h)),
+    ['MEMBER', 'RECORD', 'LUCK', 'TITLE %', 'CHANCE'].every((h) => drawn.painted.includes(h)) &&
+    !drawn.painted.includes('LOSER %') && !drawn.painted.includes('PLAYOFF %'),
     painted.slice(0, 300));
   for (const r of drawn.page.rows) {
     ok(`${r.name}: the record reached the canvas`,
@@ -1342,26 +1390,33 @@ if (!drawn.boot) {
     const luckOnly = r.luckText.replace(/\s*±.*$/, '');   // the ± is on the page, not the image
     ok(`${r.name}: LUCK reached the canvas`, drawn.painted.includes(luckOnly), r.luckText);
     ok(`${r.name}: title % reached the canvas`, drawn.painted.includes(r.titleText), r.titleText);
-    ok(`${r.name}: loser % reached the canvas`, drawn.painted.includes(r.lastText), r.lastText);
   }
 
-  // PLAYOFF % ON THE IMAGE (Tim, 2026-10-26), in its own column between LUCK
-  // and TITLE %, with the heading clear of both neighbours at 17px.
+  // THE CHANCE COLUMN ON THE IMAGE (Tim, 2026-11-10): last, after TITLE %. Each
+  // row's figure right-aligned under CHANCE, its tag just left of it, both the
+  // page's own cell ("BYE 62%"), and the tag clear of TITLE %'s figures.
   {
-    const { pct } = await import(moduleUrl('js/summary-table.js'));
     const head = (s) => drawn.draws.filter((t) => t.s === s).pop();
-    const po = head('PLAYOFF %');
-    const luck = head('LUCK');
+    const ch = head('CHANCE');
     const title = head('TITLE %');
-    ok('the PLAYOFF % heading is painted', !!po, painted.slice(0, 300));
-    const w = (s) => s.length * 17 * 0.55;
-    ok('and it sits between LUCK and TITLE % without touching either',
-      po && luck && title && luck.x < po.x - w('PLAYOFF %') && po.x < title.x - w('TITLE %'),
-      JSON.stringify({ luck: luck?.x, po: po?.x, title: title?.x }));
-    const atPo = drawn.draws.filter((t) => po && t.x === po.x && t.s !== 'PLAYOFF %')
-      .slice(-drawn.page.rows.length).map((t) => t.s);
-    const want = drawn.page.rows.map((r) => pct(sim8.byName.get(r.name).pPlayoffs));
-    eq(atPo.join(' '), want.join(' '), 'every row\'s playoff % is painted in that column, in the chart\'s order');
+    ok('the CHANCE heading is painted, right of TITLE %', !!ch && !!title && ch.x > title.x,
+      JSON.stringify({ ch: ch?.x, title: title?.x }));
+    const n = drawn.page.rows.length;
+    const figs = drawn.draws.filter((t) => ch && t.x === ch.x && t.s !== 'CHANCE').slice(-n);
+    eq(figs.map((t) => t.s).join(' '), drawn.page.rows.map((r) => r.pickText.replace(/^\S+ /, '')).join(' '),
+      'every row\'s Chance figure is painted in that column, in the chart\'s order');
+    const tags = new Set(['BYE', 'PLAYOFF', 'LOSER']);
+    const tagDraws = drawn.draws.filter((t) => tags.has(t.s)).slice(-n);
+    eq(tagDraws.map((t) => t.s).join(' '), drawn.page.rows.map((r) => r.pickTag).join(' '),
+      'and every row\'s tag is painted beside it, the same tag the page shows');
+    const titleRight = title ? title.x : 0;
+    ok('each tag sits left of its figure and clear of TITLE %',
+      tagDraws.length === n && tagDraws.every((t) => t.align === 'right' && t.x < ch.x &&
+        t.x - t.s.length * 14 * 0.55 > titleRight + 4),
+      JSON.stringify(tagDraws.slice(0, 3)));
+    ok('the widest cell ("PLAYOFF 100%") fits between TITLE % and the edge',
+      ch && title && (ch.x - '100%'.length * 22 * 0.55 - 7 - 'PLAYOFF'.length * 14 * 0.55) > titleRight + 4,
+      JSON.stringify({ ch: ch?.x, title: titleRight }));
   }
 
   // NO EXPLANATION LINES ON THE IMAGE (Tim, 2026-09-17). The definitions live
@@ -1597,7 +1652,11 @@ if (!cards.boot) {
 
   const lucks = cards.table.map((r) => r.luck);
   const titles = cards.table.map((r) => r.title);
-  const lasts = cards.table.map((r) => r.last);
+  // The Chance cell's card is the card of the figure it shows, ranked and
+  // averaged against that figure's own column (re-derived from sim8).
+  const { PICK_KINDS } = await import(moduleUrl('js/summary-table.js'));
+  const simCol = { title: 'pTitle', playoffs: 'pPlayoffs', bye: 'pBye', last: 'pLast' };
+  const allOf = (kind) => cards.table.map((x) => sim8.byName.get(x.name)[simCol[kind]]);
   for (const r of cards.rows) {
     const t = team8.get(r.name);
     const page = fresh.rows.find((x) => x.name === r.name) || {};
@@ -1622,10 +1681,13 @@ if (!cards.boot) {
       String(page.luckText || '').startsWith(sgn(t.luckScore)), page.luckText);
     eq(L.note, standing(t.luckScore, lucks), `${r.name}: LUCK card — where it ranks`);
 
-    // ---- Title % and Loser %: N of 100,000 seasons · league average · rank.
+    // ---- Title % and Chance: N of 100,000 seasons · league average · rank.
+    const kind = (cards.table.find((x) => x.name === r.name) || {}).pickKind;
+    ok(`${r.name}: the Chance cell names its kind`, !!PICK_KINDS[kind], kind);
+    const K = PICK_KINDS[kind] || PICK_KINDS.last;
     for (const [key, label, count, p, all] of [
       ['title', 'Title %', 'Seasons won', want.pTitle, titles],
-      ['last', 'Loser %', 'Seasons last', want.pLast, lasts],
+      ['pick', K.label, K.counted, want[simCol[kind] || 'pLast'], allOf(kind || 'last')],
     ]) {
       const C = r.cards[key] || { rows: [], foot: [] };
       eq(C.ident, `${r.name} · ${label}`, `${r.name}: the ${label} card names him and the figure`);
@@ -1669,7 +1731,7 @@ if (!cards.boot) {
   const firstId = idOf.get(cards.firstName);
   eq(JSON.stringify(cards.clicks.luck), JSON.stringify([`stats.html?team=${firstId}`]), 'a click on LUCK goes to that team on Stats');
   eq(JSON.stringify(cards.clicks.title), JSON.stringify(['schedule.html#simPanel']), 'a click on Title % goes to the Schedule simulation');
-  eq(JSON.stringify(cards.clicks.last), JSON.stringify(['schedule.html#simPanel']), 'and so does a click on Loser %');
+  eq(JSON.stringify(cards.clicks.pick), JSON.stringify(['schedule.html#simPanel']), 'and so does a click on Chance');
   eq(JSON.stringify(cards.clicks.record), JSON.stringify([`schedule.html?week=${THROUGH}`]), 'a click on Record goes to Schedule, on the last week counted');
   eq(JSON.stringify(cards.clicks.name), JSON.stringify([`analysis.html?team=${firstId}&week=${THROUGH + 1}#rosterDetail`]),
     'a click on the member goes to that team on Analysis');
@@ -1694,7 +1756,7 @@ if (!cards.boot) {
   }
 
   // ---- headings: one plain sentence each, and the same five columns.
-  eq(cards.heads.map((h) => h.text).join('|'), 'Member|Record|LUCK|Title %|Loser %', 'the headings are unchanged');
+  eq(cards.heads.map((h) => h.text).join('|'), 'Member|Record|LUCK|Title %|Chance', 'the headings are Tim\'s 2026-11-10 set');
   for (const h of cards.heads) {
     ok(`the ${h.text} heading's title is ONE plain sentence`,
       /^[A-Z][^.!?]{10,}\.$/.test(h.title) && h.title.split(/\s+/).length <= 18 && !/[A-Z]{4,} [A-Z]{4,}/.test(h.title), h.title);
