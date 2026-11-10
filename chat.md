@@ -166,3 +166,10 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** js/summary-table.js `relevantChance` + `pick` option; js/summary-page.js (adapter reads pBye, rows, cards, key, note sentence, text copy, canvas); summary.html heading/lede/tag style; tests summary-pick-check 40 (new), test-summary 666, cross-sim-check 37.
 - **Verified how:** summary-pick-check 44/44 (37 fail on 36c3f5a, 7 on 97071b3); test-summary 669/669; cross-sim 37, shared-tables 318, pages-done 181, record-live 82, decisions-check 427 (now compares the 4 shared columns), text-audit 12/12 (summary 296 = ceiling, wording trimmed to fit); phone-view WebKit 393 + desktop, demo and 1241838 (BYE 61 / PLAYOFF 71 / LOSER 33 etc.), no overflow, no console errors.
 - **Open:** heading word "Chance" and the lede are Claude's; demo season-over shows LOSER 0% for most (no bracket in demo).
+
+## 2026-11-10 — "add "change in value" to that list" (builder ff-value-change, branch value-change)
+- **Asked:** a third option on every Proj | Value switch: the change in Value since his last game, from the projection changes.
+- **Decided:** then = `value.playerValue` on the projection copy saved as of his last played week (byes skipped; game over this week = this week), same frozen lines; "—" with a reason when no copy; preview = Value then → now + weeks whose projection moved. Players: Value column → Change; Playoffs: Change column after Owner; Analysis: All teams cells + roster Avg/wk; Trade: custom-list figure.
+- **Built:** `js/value-change.js` (pure), season.js `lookup.change` + `savedCopies`, value.js `withFreeAgents.change`, waivers/analysis/playoffs-players/trade pages, 3 HTML switches; suites test-value-change 36, value-change-check 18.
+- **Verified how:** value-change-check 6 fail on origin/main, dash-preview check failed before its fix; phone-view WebKit 393 + 1440 on 1241838 with a seeded week-9 copy (scratchpad): Joe Burrow +3.2 (1.8 → 5.0), no console errors, no overflow; demo all dashes.
+- **Open:** Tim's real league numbers only appear once copies exist for the right week; free agents mostly "—".

@@ -587,8 +587,8 @@ if (!process.argv[2]) {
   ok('lines: the page boots clean', !got.boot && got.errors.length === 0, got.boot || (got.errors || []).join(' | '));
   const P = got.first;
   const V = got.second;
-  ok('lines: the toolbar switch is shown, two buttons, on Proj',
-    P.toolbar && P.toolbar.hidden === false && same(P.toolbar.labels, ['Proj', 'Value']) &&
+  ok('lines: the toolbar switch is shown, three buttons (Change in value, Tim 2026-11-10), on Proj',
+    P.toolbar && P.toolbar.hidden === false && same(P.toolbar.labels, ['Proj', 'Value', 'Change in value']) &&
     same(P.toolbar.on, ['proj']) && same(P.toolbar.pressed, ['proj']), JSON.stringify(P.toolbar));
   ok('lines: it is the site\'s small segmented control',
     P.toolbar && P.toolbar.classes.includes('segmented') && P.toolbar.classes.includes('seg-sm'), JSON.stringify(P.toolbar && P.toolbar.classes));

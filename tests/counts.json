@@ -421,6 +421,12 @@
     },
     "recap-previews-check.mjs": {
       "assertions": 23
+    },
+    "test-value-change.mjs": {
+      "assertions": 36
+    },
+    "value-change-check.mjs": {
+      "assertions": 18
     }
   }
 }

@@ -346,7 +346,7 @@ ok(await waitFor(() => showCtl() && !showCtl().hidden), 'the Proj | Value box is
   const seg = box && box.querySelector('.segmented.seg-sm[role="group"]');
   ok(Boolean(seg), 'the control is the site’s small segmented control');
   const btns = seg ? [...seg.querySelectorAll('button[data-show]')].map((b) => `${b.dataset.show}:${b.textContent.trim()}`) : [];
-  eq(btns.join('|'), 'proj:Proj|value:Value', 'Proj then Value');
+  eq(btns.join('|'), 'proj:Proj|value:Value|change:Change in value', 'Proj, Value, then Change in value (Tim, 2026-11-10)');
   ok(box && box.closest('.toolbar') && box.closest('.toolbar').querySelector('#poPosFilter'), 'it sits in the filter box beside Position');
   eq(seg && seg.querySelector('button.on') ? seg.querySelector('button.on').dataset.show : null, 'proj', 'it starts on Proj');
 }
