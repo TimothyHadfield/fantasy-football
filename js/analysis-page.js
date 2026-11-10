@@ -51,6 +51,7 @@ import './loose-weeks.js';
 // A PLAYER'S VALUE (Tim, 2026-10-09): pure arithmetic; the frozen lines come
 // from js/season.js. See the "Proj | Value" block below.
 import { valueOf, runValue } from './value.js';
+import * as valueChange from './value-change.js';
 import { scope } from './prefs.js';
 import { optimalLineup, slotsFromCounts } from './forecast.js';
 import { slotCountsFromLineups } from './projection.js';
@@ -283,7 +284,47 @@ const SHOW_SWITCHES = ['overviewShow', 'seasonShow', 'startersShow', 'rosterShow
 
 /** Is the page showing Value? Never before the lines are known. */
 function valueOn() {
-  return Boolean(state.valueBase) && prefs.get('show') === 'value';
+  return Boolean(state.valueBase) && (prefs.get('show') === 'value' || prefs.get('show') === 'change');
+}
+
+/**
+ * CHANGE IN VALUE (Tim, 2026-11-10): everything as on Value, except a figure
+ * that is ONE MAN'S OWN — a cell of All teams, Avg/wk in the roster detail,
+ * Who to start's Avg — which becomes his Value now minus his Value before his
+ * last game (js/value-change.js). Week-by-week cells stay Values.
+ */
+function changeOn() {
+  return Boolean(state.valueBase) && prefs.get('show') === 'change';
+}
+
+/** Which of the three the switches show. */
+const shownNow = () => (changeOn() ? 'change' : valueOn() ? 'value' : 'proj');
+
+/** His change in value, the whole answer (js/value-change.js), or null. */
+function ownChange(p) {
+  const fn = state.valueLookup && typeof state.valueLookup.change === 'function' ? state.valueLookup.change : null;
+  return p && fn ? fn(p.playerId) : null;
+}
+/** Just the number, or null. */
+const changeNum = (p) => {
+  const c = ownChange(p);
+  return c && typeof c.change === 'number' ? c.change : null;
+};
+
+/** His change in a few words for a card's identity line: "Change +0.7: Value 4.3 → 5.0 since week 8". */
+function changeWords(p) {
+  const c = ownChange(p);
+  if (!c || c.change === null) return `Change —: ${valueChange.whyText(c)}`;
+  return `Change ${valueChange.changeText(c.change)}: Value ${c.then.toFixed(1)} → ${c.now.toFixed(1)} since week ${c.asOf}`;
+}
+
+/** One man's change as a cell: signed, on the one scale, his preview (then → now) on hover/tap. */
+function changeTd(p, scale, prefix = 'rc') {
+  const c = ownChange(p);
+  const v = c && typeof c.change === 'number' ? c.change : null;
+  const h = v === null ? null : heatOf(v, scale, { what: `a starting ${p.position} around the league` });
+  return `<td${h ? ` class="${h.cls}"` : ''}${v === null ? '' : ` data-v="${v}"`}` +
+    `${statCard(valueChange.changeCard(p.name, c), { prefix })}>${valueChange.changeText(v)}${heatMarkHtml(h)}</td>`;
 }
 
 /** A man's projection figure as Value: to the tenth, never below 0, null when it cannot be said. */
@@ -293,6 +334,7 @@ function asValue(p, x) {
 
 /** His Value as his card prints it (js/season.js `fetchPlayerValues`), or null. */
 function ownValue(p) {
+  if (changeOn()) return changeNum(p);
   if (!p || typeof state.valueLookup !== 'function') return null;
   const v = state.valueLookup(p.playerId);
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -303,12 +345,14 @@ function valueNote(history = false) {
   if (!state.valueBase) return '';
   return '<strong>Value</strong> is points a week over the waiver line. ' +
     'Points below the starter line count half. Both lines are fixed for the season.' +
-    (history ? ' Scores under “Actual history” stay scores.' : '');
+    (history ? ' Scores under “Actual history” stay scores.' : '') +
+    ` <strong>Change in value</strong>: ${valueChange.CHANGE_NOTE} It replaces a man’s own figure ` +
+    '(a cell of All teams, Avg/wk); week-by-week cells stay Values.';
 }
 
 /** Show or hide the switches, and light the button the code says is on. */
 function syncShow() {
-  const on = valueOn() ? 'value' : 'proj';
+  const on = shownNow();
   for (const id of SHOW_SWITCHES) {
     const box = $(id);
     if (!box) continue;
@@ -982,6 +1026,8 @@ function gridMeasure(entry, weekGrid) {
  */
 function withValue(entry) {
   if (!entry || !valueOn()) return entry;
+  // On Change in value the cell is the man's own change (one man, one figure).
+  if (changeOn()) return { ...entry, val: changeNum(entry.p), chg: true };
   return { ...entry, val: typeof entry.v === 'number' ? asValue(entry.p, entry.v) : null };
 }
 
@@ -1033,7 +1079,8 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
   // season under it, drawn by the tip card rather than crammed into a `title`.
   const ident =
     `${p.name} · ${p.position} · ${p.proTeam}${tier ? ` · ${p.injuryStatus}` : ''}` +
-    (asVal && v !== null && !bye ? ` · Value ${fmt(v)} on a projection of ${fmt(raw)}` : '') +
+    (entry.chg ? ` · ${changeWords(entry.p)}`
+      : asVal && v !== null && !bye ? ` · Value ${fmt(v)} on a projection of ${fmt(raw)}` : '') +
     (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '') +
     (zero === 'out' ? ' · projected at 0.0 because he is ruled out, not on bye' : '');
 
@@ -1071,7 +1118,9 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
   const cardIdent = heat && !run ? `${ident} · ${heat.words}` : ident;
   const key = registerRun({ ident: cardIdent, run, href, id, glance: glanceFor(p), playerId: p.playerId }, tipKey || 'g');
 
-  const shown = v === null
+  const shown = entry.chg
+    ? valueChange.changeText(v)
+    : v === null
     ? '—'
     : bye
       ? 'Bye'
@@ -2520,6 +2569,7 @@ function renderRoster() {
 
   // Only this table's cards: the grids above register their own under 'g'.
   clearRuns('r');
+  clearPops('rc');
   const index = seasonIndexFor(team.id);
   // Each man's card key, so the best-lineup line above the table opens the
   // very card his row does rather than a second copy of it.
@@ -2581,7 +2631,9 @@ function renderRoster() {
           open || typeof line.actual !== 'number' ? null : round1(line.actual),
           tint.actual(p.position), `a starting ${posLabel(p)} around the league in week ${state.week}`)}
         <td data-v="${d === null ? '' : d}">${open ? '' : signed(d)}</td>
-        ${heatTd(fmt(avgShown), avgShown, avg ? tint.avg(p.position) : null, `a starting ${posLabel(p)} around the league, per week`)}
+        ${changeOn()
+          ? changeTd(p, tint.avg(p.position))
+          : heatTd(fmt(avgShown), avgShown, avg ? tint.avg(p.position) : null, `a starting ${posLabel(p)} around the league, per week`)}
         ${heatTd(fmt(p.seasonProjected, 0),
           typeof p.seasonProjected === 'number' && p.seasonProjected > 0 ? p.seasonProjected : null,
           tint.season(p.position), `a starting ${posLabel(p)} around the league, over the season`)}
@@ -2597,6 +2649,11 @@ function renderRoster() {
     if (!th) continue;
     if (th.dataset.says === undefined) th.dataset.says = th.getAttribute('title') || '';
     th.setAttribute('title', th.dataset.says + valueWords());
+  }
+  // On Change in value, Avg/wk holds each man's change and says so.
+  if (heads[7]) {
+    if (heads[7].dataset.head === undefined) heads[7].dataset.head = heads[7].textContent;
+    heads[7].textContent = changeOn() ? 'Change' : heads[7].dataset.head;
   }
   $('rosterStarters').innerHTML = starters.map(row).join('');
   $('rosterSplit').innerHTML = splitRow(projTotal, team.projectedTotal, held, columns);
@@ -5575,9 +5632,9 @@ for (const id of SHOW_SWITCHES) {
   box.addEventListener('click', (e) => {
     const btn = e.target.closest ? e.target.closest('button[data-show]') : null;
     if (!btn || !state.valueBase) return;
-    const show = btn.dataset.show === 'value' ? 'value' : 'proj';
-    if ((show === 'value') === valueOn()) return;
-    prefs.set('show', show === 'value' ? 'value' : null);
+    const show = btn.dataset.show === 'value' || btn.dataset.show === 'change' ? btn.dataset.show : 'proj';
+    if (show === shownNow()) return;
+    prefs.set('show', show === 'proj' ? null : show);
     syncShow();
     repaintShown();
   });

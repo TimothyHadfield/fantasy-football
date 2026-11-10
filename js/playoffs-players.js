@@ -44,6 +44,7 @@
 
 import * as season from './season.js';
 import * as value from './value.js';
+import * as valueChange from './value-change.js';
 import * as espn from './espn.js';
 import { savedConfig, onConnection } from './connection.js';
 // The ONE definition of the playoff weeks (the league's last regular week plus
@@ -70,7 +71,7 @@ const FLEX = 'FLEX';
 const FLEX_POSITIONS = ['RB', 'WR', 'TE'];
 const FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', FLEX, 'K', 'DST'];
 const FILTER_CHOICE = (v) => (FILTERS.includes(String(v)) ? String(v) : 'ALL');
-const SHOW_CHOICE = (v) => (v === 'value' ? 'value' : 'proj');
+const SHOW_CHOICE = (v) => (v === 'value' || v === 'change' ? v : 'proj');
 
 // The Players page's own injury tags, word for word (js/waivers-page.js INJURY).
 const INJURY = {
@@ -251,6 +252,9 @@ async function mount(host, opts = {}) {
   if (!host) throw new Error('no host');
   const linesFrom = typeof opts.fetchValueBase === 'function' ? opts.fetchValueBase
     : typeof season.fetchValueBase === 'function' ? season.fetchValueBase : null;
+  // Every rostered man's Value and change in value (js/season.js).
+  const changesFrom = typeof opts.fetchPlayerValues === 'function' ? opts.fetchPlayerValues
+    : typeof season.fetchPlayerValues === 'function' ? season.fetchPlayerValues : null;
 
   const state = {
     token: 0,
@@ -277,10 +281,20 @@ async function mount(host, opts = {}) {
     // own, as Analysis, Players and Trade do), and the league's frozen lines.
     show: SHOW_CHOICE(prefs.get('show', 'proj')),
     base: null,
+    changes: null,            // js/season.js `fetchPlayerValues().lookup` (`.change`), or null
   };
 
   /** Proj | Value is on Value, and there are lines to measure from. */
-  const valueOn = () => state.show === 'value' && state.base !== null;
+  const valueOn = () => (state.show === 'value' || state.show === 'change') && state.base !== null;
+  /**
+   * CHANGE IN VALUE (Tim, 2026-11-10): the table as on Value, plus a Change
+   * column — his Value now minus his Value before his last game
+   * (js/value-change.js), for a rostered man; a free agent's is a dash.
+   */
+  const changeOn = () => state.show === 'change' && state.base !== null;
+  /** His change, the whole answer, or null. */
+  const changeOf = (p) => (state.changes && typeof state.changes.change === 'function'
+    ? state.changes.change(p.playerId) : null);
   /** A projection as its Value at his position; null when it cannot be said. */
   const asValue = (p, x) => value.valueOf(state.base, p.position, x);
 
@@ -294,6 +308,12 @@ async function mount(host, opts = {}) {
         if (token !== state.token || !value.isBase(base)) return;
         state.base = base;
         render();
+        return changesFrom ? changesFrom({ demo: Boolean(demo) }) : null;
+      })
+      .then((got) => {
+        if (token !== state.token || !got || typeof got.lookup !== 'function') return;
+        state.changes = got.lookup;
+        if (changeOn()) render();
       })
       .catch(() => { /* no lines: the page stays as it was */ });
   }
@@ -621,6 +641,7 @@ async function mount(host, opts = {}) {
         // players that is playoff avg - future proj avg."
         diffFut: diffOf(poShown, futShown),
         futureValues: future, poValues: po, poShown: poShownWeeks, espnAvg, fill,
+        change: changeOn() ? changeOf(p) : null,
         // The means in points, for the cards on Value (the rows are points).
         futurePts: fPts && fPts.mean !== null ? round1(fPts.mean) : null,
         playoffPts: pPts && pPts.mean !== null ? round1(pPts.mean) : null,
@@ -697,6 +718,7 @@ async function mount(host, opts = {}) {
       if (slot) slot.textContent = counts.ALL ? String(counts[b.dataset.pos] ?? 0) : '';
     });
 
+    const chgScales = changeOn() ? scalesByPosition(all, (r) => (r.change ? r.change.change : null)) : null;
     const avgScales = scalesByPosition(all, (r) => r.avg);
     const futScales = scalesByPosition(all, (r) => r.future);
     const poScales = scalesByPosition(all, (r) => r.playoff);
@@ -713,7 +735,7 @@ async function mount(host, opts = {}) {
 
     table.querySelector('thead').innerHTML = headHtml(weeks);
     // Nine fixed columns (Player … PO − Fut, `headHtml`), then one per week.
-    const cols = 9 + weeks.length;
+    const cols = 9 + (changeOn() ? 1 : 0) + weeks.length;
     const tbody = table.querySelector('tbody');
     if (!shown.length) {
       const why = state.loading ? 'Reading the league’s players…'
@@ -723,6 +745,7 @@ async function mount(host, opts = {}) {
       tbody.innerHTML = `<tr class="empty-row"><td colspan="${cols}">${esc(why)}</td></tr>`;
     } else {
       tbody.innerHTML = shown.map((r) => rowHtml(r, weeks, {
+        change: chgScales ? heatOf(r.change && r.change.change, chgScales.get(r.p.position)) : null,
         avg: heatOf(r.avg, avgScales.get(r.p.position)),
         future: heatOf(r.future, futScales.get(r.p.position)),
         playoff: heatOf(r.playoff, poScales.get(r.p.position)),
@@ -774,6 +797,7 @@ async function mount(host, opts = {}) {
        <th class="left" data-sort title="His position.">Pos</th>
        <th class="left" data-sort title="His NFL team.">Tm</th>
        <th class="left" data-sort title="Whose roster he is on this week, by first name.">Owner</th>
+       ${changeOn() ? '<th class="grouped" data-sort title="His Value now minus his Value before his last game, off the projections saved then — ours, not ESPN’s.">Change</th>' : ''}
        <th class="grouped" data-sort title="${avgTitle}">Avg</th>
        <th data-sort title="${futTitle}">Future</th>
        <th data-sort title="${poTitle}">Playoff</th>
@@ -864,6 +888,14 @@ async function mount(host, opts = {}) {
       `${est ? estText(n) : fmt(n)}${heatMarkHtml(heat)}</td>`;
   }
 
+  /** Change in value: signed, on the position's scale; its card is then → now. */
+  function changeCell(r, heat) {
+    const v = r.change && typeof r.change.change === 'number' ? r.change.change : null;
+    if (v === null) return `<td class="grouped" data-c="chg">${dash}</td>`;
+    return `<td class="grouped${heat ? ` ${heat.cls}` : ''}" data-v="${v}" data-c="chg">` +
+      `${valueChange.changeText(v)}${heatMarkHtml(heat)}</td>`;
+  }
+
   function rowHtml(r, weeks, heat) {
     const { p } = r;
     const status = INJURY[p.injuryStatus] || null;
@@ -879,6 +911,7 @@ async function mount(host, opts = {}) {
       <td class="left" data-v="${POS_ORDER.get(p.position) ?? 9}">${esc(p.position)}</td>
       <td class="left">${esc(p.proTeam || '')}</td>
       ${ownerCell}
+      ${changeOn() ? changeCell(r, heat.change) : ''}
       ${meanCell(r.avg, heat.avg, 'avg', 'grouped')}
       ${meanCell(r.future, heat.future, 'fut')}
       ${meanCell(r.playoff, heat.playoff, 'po', 'avg')}
@@ -943,6 +976,8 @@ async function mount(host, opts = {}) {
     const r = tr ? view.rows.get(String(tr.getAttribute('data-player'))) : null;
     if (!r) return null;
     switch (el.getAttribute('data-c')) {
+      case 'chg':
+        return valueChange.changeCard(r.p.name, r.change);
       case 'avg':
         if (valueOn()) {
           return {
@@ -1019,7 +1054,8 @@ async function mount(host, opts = {}) {
       ...(state.base ? [lead('Value') +
         'Points a week over the waiver line at his position; points below the starter line count ' +
         'half, and both lines are fixed for the season. On Value, each projection is shown that way, ' +
-        'Future and Playoff are the means of them, and Avg is ESPN’s season average turned into a Value the same way.'] : []),
+        'Future and Playoff are the means of them, and Avg is ESPN’s season average turned into a Value the same way.',
+      lead('Change') + valueChange.CHANGE_NOTE] : []),
       state.isDemo
         ? lead('Cost') + 'Demo data costs nothing.'
         : lead('Cost') + `Each week from ${state.currentWeek ?? 'now'} through the last playoff week is read twice ` +
@@ -1122,6 +1158,7 @@ function shellHtml() {
         <div class="segmented seg-sm" id="poShowToggle" role="group" aria-labelledby="poShowLabel">
           <button type="button" data-show="proj" class="on">Proj</button>
           <button type="button" data-show="value">Value</button>
+          <button type="button" data-show="change">Change in value</button>
         </div>
       </div>
     </div>

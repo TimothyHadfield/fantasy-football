@@ -151,6 +151,7 @@ import './loose-weeks.js';
 // frozen lines it needs come from js/season.js (`readValue` below).
 import { valueOf, isBase as isValueBase, fillOf, restProjAvg, runValue } from './value.js';
 import { searchPlayers, measure as measureValues } from './value-measure.js';
+import * as valueChange from './value-change.js';
 // Home's injury-report rule and labels, shared (the name underline, 2026-09-29).
 import { healthy, injuryLabel, injuryClass, outForSeasonRule } from './injury.js';
 // The preseason arrows by a name (Tim, 2026-09-30): ESPN's preseason projection
@@ -1826,7 +1827,21 @@ function renderCost() {
 // weeks this page buys, and asking for both at once would buy them twice.
 
 /** Are the per-player numbers being shown as Value right now? */
-const valueOn = () => state.valueView === 'value' && !!state.valueBase;
+const valueOn = () => (state.valueView === 'value' || state.valueView === 'change') && !!state.valueBase;
+/**
+ * CHANGE IN VALUE (Tim, 2026-11-10): as Value, except the number beside each
+ * man in the custom lists is his Value now minus his Value before his last
+ * game (js/value-change.js). The season boxes' week cells stay Values.
+ */
+const changeOn = () => state.valueView === 'change' && !!state.valueBase;
+/** His change in value, the whole answer, or null (js/season.js `lookup.change`). */
+const customChange = (p) => (valueLookup && typeof valueLookup.change === 'function' ? valueLookup.change(p.playerId) : null);
+/** "Change +0.7: Value 4.3 → 5.0 since week 8", or why there is none. */
+function changeWords(p) {
+  const c = customChange(p);
+  if (!c || c.change === null) return `Change —: ${valueChange.whyText(c)}`;
+  return `Change ${valueChange.changeText(c.change)}: Value ${c.then.toFixed(1)} → ${c.now.toFixed(1)} since week ${c.asOf}`;
+}
 /** A per-player projection as his Value — or null when it cannot be said. */
 const asValue = (position, x) => valueOf(state.valueBase, position, x);
 /** The number a per-player figure is drawn as, whichever view is on. */
@@ -1839,7 +1854,7 @@ function valueSwitchHtml() {
     `<button type="button" data-value-view="${v}"${state.valueView === v ? ' class="on"' : ''} ` +
     `aria-pressed="${state.valueView === v}">${label}</button>`;
   return `<div class="segmented seg-sm value-view" role="group" aria-label="Player numbers shown as">` +
-    `${btn('proj', 'Proj')}${btn('value', 'Value')}</div>`;
+    `${btn('proj', 'Proj')}${btn('value', 'Value')}${btn('change', 'Change in value')}</div>`;
 }
 
 /* ------------------------------------------------------- value measurement
@@ -8838,6 +8853,10 @@ function customValue(p) {
  */
 function customShown(p) {
   if (!valueOn()) return customValue(p);
+  if (changeOn()) {
+    const c = customChange(p);
+    return c && typeof c.change === 'number' ? c.change : null;
+  }
   const v = typeof valueLookup === 'function' ? valueLookup(p.playerId) : null;
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
@@ -9047,7 +9066,10 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
     // is ticked bolds the weeks he would start FOR YOU with this trade made.
     // An unticked man is in nobody's receive list, so he falls back to his own
     // manager's lineup — which is the right answer and costs nothing to get.
-    const key = registerRun(cardFor(p, ctx), 'cu');
+    const spec = cardFor(p, ctx);
+    // On Change in value the card says where the change comes from: Value then → now.
+    if (changeOn()) spec.ident += ` · ${changeWords(p)}`;
+    const key = registerRun(spec, 'cu');
 
     const cells = [
       `<span class="sl">${esc(slot)}</span>`,
@@ -9094,7 +9116,7 @@ function customList(teamId, picked, which, { scales = new Map(), ctx = null } = 
       // the SD one and then the actual 14 week preview one. Remove the SD
       // one"). The colour's words are in the key under the lists.
       `<span class="pv${h ? ` ${h.cls}` : ''}"${tipAttr(key)}>` +
-        `${v === null ? '—' : fmt(v)}${h ? heatMarkHtml(h) : ''}</span>`,
+        `${changeOn() ? valueChange.changeText(v) : v === null ? '—' : fmt(v)}${h ? heatMarkHtml(h) : ''}</span>`,
     ];
     const box =
       `<input type="checkbox" data-side="${which}" value="${esc(p.playerId)}"${lit ? ' checked' : ''}>`;
@@ -10146,7 +10168,8 @@ function renderCustomNote() {
     (state.valueBase
       ? ` <strong>Value</strong> is points a week over the waiver line at his position; points ` +
         `below the starter line count half. Both lines are fixed for the season. On Value the figure ` +
-        `beside each man is his Value over every week left, the one on his card and on the Players page.`
+        `beside each man is his Value over every week left, the one on his card and on the Players page.` +
+        ` <strong>Change in value</strong>: ${valueChange.CHANGE_NOTE}`
       : '') +
     `<br><br>` +
     `<strong>This box has no opinion about whether a deal is good.</strong> The finder above only ` +
@@ -12496,7 +12519,8 @@ document.addEventListener('click', (e) => {
   const t = e.target;
   const btn = t && typeof t.closest === 'function' ? t.closest('button[data-value-view]') : null;
   if (!btn) return;
-  const v = btn.getAttribute('data-value-view') === 'value' ? 'value' : 'proj';
+  const pick = btn.getAttribute('data-value-view');
+  const v = pick === 'value' || pick === 'change' ? pick : 'proj';
   if (v === state.valueView) return;
   state.valueView = v;
   prefs.set('valueView', v);
@@ -12508,7 +12532,7 @@ wireTips($('cuListB'));
 wireTips($('cuRows'));
 wireTips($('cuSug'));
 
-if (prefs.get('valueView', 'proj') === 'value') state.valueView = 'value';
+if (['value', 'change'].includes(prefs.get('valueView', 'proj'))) state.valueView = prefs.get('valueView');
 
 state.bothWin = prefs.get('bothWin', false) === true;
 $('bothWin').checked = state.bothWin;

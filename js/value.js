@@ -327,6 +327,8 @@ export function withFreeAgents(got, wireOf) {
     const m = man(id);
     return m ? fillOf(base, m.position) : null;
   });
+  // Change in value (js/value-change.js): the rostered men's; a free agent has none here.
+  fn.change = (id) => (typeof own.change === 'function' ? own.change(id) : null);
   return fn;
 }
 

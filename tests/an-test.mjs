@@ -2697,9 +2697,9 @@ async function checkValue(c, scenario) {
   if (!(P && PA && VA && V && VP && B)) return c.out;
 
   // ---- the switch itself
-  c.ok('VALUE: with lines known, each of the four panels shows a Proj | Value switch, Proj lit',
+  c.ok('VALUE: with lines known, each of the four panels shows a Proj | Value | Change in value switch (Tim, 2026-11-10), Proj lit',
     P.switches.length === 4 && P.switches.every((s) => s.there && !s.hidden && s.on === 'proj' &&
-      s.pressed === 'proj' && s.labels.join('|') === 'Proj|Value'), JSON.stringify(P.switches));
+      s.pressed === 'proj' && s.labels.join('|') === 'Proj|Value|Change in value'), JSON.stringify(P.switches));
   c.ok('VALUE: one click lights Value on all four — it is one choice for the page',
     V.switches.every((s) => s.on === 'value' && s.pressed === 'value'), JSON.stringify(V.switches));
   c.ok('VALUE: THE CHOICE IS REMEMBERED in this page’s prefs',

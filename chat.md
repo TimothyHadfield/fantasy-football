@@ -160,3 +160,10 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Built:** 1f003bd on main (injury-gains, season, player-card, waivers, who-to-start, analysis, trade, playoffs-players + test-ir-return 38).
 - **Verified how:** test-ir-return 8 fail on 46aed09, 38/38 after; run-all 132/134 (test-trade-progress fails 3 on main too; tr-test 1222/1222 alone); phone-view WebKit 393 + desktop on 1241838: Adams card wk 9–10 "back wk 12", 11 Bye, 12–17 "~13.8", no console errors, no overflow; Players + Playoffs grids same.
 - **Open:** phone synced copy path unseen with real Firestore data; trend-arrow note wording now includes estimates.
+
+## 2026-11-10 — "add "change in value" to that list" (builder ff-value-change, branch value-change)
+- **Asked:** a third option on every Proj | Value switch: the change in Value since his last game, from the projection changes.
+- **Decided:** then = `value.playerValue` on the projection copy saved as of his last played week (byes skipped; game over this week = this week), same frozen lines; "—" with a reason when no copy; preview = Value then → now + weeks whose projection moved. Players: Value column → Change; Playoffs: Change column after Owner; Analysis: All teams cells + roster Avg/wk; Trade: custom-list figure.
+- **Built:** `js/value-change.js` (pure), season.js `lookup.change` + `savedCopies`, value.js `withFreeAgents.change`, waivers/analysis/playoffs-players/trade pages, 3 HTML switches; suites test-value-change 36, value-change-check 18.
+- **Verified how:** value-change-check 6 fail on origin/main, dash-preview check failed before its fix; phone-view WebKit 393 + 1440 on 1241838 with a seeded week-9 copy (scratchpad): Joe Burrow +3.2 (1.8 → 5.0), no console errors, no overflow; demo all dashes.
+- **Open:** Tim's real league numbers only appear once copies exist for the right week; free agents mostly "—".

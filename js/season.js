@@ -35,6 +35,7 @@ import { slotCountsFromLineups } from './projection.js';
 // A player's Value: the arithmetic is pure and lives there; this file reads what
 // it needs and keeps the frozen lines. See "PLAYER VALUE" below.
 import * as value from './value.js';
+import * as valueChange from './value-change.js';
 // The trade offers waiting on ESPN: the decoding is pure and lives there; this
 // file asks. See "THE TRADE OFFERS WAITING" below.
 import * as pending from './pending.js';
@@ -2649,8 +2650,14 @@ export function fetchPlayerValues({ demo = false } = {}) {
   return playerValuesMemo.promise;
 }
 
-function playerValuesOf(base, weeks, weekTeams, byes) {
+function playerValuesOf(base, weeks, weekTeams, byes, copies = []) {
   const byId = new Map();
+  // Whose game in the week under way is already over (js/value-change.js:
+  // then that week is the last one he played).
+  const doneNow = new Set();
+  for (const t of (weeks.length && weekTeams.get(weeks[0])) || []) {
+    for (const p of (t && t.players) || []) if (p && p.done === true) doneNow.add(p.playerId);
+  }
   for (const m of squadMen(weekTeams, weeks).values()) {
     const bye = byes && m.proTeamId !== null ? Number(byes[m.proTeamId]) : NaN;
     const b = Number.isFinite(bye) ? bye : null;
@@ -2658,6 +2665,9 @@ function playerValuesOf(base, weeks, weekTeams, byes) {
     // his card's Proj and the average his Value is made from are one number.
     const fill = value.fillOf(base, m.position);
     byId.set(m.playerId, {
+      byWeek: m.byWeek,
+      bye: b,
+      playedNow: doneNow.has(m.playerId),
       position: m.position,
       avg: value.restAvg(m.byWeek, weeks, b, fill),
       projAvg: value.restProjAvg(m.byWeek, weeks, b, fill),
@@ -2682,7 +2692,35 @@ function playerValuesOf(base, weeks, weekTeams, byes) {
     const hit = byId.get(id) ?? byId.get(Number(id));
     return hit ? value.fillOf(base, hit.position) : null;
   };
-  return { base, weeks, byId, lookup };
+  // CHANGE IN VALUE (Tim, 2026-11-10): his Value now minus his Value off the
+  // projections saved as of the last week he played (js/value-change.js).
+  // The whole answer (`change`, `then`, `now`, `asOf`, `rows`, `why`), or null
+  // for a man not on a squad. Worked out once per man.
+  const changes = new Map();
+  lookup.change = (id) => {
+    const key = byId.has(id) ? id : Number(id);
+    const hit = byId.get(key);
+    if (!hit) return null;
+    if (!changes.has(key)) {
+      changes.set(key, valueChange.valueChange({
+        base, position: hit.position, playerId: key, nowByWeek: hit.byWeek, nowWeeks: weeks,
+        byeWeek: hit.bye, currentWeek: weeks[0], playedThisWeek: hit.playedNow, copies,
+      }));
+    }
+    return changes.get(key);
+  };
+  return { base, weeks, byId, lookup, copies };
+}
+
+/** Every projection copy this browser holds for the league (whole ones first; a one-team copy for a week with none). */
+function savedCopies(cfg) {
+  try {
+    const got = projHistory.stored(cfg.leagueId, cfg.season) || { whole: [], part: [] };
+    const whole = new Set(got.whole.map((r) => Number(r.week)));
+    return [...got.whole, ...got.part.filter((r) => !whole.has(Number(r.week)))];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -2758,7 +2796,7 @@ async function playerValuesNow(demo) {
   // The same byes on the synced copy as on the computer: `fetchByeWeeks`
   // reads the synced ones there and never asks ESPN (rule 20).
   const byes = await fetchByeWeeks();
-  return playerValuesOf(base, weeks, weekTeams, byes);
+  return playerValuesOf(base, weeks, weekTeams, byes, savedCopies(espn.getConfig()));
 }
 
 /**

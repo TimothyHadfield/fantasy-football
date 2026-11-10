@@ -122,6 +122,7 @@ import { optimalLineup } from './forecast.js';
 import { slotCountsFromLineups, projectionsFromWeekTeams } from './projection.js';
 // A player's Value: points a week over what is free (docs/value-plan.md).
 import * as value from './value.js';
+import * as valueChange from './value-change.js';
 // THE ANALYSIS PAGE'S "WHO TO START" BOX, above the free agents (Tim,
 // 2026-10-09) — see "who to start" below. One renderer for both pages.
 import * as starters from './who-to-start.js';
@@ -207,8 +208,8 @@ const FLEX_POSITIONS = ['RB', 'WR', 'TE'];
 const FILTERS = ['ALL', 'QB', 'RB', 'WR', 'TE', FLEX, 'K', 'DST'];
 const FILTER_CHOICE = (v) => (FILTERS.includes(String(v)) ? String(v) : 'ALL');
 
-/** What the two tables' numbers are shown as: ESPN's projection, or its Value. */
-const SHOW_CHOICE = (v) => (v === 'value' ? 'value' : 'proj');
+/** What the two tables' numbers are shown as: ESPN's projection, its Value, or the change in Value. */
+const SHOW_CHOICE = (v) => (v === 'value' || v === 'change' ? v : 'proj');
 
 /** The mark filter's choices; a stale or hand-edited value falls back to ALL. */
 const MARKS = ['ALL', 'diamond', 'coin', 'none'];
@@ -1141,7 +1142,28 @@ function loadValue(token) {
 }
 
 /** Proj | Value is on Value, and there are lines to measure from. */
-const valueOn = () => state.show === 'value' && state.value.base !== null;
+const valueOn = () => (state.show === 'value' || state.show === 'change') && state.value.base !== null;
+/**
+ * CHANGE IN VALUE (Tim, 2026-11-10): the week cells as on Value, and the Value
+ * column his Value now minus his Value as it stood before his last game
+ * (js/value-change.js).
+ */
+const changeOn = () => state.show === 'change' && state.value.base !== null;
+
+/** His change in value — the whole answer (js/value-change.js), or null when nothing is known yet. */
+function ownChange(p, wire) {
+  const got = state.value.players;
+  if (!state.value.base || !got) return null;
+  if (!wire) return typeof got.lookup.change === 'function' ? got.lookup.change(p.playerId) : null;
+  const weeks = wireWeeksOf(p);
+  if (!weeks || typeof weeks !== 'object' || !got.weeks.length) return null;
+  return valueChange.valueChange({
+    base: state.value.base, position: p.position, playerId: p.playerId,
+    nowByWeek: weeks, nowWeeks: got.weeks, byeWeek: byeWeekOf(p, state.byes),
+    currentWeek: got.weeks[0], playedThisWeek: Boolean(doneFor(p.playerId, got.weeks[0], false)),
+    copies: state.isDemo ? [] : paCopies(),
+  });
+}
 
 /** A projection as its Value at his position; null when it cannot be said. */
 const asValue = (p, x) => value.valueOf(state.value.base, p.position, x);
@@ -1335,6 +1357,11 @@ function withShown(rows, weeks, wire = false) {
     }
     r.shown = r.values.map((v, i) =>
       (measurable(v) && !(r.done && r.done[i]) ? asValue(r.p, v) : undefined));
+    if (changeOn()) {
+      r.change = ownChange(r.p, wire && !r.mine);
+      r.shownAvg = r.change && typeof r.change.change === 'number' ? r.change.change : null;
+      continue;
+    }
     const own = ownValue(r.p, wire && !r.mine);
     r.shownAvg = typeof own === 'number' ? own : null;
   }
@@ -1354,7 +1381,8 @@ const VALUE_NOTE = () =>
   lead('Value') +
   'Points a week over the waiver line at his position; points below the starter line count ' +
   'half, and both lines are fixed for the season. On Value, each projection is shown that way ' +
-  'and the Value column is his Value over every week left, as on his card; a score stays a score.';
+  'and the Value column is his Value over every week left, as on his card; a score stays a score.' +
+  ' ' + lead('Change') + valueChange.CHANGE_NOTE;
 
 /**
  * His rest-of-season per week: the D7 mean over `rosWeeks()`, read from the
@@ -2560,6 +2588,7 @@ function leftOutWord(p, v, week, roster) {
 
 /** Avg: the weeks it is the mean of, and where it stands at his position. On Value, his Value. */
 function avgCard(row, kind) {
+  if (changeOn()) return valueChange.changeCard(row.p.name, row.change);
   if (row.shownAvg === null || row.shownAvg === undefined) return null;
   if (valueOn()) return valueCard(row, kind);
   const weeks = view.weeks;
@@ -3878,11 +3907,13 @@ function pastHeads(weeks, keyed = false) {
 const weekTitle = (w) => (valueOn()
   ? `ESPN’s projected points for week ${w}, as a Value: points over the waiver line at his position.`
   : `ESPN’s projected points for week ${w}.`);
-const avgTitle = () => (valueOn()
+const avgTitle = () => (changeOn()
+  ? 'His Value now minus his Value before his last game, off the projections saved then — ours, not ESPN’s.'
+  : valueOn()
   ? 'His Value over every week left, the one on his card and on the Trade page — ours, not ESPN’s.'
   : 'The mean of the regular-season weeks shown that project above zero — ours, not ESPN’s.');
 /** The column's heading: Avg, or on Value his Value (`withShown`). */
-const avgHead = () => (valueOn() ? 'Value' : 'Avg');
+const avgHead = () => (changeOn() ? 'Change' : valueOn() ? 'Value' : 'Avg');
 
 function renderHead(weeks) {
   // Every column says which it is (`data-col`): the keys the "Who to start"
@@ -4472,8 +4503,10 @@ function setTrendKey(id, html) {
 function avgCellHtml(avg, heat) {
   // The words are the preview's (`avgCard`): the weeks it is the mean of, and
   // his place in the group the colour compares him with.
-  return `<td class="avg grouped${heat ? ` ${heat.cls}` : ''}"${avg === null ? '' : ` data-v="${avg}" data-c="avg"`}>${
-      avg === null ? dash : `${fmt(avg)}${heatMarkHtml(heat)}`
+  // On Change a dash keeps its preview: it says why there is no number.
+  const attrs = avg !== null ? ` data-v="${avg}" data-c="avg"` : changeOn() ? ' data-c="avg"' : '';
+  return `<td class="avg grouped${heat ? ` ${heat.cls}` : ''}"${attrs}>${
+      avg === null ? dash : `${changeOn() ? valueChange.changeText(avg) : fmt(avg)}${heatMarkHtml(heat)}`
     }</td>`;
 }
 
@@ -4864,7 +4897,7 @@ function renderTakenStats(weeks) {
     [label, String(rows.length), `across ${plural(new Set(rows.map((r) => r.owner)).size, 'squad')}`],
     ['Weeks shown', String(weeks.length), weekRange(weeks)],
   ];
-  if (best) items.push(['Best average', fmt(best.shownAvg), `${best.p.name} · ${best.owner}`]);
+  if (best && !changeOn()) items.push(['Best average', fmt(best.shownAvg), `${best.p.name} · ${best.owner}`]);
 
   el.innerHTML = items
     .map(([k, v, who]) =>
@@ -5087,7 +5120,7 @@ function renderStats(weeks) {
     [label, String(rows.length), state.position === 'ALL' ? '' : `of ${state.pool.size} in the pool`],
     ['Weeks shown', String(weeks.length), weekRange(weeks)],
   ];
-  if (best) items.push(['Best average', fmt(best.shownAvg), best.p.name]);
+  if (best && !changeOn()) items.push(['Best average', fmt(best.shownAvg), best.p.name]);
 
   el.innerHTML = items
     .map(([k, v, who]) =>
