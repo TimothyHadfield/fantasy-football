@@ -139,7 +139,7 @@ export function gainWeeksSpec({
   const tableHtml =
     `<table class="sc-rows"><thead><tr><th class="num">Wk</th><th class="num">Now</th>` +
     `<th class="num">With trade</th><th class="num">+/−</th></tr></thead><tbody>${body}</tbody>` +
-    `<tfoot><tr class="sc-total"><td class="name">${esc(anyPart ? 'Per week he plays' : shownLabel)}</td>` +
+    `<tfoot><tr class="sc-total"><td class="name">${esc(anyPart ? 'Per week they play' : shownLabel)}</td>` +
     `<td class="num">${anyPart ? '' : f1(sumB / n)}</td><td class="num">${anyPart ? '' : f1(sumA / n)}</td>` +
     `<td class="num">${esc(shown)}</td></tr>` +
     (totalShown === null ? '' :
@@ -148,9 +148,9 @@ export function gainWeeksSpec({
     `</tfoot></table>`;
   const meet = byWeek.filter(netAt).map((w) => w.week);
   const meetFoot = meet.length
-    ? `↑ week ${meet.join(', ')}: you play ${vsName || 'him'}, so his change comes off yours.`
+    ? `↑ week ${meet.join(', ')}: you play ${vsName || 'them'}, so their change comes off yours.`
     : '';
-  const partFoot = anyPart ? '%: the chance he is still playing that week. His change counts that much.' : '';
+  const partFoot = anyPart ? '%: the chance they are still playing that week. Their change counts that much.' : '';
   return { title, sub, rows: [], tableHtml, foot: [meetFoot, partFoot, foot].filter(Boolean).join(' '), href, hrefLabel };
 }
 
@@ -207,7 +207,7 @@ export function slotChangeSpec({
   }
   if (own !== null) totals.push({ label: `Lineup ${f1(before)} → ${f1(after)}`, html: signedHtml(own) });
   if (finite(vs) && Math.abs(vs) >= 0.05) {
-    totals.push({ label: `${vsName || 'His'} change (you play him)`, html: signed(vs) });
+    totals.push({ label: `${vsName || 'Their'} change (you play them)`, html: signed(vs) });
   }
   return {
     title, sub, rows, totals,
@@ -225,8 +225,8 @@ export function slotChangeSpec({
 export function goalSpec({ chance = 'title chance', partner = '', mine = null, theirs = null, accept = null, word = null, href = null, hrefLabel = null } = {}) {
   const line = (s) => (s && finite(s.before) && finite(s.after) ? `${pct(s.before)} → ${pct(s.after)}` : '—');
   const rows = [{ label: 'You', note: 'now → with', value: line(mine) }];
-  if (theirs && finite(theirs.before)) rows.push({ label: partner || 'Him', note: 'now → with', value: line(theirs) });
-  if (finite(accept)) rows.push({ label: 'Chance he says yes', value: yesText(word, accept) });
+  if (theirs && finite(theirs.before)) rows.push({ label: partner || 'Them', note: 'now → with', value: line(theirs) });
+  if (finite(accept)) rows.push({ label: 'Chance they say yes', value: yesText(word, accept) });
   return { title: chance.charAt(0).toUpperCase() + chance.slice(1), sub: partner ? `with ${partner}` : '', rows, href, hrefLabel };
 }
 
@@ -250,12 +250,12 @@ const yesText = (word, p) => (word ? `${word} (${Math.round(p * 100)}%)` : `${Ma
  * @param {string} [o.word]  that chance as the page words it
  */
 export function yesSpec({ partner = '', verdicts = [], p = null, word = null, href = null, hrefLabel = null } = {}) {
-  const title = 'Will he say yes?';
+  const title = 'Will they say yes?';
   const list = (verdicts || []).filter((x) => x && x.v && finite(x.v.p));
   if (list.length > 1 || (!list.length && finite(p))) {
     return {
       title: 'Will they say yes?',
-      rows: list.map((x) => ({ label: x.partner || 'He', value: yesText(x.v.word, x.v.p) })),
+      rows: list.map((x) => ({ label: x.partner || 'They', value: yesText(x.v.word, x.v.p) })),
       total: finite(p) ? { label: 'All of them', value: yesText(word, p) } : null,
       foot: 'The packing happens only if every one of them says yes.',
       href, hrefLabel,
@@ -273,20 +273,20 @@ export function yesSpec({ partner = '', verdicts = [], p = null, word = null, hr
     title, sub: partner || list[0].partner || '',
     rows,
     totals: [{ label: 'In all', html: signed(feel) }],
-    total: { label: 'Chance he says yes', value: yesText(v.word, v.p) },
-    foot: 'Points a week, as the deal feels to him; 0 in all is 50%.' +
+    total: { label: 'Chance they say yes', value: yesText(v.word, v.p) },
+    foot: 'Points a week, as the deal feels to them; 0 in all is 50%.' +
       (v.why ? ` Mostly: ${v.why}.` : ''),
     href, hrefLabel,
   };
 }
 
-/** The preview column's goal: yours only, and it ranks nothing. */
-export function altGoalSpec({ chance = 'chance of finishing last', partner = '', before = null, after = null, weeks = '', href = null, hrefLabel = null } = {}) {
+/** The Chance cell's lower half (2026-11-10): the other manager's chance at the same goal. */
+export function theirGoalSpec({ chance = 'title chance', partner = '', theirs = null, href = null, hrefLabel = null } = {}) {
+  const ok = theirs && finite(theirs.before) && finite(theirs.after);
   return {
-    title: chance.charAt(0).toUpperCase() + chance.slice(1),
-    sub: partner ? `with ${partner}` : '',
-    rows: [{ label: 'You', note: 'now → with', value: `${pct(before)} → ${pct(after)}` }],
-    foot: `The goal you are not on${weeks ? `, over ${weeks}` : ''}. It does not rank the list.`,
+    title: partner ? `${partner}’s ${chance}` : chance.charAt(0).toUpperCase() + chance.slice(1),
+    sub: '',
+    rows: [{ label: partner || 'Them', note: 'now → with', value: ok ? `${pct(theirs.before)} → ${pct(theirs.after)}` : '—' }],
     href, hrefLabel,
   };
 }
@@ -294,20 +294,20 @@ export function altGoalSpec({ chance = 'chance of finishing last', partner = '',
 // ---------------------------------------------------- his lineup against you
 
 /** "His proj vs you": his lineup in each week he plays you, now → with. */
-export function oppSpec({ partner = 'He', per = [], shown = '', why = '', href = null, hrefLabel = null } = {}) {
+export function oppSpec({ partner = 'They', per = [], shown = '', why = '', href = null, hrefLabel = null } = {}) {
   if (!per.length) {
     return { title: `${partner} vs you`, rows: [], foot: why, href, hrefLabel };
   }
   return {
     title: `${partner} vs you`,
-    sub: 'his lineup',
+    sub: 'their lineup',
     rows: per.map((p) => ({
       lead: `Wk ${p.week}`,
       label: finite(p.before) && finite(p.after) ? `${f1(p.before)} → ${f1(p.after)}` : 'now → with',
       html: signed(p.delta),
     })),
     total: per.length > 1 ? { label: 'In all', html: esc(shown) } : null,
-    foot: 'Plus means he is stronger against you.',
+    foot: 'Plus means they are stronger against you.',
     href, hrefLabel,
   };
 }
@@ -351,8 +351,8 @@ export function recordOf(games, teamId, isDecided = (g) => g.played !== false) {
  */
 export function meetSpec({ partner = '', meetings = [], href = null, hrefLabel = null } = {}) {
   return {
-    title: `You play ${partner || 'him'}`,
-    head: meetings.length ? ['Wk', 'You – him', ''] : null,
+    title: `You play ${partner || 'them'}`,
+    head: meetings.length ? ['Wk', 'You – them', ''] : null,
     rows: meetings.map((m) => ({
       lead: m.week,
       label: finite(m.mine) && finite(m.theirs) ? `${f1(m.mine)} – ${f1(m.theirs)}` : '—',

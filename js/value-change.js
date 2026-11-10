@@ -119,16 +119,16 @@ export function changeText(v) {
 
 /** Rule 7, one sentence for each panel's explain: what Change is made from. */
 export const CHANGE_NOTE =
-  'His Value now minus his Value off the projections saved just before his last game (byes skipped), ' +
+  'Their Value now minus their Value off the projections saved just before their last game (byes skipped), ' +
   'on the same frozen waiver lines; a dash when no copy was saved that week.';
 
 /** Why there is no number, in a few words for a preview. */
 export function whyText(res) {
   if (!res) return 'Not known yet.';
   switch (res.why) {
-    case 'notYet': return 'His team has not played yet.';
+    case 'notYet': return 'Their team has not played yet.';
     case 'noCopy': return `No projections were saved as of week ${res.asOf}.`;
-    case 'notHeld': return `Week ${res.asOf}’s saved copy does not hold his season.`;
+    case 'notHeld': return `Week ${res.asOf}’s saved copy does not hold their season.`;
     case 'noValue': return 'No Value then or now.';
     default: return '';
   }

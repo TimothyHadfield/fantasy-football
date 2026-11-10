@@ -51,10 +51,10 @@ const signed = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(
 export const LABELS = {
   you: 'You gain +2/wk',
   value: 'Value −1 or better',
-  hisWeek: 'He gains this week',
-  hisGain: 'He gains /wk',
+  hisWeek: 'They gain this week',
+  hisGain: 'They gain /wk',
   myNeed: 'You get a need',
-  hisNeed: 'He gets a need',
+  hisNeed: 'They get a need',
   diamond: 'You get 💎',
   coin: 'You send 🪙',
   valueUp: 'Value 0 or better',

@@ -769,23 +769,23 @@ async function mount(host, opts = {}) {
 
   function headHtml(weeks) {
     const on = valueOn();
-    const asV = on ? ', as Values: points over the waiver line at his position' : '';
+    const asV = on ? ', as Values: points over the waiver line at their position' : '';
     // 2026-10-22: with the lines known, a 0 and a bye count as the waiver line.
-    const zeroWords = state.base ? ' A bye or a 0 week counts as the waiver line at his position.' : null;
+    const zeroWords = state.base ? ' A bye or a 0 week counts as the waiver line at their position.' : null;
     const futTitle = state.futureWeeks.length
-      ? `His average projection over ${weekRange(state.futureWeeks)}, the regular season left${asV}.${zeroWords ?? ' A 0 week — bye or ruled out — is left out.'}`
+      ? `Their average projection over ${weekRange(state.futureWeeks)}, the regular season left${asV}.${zeroWords ?? ' A 0 week — bye or ruled out — is left out.'}`
       : 'The regular season is over: no weeks left to average.';
-    const poTitle = `His average projection over the playoff weeks (${weekRange(weeks)})${asV}.${zeroWords ?? ' Every week counts — a bye or a ruled-out 0 included.'}`;
+    const poTitle = `Their average projection over the playoff weeks (${weekRange(weeks)})${asV}.${zeroWords ?? ' Every week counts — a bye or a ruled-out 0 included.'}`;
     const avgTitle = on
-      ? 'His season average so far — ESPN’s figure — as a Value: points over the waiver line at his position.'
-      : 'His season average so far — ESPN’s figure.';
+      ? 'Their season average so far — ESPN’s figure — as a Value: points over the waiver line at their position.'
+      : 'Their season average so far — ESPN’s figure.';
     const wk = weeks.map((w, i) => {
       const start = i === 0;
       const failedWeek = state.failed.has(w);
       const title = failedWeek
         ? `Week ${w} did not load — ESPN refused it. Reload the page to try again.`
         : on
-          ? `ESPN’s projected points for week ${w}, a playoff week, as a Value: points over the waiver line at his position.`
+          ? `ESPN’s projected points for week ${w}, a playoff week, as a Value: points over the waiver line at their position.`
           : `ESPN’s projected points for week ${w}, a playoff week.`;
       const cls = [start ? 'po-start' : '', failedWeek ? 'muted' : ''].filter(Boolean).join(' ');
       return `<th data-sort${cls ? ` class="${cls}"` : ''} title="${title}">${w}` +
@@ -793,15 +793,15 @@ async function mount(host, opts = {}) {
         '<span class="sr-only"> (playoffs)</span></th>';
     }).join('');
     return `<tr>
-       <th class="name" data-sort title="Every player on a roster, and the free agents the Players page lists. Click a rostered man’s name for a custom trade with him; a free agent’s for his row there.">Player</th>
-       <th class="left" data-sort title="His position.">Pos</th>
-       <th class="left" data-sort title="His NFL team.">Tm</th>
-       <th class="left" data-sort title="Whose roster he is on this week, by first name.">Owner</th>
-       ${changeOn() ? '<th class="grouped" data-sort title="His Value now minus his Value before his last game, off the projections saved then — ours, not ESPN’s.">Change</th>' : ''}
+       <th class="name" data-sort title="Every player on a roster, and the free agents the Players page lists. Click a rostered man’s name for a custom trade with them; a free agent’s for their row there.">Player</th>
+       <th class="left" data-sort title="Their position.">Pos</th>
+       <th class="left" data-sort title="Their NFL team.">Tm</th>
+       <th class="left" data-sort title="Whose roster they are on this week, by first name.">Owner</th>
+       ${changeOn() ? '<th class="grouped" data-sort title="Their Value now minus their Value before their last game, off the projections saved then — ours, not ESPN’s.">Change</th>' : ''}
        <th class="grouped" data-sort title="${avgTitle}">Avg</th>
        <th data-sort title="${futTitle}">Future</th>
        <th data-sort title="${poTitle}">Playoff</th>
-       <th data-sort title="Playoff minus Avg, as printed: green = projected above his average in the playoffs.">PO − Avg</th>
+       <th data-sort title="Playoff minus Avg, as printed: green = projected above their average in the playoffs.">PO − Avg</th>
        <th data-sort title="Playoff minus Future, as printed: green = projected higher in the playoffs than in the rest of the regular season.">PO − Fut</th>
        ${wk}
      </tr>`;
@@ -834,7 +834,7 @@ async function mount(host, opts = {}) {
     // On a trade link the card is hover-only, so a tap on a phone follows the link.
     }), 'po'), { hoverOnly: Boolean(trade) });
     // `aria-label`, never `title`, on the link (js/touch-titles.js leaves links alone).
-    const said = trade ? 'open a custom trade with him ticked' : 'open his row on the Players page';
+    const said = trade ? 'open a custom trade with them ticked' : 'open their row on the Players page';
     const link = href
       ? `<a class="pref" href="${esc(href)}"${tip} aria-label="${esc(p.name)} — ${said}">${esc(p.name)}</a>`
       : `<span class="pref"${tip} tabindex="0">${esc(p.name)}</span>`;
@@ -1038,21 +1038,21 @@ async function mount(host, opts = {}) {
     if (!el) return;
     const lead = (s) => `<span class="lead">${s}.</span> `;
     const parts = [
-      lead('Who is listed') + 'Everyone on a roster this week, under his owner’s first name, and the ' +
+      lead('Who is listed') + 'Everyone on a roster this week, under their owner’s first name, and the ' +
         `${POOL_LIMIT} most-owned free agents — the Players page’s list — as “${AVAILABLE}”.`,
-      lead('Avg') + 'His season average so far: ESPN’s own figure, the one on his player card.',
-      lead('Future and Playoff') + 'His average projection over the regular-season weeks left ' +
+      lead('Avg') + 'Their season average so far: ESPN’s own figure, the one on their player card.',
+      lead('Future and Playoff') + 'Their average projection over the regular-season weeks left ' +
         `(${weekRange(state.futureWeeks)}) and over the playoff weeks (${weekRange(state.poWeeks)}). ` +
         'In Playoff every week counts: a bye or a man ruled out is a 0, not left out. ' +
         'In Future a 0 week (bye or ruled out) is left out. ' +
         'Only a week with no projection at all is left out. Tap a figure for its weeks.',
-      lead('PO − Avg') + 'Playoff minus Avg, as printed: green means projected above his average in the playoffs.',
+      lead('PO − Avg') + 'Playoff minus Avg, as printed: green means projected above their average in the playoffs.',
       lead('PO − Fut') + 'Playoff minus Future, as printed: green means projected higher in the playoffs than in the regular weeks left.',
       lead('Colour') + 'Avg, Future, Playoff and each week compare men at the same position, ' +
         'the whole list at once — a filter never moves a colour.',
       // What Value is (rule 7) — only while there are lines, the Players page's words.
       ...(state.base ? [lead('Value') +
-        'Points a week over the waiver line at his position; points below the starter line count ' +
+        'Points a week over the waiver line at their position; points below the starter line count ' +
         'half, and both lines are fixed for the season. On Value, each projection is shown that way, ' +
         'Future and Playoff are the means of them, and Avg is ESPN’s season average turned into a Value the same way.',
       lead('Change') + valueChange.CHANGE_NOTE] : []),
@@ -1149,7 +1149,7 @@ function shellHtml() {
         <span class="ctl-label" id="poPosLabel">Position</span>
         <div class="segmented seg-sm" id="poPosFilter" role="group" aria-labelledby="poPosLabel">
           ${btn('ALL', 'All')}${btn('QB')}${btn('RB')}${btn('WR')}${btn('TE')}
-          ${btn('FLEX', 'FLEX', 'Every running back, receiver and tight end at once. A filter only: each keeps his own position.')}
+          ${btn('FLEX', 'FLEX', 'Every running back, receiver and tight end at once. A filter only: each keeps their own position.')}
           ${btn('K')}${btn('DST')}
         </div>
       </div>
@@ -1168,7 +1168,7 @@ function shellHtml() {
       <span class="key" data-when="td.zero-out" hidden><span class="sw zero-out">0.0 <span class="zmark">OUT</span></span> ruled out, counts 0</span>
       <span class="key" data-when="td.zero" hidden><span class="sw">0.0</span> projected at zero</span>
       <span class="key"><span class="sw">&mdash;</span> no projection</span>
-      <span class="key" data-when="td.heat-up-4" hidden><span class="sw heat heat-up-4">18.7 <span class="heatmark">&#9650;</span></span> best at his position</span>
+      <span class="key" data-when="td.heat-up-4" hidden><span class="sw heat heat-up-4">18.7 <span class="heatmark">&#9650;</span></span> best at their position</span>
       <span class="key" data-when="td.heat-dn-4" hidden><span class="sw heat heat-dn-4">9.8 <span class="heatmark">&#9660;</span></span> worst of them</span>
     </div>
     <div class="table-scroll"><table id="poPlayersTable">

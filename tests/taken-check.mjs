@@ -1378,11 +1378,11 @@ async function check(scenario, boot) {
     ? 'the note says a bye or 0 counts as the waiver line and a blank week is left out'
     : 'no lines: the note says byes, ruled-out weeks and blank weeks are all left out',
     (scenario === 'demo'
-      ? /a bye or a 0\.0 week counts as the waiver line at his position, and a week with no number is left out/
+      ? /a bye or a 0\.0 week counts as the waiver line at their position, and a week with no number is left out/
       : /only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are all left out/).test(note),
     note);
   c.ok('the note says what the rank means',
-    /where he ranks on his own manager’s roster/.test(note) &&
+    /where they rank on their own manager’s roster/.test(note) &&
     /QB3 is that manager’s third-best quarterback/.test(note), note);
   c.ok('the note says the rank moves with the span',
     /it moves with the span/.test(note) && /a QB2 can become a QB3/.test(note), note);
@@ -1400,7 +1400,7 @@ async function check(scenario, boot) {
   c.ok('the note says the table covers any week shown, not just the first',
     /on a roster in .{0,20}any.{0,20} of weeks/.test(note.replace(/\s+/g, ' ')), note);
   c.ok('and which week decides who owns whom',
-    /Owner is the manager holding him in the earliest of those weeks he actually appears in/
+    /Owner is the manager holding them in the earliest of those weeks they actually appear in/
       .test(note.replace(/\s+/g, ' ')), note);
   c.ok('and that a week he was not rostered for is blank rather than guessed',
     /not rostered for is blank rather than guessed at/.test(note.replace(/\s+/g, ' ')), note);
@@ -1424,7 +1424,7 @@ async function check(scenario, boot) {
     /the same one as at the top of the page/.test(note) &&
     /priced\s+over the same weeks/.test(note.replace(/\s+/g, ' ')), note);
   c.ok('the note says the names are links and what following one does',
-    /Every name here is a link/.test(note) && /marks his row/.test(note), note);
+    /Every name here is a link/.test(note) && /marks their row/.test(note), note);
 
   // The counts on the buttons must actually BE this table's, not just claimed.
   const takenCounts = [...d.querySelectorAll('#takenPosFilter button[data-pos]')]

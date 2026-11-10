@@ -17,7 +17,7 @@
 
 import { heatScale, heatOf } from '../js/heat.js';
 import {
-  zeroScale, signed, gainWeeksSpec, slotChangeSpec, goalSpec, altGoalSpec, oppSpec,
+  zeroScale, signed, gainWeeksSpec, slotChangeSpec, goalSpec, theirGoalSpec, oppSpec,
   teamSpec, recordOf, meetSpec, yesSpec,
 } from '../js/trade-cards.js';
 import { acceptVerdict } from '../js/accept.js';
@@ -105,7 +105,7 @@ const tableOf = (spec) => {
     h.body[1].join(' '));
   eq(h.body[0][3], '−1.9', 'a week he certainly plays is not');
   ok('and the weeks still add up to the total', Math.abs(h.body.reduce((a, r) => a + num(r[3]), 0) - -3.4) < 0.051);
-  ok('the foot explains the percentage', /chance he is still playing/.test(his.foot), his.foot);
+  ok('the foot explains the percentage', /chance they are still playing/.test(his.foot), his.foot);
 
   // A one-number measure has no weeks: now, with, the change.
   const flat = gainWeeksSpec({ title: 'You gain', byWeek: null, before: 120, after: 123.5, shown: '+3.5' });
@@ -182,14 +182,16 @@ const tableOf = (spec) => {
   eq(g.rows[0].value, '2% → 5%', 'you, now → with');
   eq(g.rows[1].label, 'Luke', 'him, by name');
   eq(g.rows[1].value, '15% → 12%', 'him, now → with');
-  ok('and the chance he says yes', g.rows[2].label === 'Chance he says yes' && g.rows[2].value === '95%');
+  ok('and the chance he says yes', g.rows[2].label === 'Chance they say yes' && g.rows[2].value === '95%');
   // Since 2026-10-15 (trade audit Phase 3, "show words") the page hands the word in.
   const gw = goalSpec({ mine: { before: 0.024, after: 0.053 }, accept: 0.2, word: 'unlikely' });
   eq(gw.rows[gw.rows.length - 1].value, 'unlikely (20%)', 'the chance he says yes is the word, then its %');
   eq(g.title, 'Title chance', 'titled by the goal');
-  const a = altGoalSpec({ chance: 'chance of finishing last', partner: 'Luke', before: 0.155, after: 0.098, weeks: 'weeks 5–14' });
-  ok('the other goal: yours only, and it says it ranks nothing', a.rows.length === 1 && /does not rank/.test(a.foot), a.foot);
-  eq(a.rows[0].value, '16% → 10%', 'the other goal in whole percent too');
+  // The Chance cell's lower half (2026-11-10): the other manager's chance at the same goal.
+  const a = theirGoalSpec({ chance: 'chance of finishing last', partner: 'Luke', theirs: { before: 0.155, after: 0.098 } });
+  ok('theirs: one line, by name, titled by the goal', a.rows.length === 1 && a.rows[0].label === 'Luke' && a.title === 'Luke’s chance of finishing last', JSON.stringify(a));
+  eq(a.rows[0].value, '16% → 10%', 'their chance in whole percent too');
+  eq(theirGoalSpec({ theirs: null }).rows[0].value, '—', 'nothing known: a dash');
 }
 
 // ------------------------------------- 4a. a season-sim chance, printed whole
@@ -237,7 +239,7 @@ const tableOf = (spec) => {
   eq(y.total.value, `${v.word} (${Math.round(v.p * 100)}%)`, 'the last line is the word and its %');
   ok('the Allen + Charbonnet shape reads unlikely', v.word === 'unlikely', v.word);
   ok('and the why is in the foot', y.foot.includes(v.why), y.foot);
-  ok('a part is labelled by its own words, capitalised', y.rows.some((r) => /^He loses 2 a week$/.test(r.label)), JSON.stringify(y.rows.map((r) => r.label)));
+  ok('a part is labelled by its own words, capitalised', y.rows.some((r) => /^They lose 2 a week$/.test(r.label)), JSON.stringify(y.rows.map((r) => r.label)));
   // Rounding: three parts of 0.04 each print 0.0 but add to 0.1.
   const tiny = { p: 0.51, word: 'maybe', why: 'about even for him', feel: 0.12,
     parts: [{ key: 'a', v: 0.04, text: 'a' }, { key: 'b', v: 0.04, text: 'b' }, { key: 'c', v: 0.04, text: 'c' }] };
@@ -288,7 +290,7 @@ const tableOf = (spec) => {
     gainWeeksSpec({ title: 'You gain', byWeek: [{ week: 5, before: 1, after: 2 }], reach: new Map([[5, 0.5]]), vs: new Map([[5, 1]]), shown: '+1.0', totalShown: '+1.0' }),
     slotChangeSpec({ title: 'Week 5', slots: [], before: 1, after: 2, vs: 1, shown: '+1.0' }),
     goalSpec({ mine: { before: 0.1, after: 0.2 }, theirs: { before: 0.1, after: 0.2 }, accept: 0.5 }),
-    altGoalSpec({ before: 0.1, after: 0.2 }), oppSpec({ per: [{ week: 5, delta: 1 }] }),
+    theirGoalSpec({ theirs: { before: 0.1, after: 0.2 } }), oppSpec({ per: [{ week: 5, delta: 1 }] }),
     teamSpec({ name: 'A', record: '1–0', avg: 100, games: 1, proj: 100 }), meetSpec({ partner: 'B', meetings: [] }),
   ];
   for (const spec of all) {

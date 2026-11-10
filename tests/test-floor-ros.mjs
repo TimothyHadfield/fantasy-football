@@ -128,7 +128,7 @@ eq(floorSource(floorAt('K', old)), 'the 3rd-best K on the waiver wire (Cole)',
 const said = describeFloors(floors, { week: WEEK });
 ok(said.includes('K 10.1') && said.includes('DST 5.5'), 'the note prints the new floors', said);
 ok(/rest-of-season/.test(said), 'the note says the floor is by rest-of-season average', said);
-ok(/games he has left/.test(said), 'and how the average is taken', said);
+ok(/games they have left/.test(said), 'and how the average is taken', said);
 ok(/3rd-best free agent/.test(said), 'and still that it is the 3rd best', said);
 ok(/read once and used for every week/.test(said), 'and still one read used flat', said);
 ok(!/on the wire in week 6 —/.test(said), 'and no longer says it is that week\'s wire', said);

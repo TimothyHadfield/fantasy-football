@@ -395,7 +395,7 @@ function man(p, inner, { ident = null } = {}) {
   const tip = tipAttr(registerRun(made, PREFIX));
   if (noId) return `<span class="pref"${tip} tabindex="0">${inner}</span>`;
   return `<a class="pref" href="${esc(playerHref(id))}"${tip}` +
-    ` aria-label="${esc(p.name)} — open his next 13 weeks on the Players page">${inner}</a>`;
+    ` aria-label="${esc(p.name)} — open their next 13 weeks on the Players page">${inner}</a>`;
 }
 
 /** A stat card's attribute for the recap, or '' when there is no spec. */
@@ -585,9 +585,9 @@ function paintNote(s, inputs, L) {
     'Missed points: <b>Reasonable</b> is the best legal lineup by ESPN\'s projections, scored by what those men scored, minus your score; below zero means your calls beat the projections. <b>Perfect</b> is the best lineup possible from what everyone scored. IR slots are left out. Hover or tap a figure for the swaps.',
     `Booms and busts: points against projection, for rostered men and free agents projected ${5}+ or scoring 15+. A bust was projected 5+.`,
     'Positions: Top avg is the average of the top scorers league-wide — as many as teams at QB, TE, K and D/ST, twice that at RB and WR. Started is this league\'s starters.',
-    'Injuries: ESPN keeps no injury history. The latest finished week’s statuses are saved on this device and used from then on. A week with no saved copy is rebuilt: a man who played and then missed the next week. Hover or tap a name for his owner, status and injury.',
-    '<b>Est. return</b> is the week he played again, ESPN’s season-ending flag, or ESPN’s expected return date placed in the first week his NFL team plays on or after it (the date itself when the NFL schedule is not held). Nothing else is guessed.',
-    '<b>Up while out</b>: teammates at his position (same NFL team) whose ESPN projection for the weeks he is out, up to three, averages at least 0.5 a week above their projection in the week he was hurt. Both are ESPN’s numbers; that the rise is because of him is a reading, not a measurement.',
+    'Injuries: ESPN keeps no injury history. The latest finished week’s statuses are saved on this device and used from then on. A week with no saved copy is rebuilt: a man who played and then missed the next week. Hover or tap a name for their owner, status and injury.',
+    '<b>Est. return</b> is the week they played again, ESPN’s season-ending flag, or ESPN’s expected return date placed in the first week their NFL team plays on or after it (the date itself when the NFL schedule is not held). Nothing else is guessed.',
+    '<b>Up while out</b>: teammates at their position (same NFL team) whose ESPN projection for the weeks they are out, up to three, averages at least 0.5 a week above their projection in the week they were hurt. Both are ESPN’s numbers; that the rise is because of them is a reading, not a measurement.',
   ].map((t) => `<p>${t}</p>`).join('');
 }
 

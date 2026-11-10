@@ -174,7 +174,7 @@ function pref(p, inner, { card = true } = {}) {
   // say it would be a second tooltip on top of the card.
   return (
     `<a class="pref" href="${esc(playerHref(id))}"${tip}` +
-    ` aria-label="${esc(p.name)} — open his next 13 weeks on the Players page">${inner}</a>`
+    ` aria-label="${esc(p.name)} — open their next 13 weeks on the Players page">${inner}</a>`
   );
 }
 
@@ -1555,9 +1555,9 @@ function standingSpec(p, { label, value, h, scale, week }) {
     ],
     // A man who was on a bench that week is not one of the starters he is
     // set against, and the count says so rather than passing him off as one.
-    foot: st && !st.member ? `${h.standing}, counting him with the ${group}` : `${h.standing} ${group}`,
+    foot: st && !st.member ? `${h.standing}, counting them with the ${group}` : `${h.standing} ${group}`,
     href: playerHref(p.playerId),
-    hrefLabel: 'His next 13 weeks',
+    hrefLabel: 'Their next 13 weeks',
   };
 }
 
@@ -1827,7 +1827,7 @@ function renderMatchups(m) {
 const SWAP_EXPLAIN =
   '<strong>Start &hellip; over &hellip;</strong> is your lineup as set against the best legal ' +
   'one on ESPN&rsquo;s projections for this week; a player whose game has started stays where ' +
-  'he is. <strong>pts</strong> is one projection minus the other. <strong>win</strong> is what ' +
+  'they are. <strong>pts</strong> is one projection minus the other. <strong>win</strong> is what ' +
   'the swap adds to your win chance, read against the same spread and the same opponent ' +
   'total, each swap on top of the one above it. The win chance on the card already assumes ' +
   'you make them.';
@@ -2022,10 +2022,10 @@ function renderInjuries(m) {
     `${m.injuries.length === 1 ? 'carries' : 'carry'} a designation` +
     `${out ? `, ${out} of them ruled out` : ''}. Bench players are left out on purpose. ` +
     'Every name links to that player on the Players page. ' +
-    'Est. return is ESPN’s expected return date, as the first week his NFL team plays on or after it; ' +
+    'Est. return is ESPN’s expected return date, as the first week their NFL team plays on or after it; ' +
     'Season means out for the season, and a dash means ESPN gave no date. ' +
-    'Up while out lists teammates at his position whose ESPN projection for the weeks he is out ' +
-    'is higher than for the last week he played, in points a week.';
+    'Up while out lists teammates at their position whose ESPN projection for the weeks they are out ' +
+    'is higher than for the last week they played, in points a week.';
 }
 
 function renderBench(m) {
@@ -2138,7 +2138,7 @@ function renderBench(m) {
         <th class="name" data-sort title="The fantasy team">Team</th>
         <th data-sort title="Points its starting lineup scored in week ${wk}">Started</th>
         <th data-sort title="Points its bench scored in week ${wk}">Bench</th>
-        <th class="left wrap" data-sort title="The benched player who most outscored a starter he could have replaced">Biggest miss</th>
+        <th class="left wrap" data-sort title="The benched player who most outscored a starter they could have replaced">Biggest miss</th>
         <th data-sort title="Points that one call cost">Cost</th>
       </tr></thead>
       <tbody>${rows}</tbody>
@@ -2174,7 +2174,7 @@ function renderBench(m) {
         'it. '
       : '') +
     `${fmt(total)} points sat on benches in week ${m.benchWeek}. A <em>miss</em> counts only ` +
-    'when the benched player was eligible for the slot he would have taken, so a receiver ' +
+    'when the benched player was eligible for the slot they would have taken, so a receiver ' +
     `out-scoring a kicker is not one. ${plural(missed, 'team')} left points behind. ` +
     'Both men in a miss link to their next 13 weeks on the Players page.';
 }

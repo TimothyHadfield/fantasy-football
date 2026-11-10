@@ -99,8 +99,8 @@ export function askAiText(f) {
 
   const facts = [];
   if (has(f.myGain)) facts.push(`My lineup gain: ${f.myGain}${has(f.myLineup) ? `; ${f.myLineup}` : ''}`);
-  if (has(f.hisGain)) facts.push(`His lineup gain: ${f.hisGain}${has(f.hisNote) ? `; ${f.hisNote}` : ''}`);
-  if (has(f.meet)) facts.push(`I play him in ${f.meet}`);
+  if (has(f.hisGain)) facts.push(`Their lineup gain: ${f.hisGain}${has(f.hisNote) ? `; ${f.hisNote}` : ''}`);
+  if (has(f.meet)) facts.push(`I play them in ${f.meet}`);
   if (has(f.goal)) facts.push(f.goal);
   if (has(f.altGoal)) facts.push(f.altGoal);
   for (const c of f.cuts || []) if (has(c)) facts.push(c);

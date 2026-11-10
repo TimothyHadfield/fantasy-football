@@ -148,7 +148,7 @@ check(vc.lastPlayedWeek({ currentWeek: null }) === null, 'no current week: none'
     byeWeek: null, currentWeek: 1, copies: [COPY8],
   });
   check(res.change === null && res.why === 'notYet' && res.asOf === null, 'week 1: not played yet');
-  check(vc.whyText(res) === 'His team has not played yet.', 'says not played yet');
+  check(vc.whyText(res) === 'Their team has not played yet.', 'says not played yet');
 }
 
 // ------------------------------------------------------------ no lines -> null

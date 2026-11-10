@@ -1379,9 +1379,9 @@ function scaleNumber(r, i) {
 /** What Value is, said in both tables' notes (rule 7) — only while there are lines. */
 const VALUE_NOTE = () =>
   lead('Value') +
-  'Points a week over the waiver line at his position; points below the starter line count ' +
+  'Points a week over the waiver line at their position; points below the starter line count ' +
   'half, and both lines are fixed for the season. On Value, each projection is shown that way ' +
-  'and the Value column is his Value over every week left, as on his card; a score stays a score.' +
+  'and the Value column is their Value over every week left, as on their card; a score stays a score.' +
   ' ' + lead('Change') + valueChange.CHANGE_NOTE;
 
 /**
@@ -2420,7 +2420,7 @@ function gainTitle() {
   const g = state.gain;
   if (!g.key && g.why === 'team') return 'Pick your team above to see what adding each player would gain your lineup.';
   return `Points a week your best lineup gains${g.key ? ` over ${weekRange(g.weeks)}` : ''} ` +
-    `if you add him and drop the man it costs least.`;
+    `if you add them and drop the man it costs least.`;
 }
 
 // WHERE A GAIN COMES FROM: the man the move drops, then one row per week —
@@ -2457,7 +2457,7 @@ function gainCard(playerId) {
     tableHtml:
       (r.drop ? `<div class="op-drop">Drop ${dropName}</div>` : '') +
       '<table class="sc-rows"><thead><tr><th class="num">Wk</th><th class="num">Now</th>' +
-      '<th class="num">With him</th><th class="num">+</th></tr></thead>' +
+      '<th class="num">With them</th><th class="num">+</th></tr></thead>' +
       `<tbody>${rows}</tbody><tfoot>` +
       `<tr><td class="lbl">Total</td><td class="num">${fmt(sum((w) => w.before))}</td>` +
       `<td class="num">${fmt(sum((w) => w.after))}</td><td class="num">${signed(r.total)}</td></tr>` +
@@ -2669,9 +2669,9 @@ function weekCard(row, kind, week) {
     // and the man of yours that turns on.
     const got = view.lineup && !(row.done && row.done[i]) ? view.lineup(row.p, v, i) : null;
     if (got) {
-      rows.push({ label: 'You would start him', value: got.starts ? 'Yes' : 'No' });
-      if (got.out) rows.push({ label: got.out.name, note: 'he would sit', value: got.out.projected });
-      if (got.bar) rows.push({ label: got.bar.name, note: 'starts ahead of him', value: got.bar.projected });
+      rows.push({ label: 'You would start them', value: got.starts ? 'Yes' : 'No' });
+      if (got.out) rows.push({ label: got.out.name, note: 'they would sit', value: got.out.projected });
+      if (got.bar) rows.push({ label: got.bar.name, note: 'starts ahead of them', value: got.bar.projected });
     }
   }
   return {
@@ -2741,7 +2741,7 @@ function posCard(row) {
       lead: r.rank === null ? pos : `${pos}${r.rank}`, name: r.p.name, value: r.avg, here: r === row,
     }))),
     href,
-    hrefLabel: href ? 'Trade for him' : null,
+    hrefLabel: href ? 'Trade for them' : null,
   };
 }
 
@@ -3129,7 +3129,7 @@ function renderJump(weeks) {
   if (!found) {
     el.innerHTML = state.settled
       ? `<span>No player with id ${esc(state.spotlight)} is on the wire or on a roster in ` +
-        `this league. He may have been dropped, or the link may be from another league.</span>` +
+        `this league. They may have been dropped, or the link may be from another league.</span>` +
         `<button type="button" data-clear>Clear</button>`
       : `<span class="muted">Looking for the player this link points at…</span>`;
     return;
@@ -3905,12 +3905,12 @@ function pastHeads(weeks, keyed = false) {
 
 /** A priced week's header title, and Avg's: what the numbers under them are right now. */
 const weekTitle = (w) => (valueOn()
-  ? `ESPN’s projected points for week ${w}, as a Value: points over the waiver line at his position.`
+  ? `ESPN’s projected points for week ${w}, as a Value: points over the waiver line at their position.`
   : `ESPN’s projected points for week ${w}.`);
 const avgTitle = () => (changeOn()
-  ? 'His Value now minus his Value before his last game, off the projections saved then — ours, not ESPN’s.'
+  ? 'Their Value now minus their Value before their last game, off the projections saved then — ours, not ESPN’s.'
   : valueOn()
-  ? 'His Value over every week left, the one on his card and on the Trade page — ours, not ESPN’s.'
+  ? 'Their Value over every week left, the one on their card and on the Trade page — ours, not ESPN’s.'
   : 'The mean of the regular-season weeks shown that project above zero — ours, not ESPN’s.');
 /** The column's heading: Avg, or on Value his Value (`withShown`). */
 const avgHead = () => (changeOn() ? 'Change' : valueOn() ? 'Value' : 'Avg');
@@ -3932,9 +3932,9 @@ function renderHead(weeks) {
 
   $('waiverTable').querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort data-col="player" title="A free agent you could claim; click a name for the rest of his season and his actual scores.">Player</th>
-       <th class="left" data-sort data-col="pos" title="His position.">Pos</th>
-       <th class="left" data-sort data-col="team" title="His NFL team.">Tm</th>
+       <th class="name" data-sort data-col="player" title="A free agent you could claim; click a name for the rest of their season and their actual scores.">Player</th>
+       <th class="left" data-sort data-col="pos" title="Their position.">Pos</th>
+       <th class="left" data-sort data-col="team" title="Their NFL team.">Tm</th>
        <th data-sort data-col="avg" title="${avgTitle()}">${avgHead()}</th>
        <th data-sort data-col="extra" title="${esc(gainTitle())}">Gain</th>
        ${cols}
@@ -4235,9 +4235,9 @@ function cell(v, week, p, roster = false, starts = false, scale = null, done = n
     }
     const bye = byeWeekOf(p, state.byes);
     const why = `${esc(name)} is projected at 0.0 in week ${week}` +
-      (bye ? `, which is not his bye (week ${bye})` : '') +
+      (bye ? `, which is not their bye (week ${bye})` : '') +
       (zero === 'out' ? ` — listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())} that week.` : '.') +
-      (Number.isFinite(back) ? ` ESPN expects him back in week ${back}.` : '');
+      (Number.isFinite(back) ? ` ESPN expects them back in week ${back}.` : '');
     // A real zero. Nobody would start it, so it is never boxed; the word is
     // what says it is not a bye.
     if (zero === 'out') {
@@ -4387,7 +4387,7 @@ function waiverTag(p) {
     ? `${day} ${when.getDate()} ${when.toLocaleString('en-US', { month: 'short' })}`
     : '';
   const why = `On waivers${full ? ` until ${full}` : ''}: a claim waits for the waiver run, ` +
-    `and a team with a better priority can take him first.`;
+    `and a team with a better priority can take them first.`;
   return ` <span class="tag wv" title="${esc(why)}">W${day ? ` · ${day}` : ''}</span>`;
 }
 
@@ -4531,8 +4531,8 @@ function wireRow(row, weeks, lineup, avgScales, weekScales) {
 
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
-        playerLink(p, nameHtml(p), `${esc(p.name)}${owned} — jump to his row, show every ` +
-          `remaining week and his actual scores`, true), trendMark(p, false) + outlookMark(p, true),
+        playerLink(p, nameHtml(p), `${esc(p.name)}${owned} — jump to their row, show every ` +
+          `remaining week and their actual scores`, true), trendMark(p, false) + outlookMark(p, true),
         `${injuryTag(status)}${waiverTag(p)}`, claimTag(p))}</td>
       ${identityCells(row, heat)}
       ${gainCell(p)}
@@ -4564,7 +4564,7 @@ function mineRow(row, weeks, avgScales, weekScales) {
   const why =
     `${esc(p.name)} — on your roster, not on the wire. Your lowest-averaging ` +
     `${esc(p.position)} over ${weekRange(weeks)}, of the ${depth} you hold there. ` +
-    'Open a custom trade with him ticked';
+    'Open a custom trade with them ticked';
 
   const heat = heatOf(row.shownAvg, avgScales.get(p.position));
   const me = myTeamId();
@@ -4717,10 +4717,10 @@ function renderTakenHead(weeks) {
 
   $('takenTable').querySelector('thead').innerHTML =
     `<tr>
-       <th class="name" data-sort title="A player already on a roster; click a name for a custom trade with him.">Player</th>
-       <th class="left" data-sort title="His position, and his rank at it on his own manager’s roster by Avg — best is 1.">Pos</th>
-       <th class="left" data-sort title="His NFL team.">Tm</th>
-       <th class="left" data-sort title="The manager whose roster he is on, as of the earliest week shown.">Owner</th>
+       <th class="name" data-sort title="A player already on a roster; click a name for a custom trade with them.">Player</th>
+       <th class="left" data-sort title="Their position, and their rank at it on their own manager’s roster by Avg — best is 1.">Pos</th>
+       <th class="left" data-sort title="Their NFL team.">Tm</th>
+       <th class="left" data-sort title="The manager whose roster they are on, as of the earliest week shown.">Owner</th>
        <th data-sort title="${avgTitle()}">${avgHead()}</th>
        ${cols}
      </tr>`;
@@ -4751,7 +4751,7 @@ function takenRow(row, weeks, avgScales, weekScales) {
   return `<tr${rowIdentity(p.playerId, { cls: status && status.dim ? 'unavailable' : '' })}>
       <td class="name" data-v="${esc(p.name.toLowerCase())}">${nameLine(
         playerLink(p, nameHtml(p), `${esc(p.name)} — on ${esc(owner)}’s roster. Open a ` +
-          'custom trade with him ticked', false, tradeManHref(p.playerId, row.ownerId, myTeamId())),
+          'custom trade with them ticked', false, tradeManHref(p.playerId, row.ownerId, myTeamId())),
         trendMark(p, true) + outlookMark(p, false),
         injuryTag(status), claimTag(p, true))}</td>
       <td class="left pos" data-v="${posOrder * 100 + (rank ?? 99)}" data-c="pos"${tradeHrefFor(row) ? ' data-go' : ''}>${
@@ -4922,7 +4922,7 @@ function renderTakenStats(weeks) {
  */
 function AVG_ZERO_WORDS() {
   return state.value && state.value.base
-    ? 'a bye or a 0.0 week counts as the waiver line at his position, and a week with no number is left out'
+    ? 'a bye or a 0.0 week counts as the waiver line at their position, and a week with no number is left out'
     : 'only weeks projecting above zero count, so a bye, a man ruled out and a week with no number at all are all left out';
 }
 
@@ -4950,10 +4950,10 @@ function renderTakenNote(weeks) {
     lead('Who is listed') +
     `Everyone on a roster in <strong>any</strong> of ${weekRange(weeks)} — a man picked up in ` +
     `${weeks.length > 1 ? `week ${weeks[1]}` : 'a later week'} belongs in a table whose columns ` +
-    `include that week. Owner is the manager holding him in the earliest of those weeks he ` +
-    `actually appears in, which is the most recent squad this page knows him to have been on. ` +
-    `His week numbers still come from each week’s own payload, so no projection is borrowed ` +
-    `across weeks, and a week he was not rostered for is blank rather than guessed at.`
+    `include that week. Owner is the manager holding them in the earliest of those weeks they ` +
+    `actually appear in, which is the most recent squad this page knows them to have been on. ` +
+    `Their week numbers still come from each week’s own payload, so no projection is borrowed ` +
+    `across weeks, and a week they were not rostered for is blank rather than guessed at.`
   );
 
   parts.push(
@@ -4965,13 +4965,13 @@ function renderTakenNote(weeks) {
 
   parts.push(
     lead('The rank') +
-    'The number after the position is where he ranks on his own manager’s roster by that Avg — ' +
+    'The number after the position is where they rank on their own manager’s roster by that Avg — ' +
     'QB3 is that manager’s third-best quarterback over the weeks currently shown, and 1 is the ' +
     'best. It is our ordering rather than ESPN’s depth chart, and it moves with the span: widen ' +
     'the weeks and a QB2 can become a QB3, exactly as widening it can change which of your men ' +
     'appears as Your QB3 above. A player ESPN carried no number for over these weeks cannot be ' +
-    'ranked at all, so he shows the bare position with no number against it, and sorts to the ' +
-    'end of his own position rather than to a rank we made up. His Avg is blank for the same ' +
+    'ranked at all, so they show the bare position with no number against it, and sorts to the ' +
+    'end of their own position rather than to a rank we made up. Their Avg is blank for the same ' +
     'reason, and a blank Avg carries no sort key at all.'
   );
 
@@ -5001,7 +5001,7 @@ function renderTakenNote(weeks) {
   parts.push(
     lead('Bye and blank') +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
-    'a blank cell means that week’s rosters carried no number for him at all. Those are not the ' +
+    'a blank cell means that week’s rosters carried no number for them at all. Those are not the ' +
     'same thing, so they are not drawn the same way. ' + ZERO_NOTE
   );
 
@@ -5019,7 +5019,7 @@ function renderTakenNote(weeks) {
   parts.push(
     '<strong>FLEX</strong> here is the same filter as on the wire above — every running back, ' +
     'receiver and tight end the league is holding, counted as those three added together — and ' +
-    'it leaves the rank beside a name completely alone. A man is his manager’s RB2 or WR1 at his ' +
+    'it leaves the rank beside a name completely alone. A man is their manager’s RB2 or WR1 at their ' +
     'own position whichever button is pressed; there is no such thing as a FLEX2, because the ' +
     'rank answers how deep a manager is at a position and the button only decides which rows you ' +
     'are looking at.'
@@ -5027,8 +5027,8 @@ function renderTakenNote(weeks) {
 
   parts.push(
     lead('Links') +
-    'Every name here is a link. Clicking one puts the table on his position, widens the weeks to ' +
-    'the rest of the season, marks his row and opens his Actual row under it — the same thing ' +
+    'Every name here is a link. Clicking one puts the table on their position, widens the weeks to ' +
+    'the rest of the season, marks their row and opens their Actual row under it — the same thing ' +
     'that happens when you click a player anywhere else on the site, which is what brings you here. ' +
     'Click the name again to close the Actual row.'
   );
@@ -5074,17 +5074,17 @@ const PLAYOFF_NOTE =
 const PLAYED_NOTE = () =>
   lead('Played weeks') +
   'The columns left of the thick line are the weeks fully over — a week still being played stays ' +
-  'on the right. Each shows the projection ESPN still keeps for that week; click a name for his ' +
-  'Actual row, what he really scored in each. They are not in Avg, the ranks or the colour scale, ' +
-  'and the weeks-to-price control does not touch them. “—” means ESPN had nothing for him that week.' +
+  'on the right. Each shows the projection ESPN still keeps for that week; click a name for their ' +
+  'Actual row, what they really scored in each. They are not in Avg, the ranks or the colour scale, ' +
+  'and the weeks-to-price control does not touch them. “—” means ESPN had nothing for them that week.' +
   (state.isDemo ? '' : ' They are read once, after the table: wire + rosters per played week.');
 
 /** A week in progress, said in both tables' notes — only once somebody has finished. */
-const DONE_NOTE = 'A player whose game is over shows his score for that week, uncoloured, and Avg counts it.';
+const DONE_NOTE = 'A player whose game is over shows their score for that week, uncoloured, and Avg counts it.';
 
 /** What a 0.0 is, said in both tables' notes. */
 const ZERO_NOTE =
-  'ESPN also returns 0.00 for a man it has ruled out, so a zero outside his NFL team’s bye week ' +
+  'ESPN also returns 0.00 for a man it has ruled out, so a zero outside their NFL team’s bye week ' +
   'is printed as 0.0 — with OUT, IR or SUSP beside it when that is why — and, like a bye, is left ' +
   'out of Avg. When the bye weeks could not be read, every zero is shown as a bye, as it always was.';
 
@@ -5146,7 +5146,7 @@ function comparisonNote(weeks, status) {
         : 'Nobody is set as you, so the table below is the wire on its own. Choose your team ' +
           'in the “You are” menu in the connection bar and every position you hold gains a ' +
           '<span class="mine-key">Your QB3</span> row — your worst man there, sorted in among ' +
-          'the players who could replace him.'
+          'the players who could replace them.'
     );
     return parts;
   }
@@ -5155,7 +5155,7 @@ function comparisonNote(weeks, status) {
     lead('Your rows') +
     'A row marked <span class="mine-key">Your QB3</span> is one of your own players rather ' +
     'than someone you can add: the worst man you hold at that position, put in the same list ' +
-    'so you can see who on the wire beats him. Worst means the lowest Avg over the weeks ' +
+    'so you can see who on the wire beats them. Worst means the lowest Avg over the weeks ' +
     'currently shown, worked out exactly the way the wire’s is — so widening the span can ' +
     'change which of your men appears. The number is your depth there: QB3 because you hold ' +
     'three quarterbacks, K2 because you hold two kickers. These rows sort and filter with ' +
@@ -5235,7 +5235,7 @@ function renderNote(weeks) {
     'Avg is the mean of the weeks shown and is ours, not ESPN’s: ' + AVG_ZERO_WORDS() + ' — ' +
     'the same rule as the Trade page’s per-week figure. ' + PLAYOFF_NOTE + ' ' +
     'A cell reading Bye is the 0.00 ESPN returns for a player whose NFL team is off that week; ' +
-    'a blank cell means that week’s list carried no number for him at all. Those are not the ' +
+    'a blank cell means that week’s list carried no number for them at all. Those are not the ' +
     'same thing, so they are not drawn the same way. ' + ZERO_NOTE
   );
 
@@ -5243,12 +5243,12 @@ function renderNote(weeks) {
   if (state.gain.key) {
     parts.push(
       lead('Gain') +
-      `Gain is what adding him is worth to your own lineup: your best legal lineup with him ` +
+      `Gain is what adding them is worth to your own lineup: your best legal lineup with them ` +
       `in it and without the player it costs least to drop, minus your best lineup as the roster ` +
       `stands, a week, over ${weekRange(state.gain.weeks)}. It is priced exactly as the Trade page ` +
-      `prices a trade, and your roster stays the size it is now. A dash means he would not ` +
+      `prices a trade, and your roster stays the size it is now. A dash means they would not ` +
       `raise your lineup in any of those weeks. Hover or tap a figure for the weeks behind it ` +
-      `and the man it would drop; a click goes to him. The shade is deeper the bigger the gain, ` +
+      `and the man it would drop; a click goes to them. The shade is deeper the bigger the gain, ` +
       `against the other gains in the column, and a plus is never red.`
     );
   }
@@ -5256,9 +5256,9 @@ function renderNote(weeks) {
   if (state.pool.size && [...state.pool.values()].some((p) => p.status === 'WAIVERS')) {
     parts.push(
       lead('W') +
-      'A <span class="tag wv">W</span> beside a name means he is still on waivers, with the day ' +
+      'A <span class="tag wv">W</span> beside a name means they are still on waivers, with the day ' +
       'the claim clears: a claim waits for the waiver run, and a team with a better priority can ' +
-      'take him first. No tag means ESPN lists him as a free agent you can add straight away ' +
+      'take them first. No tag means ESPN lists them as a free agent you can add straight away ' +
       '(or did not say).'
     );
   }
@@ -5268,7 +5268,7 @@ function renderNote(weeks) {
   if (comparing()) {
     parts.push(
       lead('Green box') +
-      'A week <span class="beats-key">boxed in green</span> is one where he would make your best lineup.'
+      'A week <span class="beats-key">boxed in green</span> is one where they would make your best lineup.'
     );
   }
 
@@ -5292,7 +5292,7 @@ function renderNote(weeks) {
 
   parts.push(
     lead('And on the week columns') +
-    'Each week cell is on the same scale, measured against the other free agents at his position ' +
+    'Each week cell is on the same scale, measured against the other free agents at their position ' +
     '<strong>in that same week</strong>, so a heavy bye week is not a red stripe down the table. ' +
     'The <span class="beats-key">green box</span> sits on top of it. A Bye, a 0.0, a blank and a week ' +
     'already played are never coloured.'
@@ -5306,7 +5306,7 @@ function renderNote(weeks) {
     '<strong>FLEX</strong> is not a position but a filter across three: press it and the table ' +
     'shows every running back, receiver and tight end at once — the men who could fill a flex ' +
     'spot — with the count on the button being those three added together. It changes nothing ' +
-    'about the players themselves: each one keeps his own position in the Pos column, and a week ' +
+    'about the players themselves: each one keeps their own position in the Pos column, and a week ' +
     'boxed in green under WR is boxed under FLEX.'
   );
 
@@ -5316,7 +5316,7 @@ function renderNote(weeks) {
     'own set — and filtering costs nothing: every week already fetched stays fetched. The weeks ' +
     'to price control is shared with that panel, because both tables are priced over the same ' +
     'weeks and widening is what actually spends requests. Every name is a link that jumps to that ' +
-    'player, shows the rest of his season and opens his Actual row; click it again to close the row.'
+    'player, shows the rest of their season and opens their Actual row; click it again to close the row.'
   );
 
   if (state.playedWeeks.length) parts.push(PLAYED_NOTE());
@@ -5327,9 +5327,9 @@ function renderNote(weeks) {
     lead('Availability') +
     (state.isDemo
       ? 'On a real league, availability is a snapshot of the moment the page loaded — anyone here ' +
-        'can be claimed by another team before you get to him.'
+        'can be claimed by another team before you get to them.'
       : 'Availability is a snapshot of the moment each week was read. Anyone here can be claimed ' +
-        'by another team before you get to him, and this page never refreshes itself.')
+        'by another team before you get to them, and this page never refreshes itself.')
   );
 
   // The preseason arrows' basis (rule 7), only when the table draws one.

@@ -142,7 +142,7 @@ function stripSentinelAdp(players) {
     players: players.map((p) => ({ ...p, adp: null })),
     warning: `ESPN returned the same draft position (${value}) for ${n} players, ` +
       'which means it has no real ADP for this season. Rankings still work, but ' +
-      '"will he last?" is a coin flip until real draft data exists.',
+      '"will they last?" is a coin flip until real draft data exists.',
   };
 }
 
@@ -253,7 +253,7 @@ function playerSpec(p) {
       ...(p.notes || []).map((n) => ({ label: n, html: '' })),
     ],
     href: canGo ? links.playerHref(p.id) : null,
-    hrefLabel: 'His next 13 weeks',
+    hrefLabel: 'Their next 13 weeks',
   };
 }
 
@@ -1768,54 +1768,54 @@ function renderReview() {
   const counts = own ? nobody : perf
     ? '<p><strong>Perfect draft</strong>: at each of its picks, the selected team takes the player with the highest ' +
       `${w.valued ? 'Value now' : 'worth now'} from that pick up to and including its next one; the players in between each move one pick later. ` +
-      'No other team changes its picks, and every player keeps his numbers.</p>'
+      'No other team changes its picks, and every player keeps their numbers.</p>'
     : wiOn()
-      ? '<p><strong>What if</strong>: a player counts for the team whose pick he sits at, and keeps his numbers.</p>'
-      : '<p>A player counts for the team that drafted him, wherever he is now.</p>';
+      ? '<p><strong>What if</strong>: a player counts for the team whose pick they sit at, and keeps their numbers.</p>'
+      : '<p>A player counts for the team that drafted them, wherever they are now.</p>';
   $('drNote').innerHTML = (isPre()
     ? '<p><strong>Pre</strong> is where ESPN ranked a player before the season, counted among the players drafted: ' +
     'the best-ranked player drafted is 1.</p>' +
     (auction
-      ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+      ? '<p><strong>Rank</strong> is their price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
       : '') +
-    `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Pre. Above zero he went later than he was ranked, below zero earlier. ` +
+    `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Pre. Above zero they went later than they were ranked, below zero earlier. ` +
     'Green and red compare it with every pick in the draft.</p>' +
     (w.valued ? (own ? '<p><strong>Value</strong> on the board adds up the preseason Value of every player a team has now.</p>'
       : '<p><strong>Value</strong> on the board adds up each drafted player’s preseason Value.</p>') : '') +
     (own || perf ? counts : '')
     : isPlain()
-      ? '<p><strong>Now</strong> is his Value today, in points a week.' +
+      ? '<p><strong>Now</strong> is their Value today, in points a week.' +
       (view() === 'val' ? ' Green and red compare it with every pick in the draft.' : '') + '</p>' +
       '<p><strong>Expected value</strong> starts from the players drafted, in ESPN preseason-rank order. ' +
       'Their preseason Values make one smoothed line. ' +
-      `It is read at ${auction ? 'his price rank' : 'his pick'}.` +
+      `It is read at ${auction ? 'their price rank' : 'their pick'}.` +
       (view() === 'exp' ? ' Green and red compare it with every pick in the draft.' : '') + '</p>' +
       (auction
-        ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+        ? '<p><strong>Rank</strong> is their price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
         : '') +
       `<p><strong>Value</strong> on the board adds up ${view() === 'exp' ? 'expected value' : 'Now'} for every player a team ${whose}.</p>` +
       counts
     : onValue()
-      ? '<p><strong>Now</strong> is his Value today, in points a week.</p>' +
+      ? '<p><strong>Now</strong> is their Value today, in points a week.</p>' +
       '<p><strong>Expected value</strong> starts from the players drafted, in ESPN preseason-rank order. ' +
       'Their preseason Values make one smoothed line. ' +
-      `It is read at ${auction ? 'his price rank' : 'his pick'}.</p>` +
+      `It is read at ${auction ? 'their price rank' : 'their pick'}.</p>` +
       (auction
-        ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+        ? '<p><strong>Rank</strong> is their price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
         : '') +
       '<p><strong>+/−</strong> is Now minus expected value. Above zero is a steal, below zero a miss. ' +
       'Green and red compare it with every pick in the draft.</p>' +
       `<p><strong>Value</strong> on the board adds up +/− for every player a team ${whose}.</p>` +
       counts
       : '<p><strong>Now</strong> is where a player would go if the same players were drafted again today: ' +
-    'points so far plus ESPN’s projection for every week left, measured against a typical bench player at his position.</p>' +
+    'points so far plus ESPN’s projection for every week left, measured against a typical bench player at their position.</p>' +
     (auction
-      ? '<p><strong>Rank</strong> is his price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
+      ? '<p><strong>Rank</strong> is their price’s place in the draft: the most expensive player is 1, and players who cost the same share a place.</p>'
       : '') +
     `<p><strong>+/−</strong> is ${auction ? 'Rank' : 'Pick'} minus Now. Above zero is a steal, below zero a miss. ` +
     'Green and red compare it with every pick in the draft.</p>' +
     // (No totals without Value: a player still counts for his drafter in the team's table.)
-    (perf || wiOn() ? counts : '<p>A player counts for the team that drafted him, wherever he is now.</p>') + (own ? nobody : '')) +
+    (perf || wiOn() ? counts : '<p>A player counts for the team that drafted them, wherever they are now.</p>') + (own ? nobody : '')) +
     // The board's Avg column, whichever view is on.
     '<p><strong>Avg</strong> is each round’s average across teams.</p>';
 
@@ -2507,9 +2507,9 @@ function drawWhatIf() {
   const auctionless = s.simulated ? '' : ' (not enough of a schedule to play it out)';
   $('wiNote').innerHTML =
     '<p><strong>The board</strong>: at the pick you chose, its team takes the player; everyone drafted between the two picks moves one pick later. ' +
-    'Swaps stack in the order you make them. Every player keeps his numbers.</p>' +
+    'Swaps stack in the order you make them. Every player keeps their numbers.</p>' +
     '<p><strong>Rosters</strong>: each team’s real roster every week, with the player it drafted at a changed pick swapped for the what-if player — ' +
-    'only in weeks it still had him, and only when the new player was on no other roster that week (or was leaving one through a swap).</p>' +
+    'only in weeks it still had them, and only when the new player was on no other roster that week (or was leaving one through a swap).</p>' +
     '<p><strong>A played week</strong>: the real score, plus what the swap does to the lineup. ESPN’s projections pick the best lineup with and without the swap; ' +
     'the difference in what those two lineups actually scored is added. A team with no swap keeps its real scores, so its record only moves when an opponent’s score does. ' +
     'Injured reserve is left out.</p>' +

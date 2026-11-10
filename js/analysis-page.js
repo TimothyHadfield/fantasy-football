@@ -1082,7 +1082,7 @@ function gridCell(entry, { withPosition = false, weekGrid = false, index = null,
     (entry.chg ? ` · ${changeWords(entry.p)}`
       : asVal && v !== null && !bye ? ` · Value ${fmt(v)} on a projection of ${fmt(raw)}` : '') +
     (bye ? ' · on bye this week, which is what ESPN’s 0.00 means' : '') +
-    (zero === 'out' ? ' · projected at 0.0 because he is ruled out, not on bye' : '');
+    (zero === 'out' ? ' · projected at 0.0 because they are ruled out, not on bye' : '');
 
   // Registered rather than serialised into the markup: thirteen weeks on every
   // one of 170 cells per grid would be tens of kilobytes of attribute repeated
@@ -1660,7 +1660,7 @@ function renderGridHead(table, benchCols, slots = gridSlots()) {
   table.querySelector('thead').innerHTML =
     `<tr>
        <th class="name" data-sort title="${TEAM_HEAD}">Team</th>
-       ${slots.map((s) => `<th data-sort title="Each team’s ${esc(s.key)} this week, and what he is projected.${valueWords()}">${esc(s.key)}</th>`).join('')}
+       ${slots.map((s) => `<th data-sort title="Each team’s ${esc(s.key)} this week, and what they are projected.${valueWords()}">${esc(s.key)}</th>`).join('')}
        <th class="grid-total grouped" data-sort title="The ${countWord(slots.length)} spots to the ` +
          `left added up, each counted at no less than the waiver floor for that spot — the same ` +
          `basis as the Proj avg Total.">Total</th>
@@ -2157,7 +2157,7 @@ function renderOverviewNote(grid) {
     `<strong>Proj avg ${season}</strong> Total and the Starting lineup band in Season by week: a spot ` +
     `whose man projects below the waiver floor for it — on bye, ruled out, or simply weak — counts ` +
     `at the floor instead, because that is what the squad could stream in. A man’s own cell never ` +
-    `moves; the floor is a claim about the squad’s week, not about him. ` +
+    `moves; the floor is a claim about the squad’s week, not about them. ` +
     (state.floors
       ? `Tap or hover a Total to see how many of its spots were counted at the floor.`
       : state.isDemo
@@ -2167,8 +2167,8 @@ function renderOverviewNote(grid) {
 
   parts.push(
     `<strong>B1…</strong> are the bench, best first by the same measure. Each man’s position is in ` +
-    `the cell because every bench is a different shape — and after it where he ranks at that ` +
-    `position on his own team, counting the starters too, so <strong>RB4</strong> is his squad’s ` +
+    `the cell because every bench is a different shape — and after it where they rank at that ` +
+    `position on their own team, counting the starters too, so <strong>RB4</strong> is their squad’s ` +
     `fourth-best back whether or not the other three are in the lineup.`
   );
 
@@ -2199,17 +2199,17 @@ function renderOverviewNote(grid) {
     parts.push(
       `A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team is ` +
       `off that week, which is not the same as having no number at all. ESPN also returns 0.00 for ` +
-      `a man it has ruled out, so a zero outside his team’s bye week reads <strong>0.0</strong> ` +
+      `a man it has ruled out, so a zero outside their team’s bye week reads <strong>0.0</strong> ` +
       `with OUT, IR or SUSP beside it. Neither can appear on <strong>Proj avg</strong>, whose ` +
       `cells are slots rather than men: a bye there is simply the next man up, averaged in.`
     );
   }
 
   parts.push(
-    `<strong>Tap or hover any number</strong> for that man’s name and his whole season as a chart: ` +
-    `the weeks along the top, his projection for each one underneath, and what he actually scored ` +
+    `<strong>Tap or hover any number</strong> for that man’s name and their whole season as a chart: ` +
+    `the weeks along the top, their projection for each one underneath, and what they actually scored ` +
     `under that. On a phone it opens as a panel at the foot of the screen, with a button through to ` +
-    `his next 13 weeks. Every name is in full in the roster detail at the foot of the page.`
+    `their next 13 weeks. Every name is in full in the roster detail at the foot of the page.`
   );
 
   parts.push(
@@ -2371,7 +2371,7 @@ function slotControl(entry, held) {
   // stays a plain label — there is nothing here to decide.
   if (slotId === IR_SLOT) {
     return cell(`<span class="slot-tag" title="ESPN has ${esc(p.name)} on injured reserve. ` +
-      `He cannot be started, so there is nothing to swap.">${esc(slot)}</span>`);
+      `They cannot be started, so there is nothing to swap.">${esc(slot)}</span>`);
   }
 
   if (!held) {
@@ -2380,7 +2380,7 @@ function slotControl(entry, held) {
   }
   if (held.p.playerId === p.playerId) {
     return button(' holding', ` title="Holding ${esc(p.name)}. Click a highlighted slot to put ` +
-      `him there, or click this one again to put him down."`);
+      `them there, or click this one again to put them down."`);
   }
   if (canSwap(held, entry)) {
     return button(' target', ` title="Swap ${esc(held.p.name)} into ${esc(slot)} and ` +
@@ -2407,7 +2407,7 @@ function splitRow(proj, espnTotal, held, columns) {
   const label = lineupEdited() ? 'Your lineup' : 'Starting lineup';
   const hint = held
     ? `Holding <strong>${playerRef(held.p, esc(held.p.name), `${held.p.name} — ${OPENS}`)}` +
-      `</strong> — click a highlighted slot to put him there, or his own again to drop it.`
+      `</strong> — click a highlighted slot to put them there, or their own again to drop it.`
     : lineupEdited()
       ? 'A what-if only. Nothing on this page is sent to ESPN.'
       : 'Click any slot tag to pick that player up, then click another to swap them.';
@@ -2802,7 +2802,7 @@ function renderRosterNote(view, team) {
     tiers.has('out') && ['<span class="key out">Out</span>', 'this week'],
     tiers.has('ir') && ['<span class="key ir">IR</span>', 'injured reserve'],
     view.some((e) => e.moved) && ['<span class="lg-mark ital">• moved</span>', 'swapped by you'],
-  ], 'Tap a slot tag to swap · tap a name for his Players page');
+  ], 'Tap a slot tag to swap · tap a name for their Players page');
 
   parts.push(
     `Bench rows are dimmed and the flex player is in bold. Red is out this week, dark red is ` +
@@ -2814,7 +2814,7 @@ function renderRosterNote(view, team) {
   if (view.some((e) => e.p.done === true)) {
     parts.push(
       `Week ${state.week} is still being played. A player whose NFL game is over shows the ` +
-      `projection he started with and his score; anyone still to finish shows no Actual, and ` +
+      `projection they started with and their score; anyone still to finish shows no Actual, and ` +
       `the totals count finished players only.`
     );
   }
@@ -2824,11 +2824,11 @@ function renderRosterNote(view, team) {
   // on screen who each man IS measured against.
   parts.push(
     `<strong>The red and green</strong> on Projected, Actual, Avg/wk and Season total measure each ` +
-    `man against the league&rsquo;s <strong>starters at his own position</strong> &mdash; never ` +
+    `man against the league&rsquo;s <strong>starters at their own position</strong> &mdash; never ` +
     `against the other numbers in the column, where a quarterback&rsquo;s 22 sits above a ` +
     `kicker&rsquo;s 8. Each column is compared with the same number for every squad&rsquo;s ` +
     `starters in the week picked. So a bench man usually reads red: ` +
-    `he is below a starter. Actual takes no colour until the week is final. Diff is left plain.`
+    `they are below a starter. Actual takes no colour until the week is final. Diff is left plain.`
   );
 
   parts.push(
@@ -2836,7 +2836,7 @@ function renderRosterNote(view, team) {
     `<strong>Avg/wk</strong> is that same number per game — one man's own average, which is a ` +
     `different question from the <strong>Proj avg</strong> above: that is what this squad's ` +
     `lineup is worth in an average week still to come, slot by slot, whoever fills each slot that week. ` +
-    `<strong>Click any player’s name</strong> to open his next 13 weeks on the ` +
+    `<strong>Click any player’s name</strong> to open their next 13 weeks on the ` +
     `<a href="waivers.html">Players</a> page.`
   );
 
@@ -3584,7 +3584,7 @@ function slotCell(entry, row, week, bar, index) {
   if (val && worth === null) {
     return `<td class="${cls('muted')}" data-pid="${esc(p.playerId ?? '')}" data-wk="${week}">` +
       `${playerRef(p, '—', `${p.name} is this squad’s ${row.key} in week ${week}, projected ` +
-        `${fmt(raw)}. ${p.position} has no waiver line, so he has no Value. Click to ${OPENS}.`,
+        `${fmt(raw)}. ${p.position} has no waiver line, so they have no Value. Click to ${OPENS}.`,
       'aria-label')}</td>`;
   }
   const lifted = val
@@ -3603,7 +3603,7 @@ function slotCell(entry, row, week, bar, index) {
       ? `${p.name} fills ${row.key} in week ${week} on a bye — ESPN returns 0.00 for one, ` +
         `and nobody on this roster projected higher.`
       : zero === 'out'
-        ? `${p.name} fills ${row.key} in week ${week} at 0.0: ESPN has ruled him out, and ` +
+        ? `${p.name} fills ${row.key} in week ${week} at 0.0: ESPN has ruled them out, and ` +
           `nobody on this roster projected higher.`
         : `${p.name} is this squad’s ${row.key} in week ${week}, ` +
           `${scored ? 'and scored' : 'projected'} ${fmt(raw)}${val ? `, a Value of ${fmt(v)}` : ''}.`;
@@ -3612,7 +3612,7 @@ function slotCell(entry, row, week, bar, index) {
   // way to check it — and this is a panel Tim checks by hand.
   const assumedWhy = assumed
     ? ` Assessed at ${fmt(v)} instead: that is ${esc(floorSource(lifted.floor))}, ` +
-      `and a manager would stream him rather than take ${fmt(raw)} here.`
+      `and a manager would stream them rather than take ${fmt(raw)} here.`
     : '';
   // WHERE IT STANDS, IN WORDS. This is the channel of "never colour alone"
   // that carries the actual figure, and it matters more here than the mark
@@ -3699,10 +3699,10 @@ function historyCell(entry, row, week, scale) {
   const who = `${p.name} started at ${row.key} in week ${week}`;
   if (v === null) {
     const why = val && was !== null
-      ? `${who}, projected ${fmt(was)}. ${p.position} has no waiver line, so he has no Value.`
+      ? `${who}, projected ${fmt(was)}. ${p.position} has no waiver line, so they have no Value.`
       : proj
-      ? `${who}; no projection was recorded for him.`
-      : p.done === false ? `${who} and has not finished yet.` : `${who}; no score was recorded for him.`;
+      ? `${who}; no projection was recorded for them.`
+      : p.done === false ? `${who} and has not finished yet.` : `${who}; no score was recorded for them.`;
     return `<td class="${cls('muted')}"${pid}>${playerRef(p, '—', `${why} Click to ${OPENS}.`, 'aria-label')}</td>`;
   }
   const heat = heatOf(v, scale, { what: `the other squads’ ${row.key} in week ${week}` });
@@ -4678,7 +4678,7 @@ function renderChangesNote(got) {
     'the weeks that have one for this team; a week nobody opened the site in cannot be recovered.',
 
     '<strong>Total</strong> is that copy laid out like Season by week. On Player it is the roster ' +
-    'as it stood then, each man at his projection then. On Position it is the best legal lineup ' +
+    'as it stood then, each man at their projection then. On Position it is the best legal lineup ' +
     're-solved from that roster, with the same solver, slots and waiver floor as the sheet above ' +
     '(today’s floor: no older one was kept). Weeks before the copy are blank.',
 
@@ -4820,15 +4820,15 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
     gone && ['<span class="lg-mark ital">Name</span>', `not on the roster in week ${state.week}`],
     // The demo notice is already on screen in the Season panel just above.
     ...seasonMarks(table).slice(1),
-  ], 'Across a row: his weeks · down a column: who covers');
+  ], 'Across a row: their weeks · down a column: who covers');
 
   const paras = [
     `One position at a time, deepest first. A <strong class="key-st">bold number with a green bar under it</strong> is a week ` +
     `this man is in the <strong>best legal lineup</strong> that team could field — the same rule the ` +
     `grid at the top of the page uses, run once per week on that week&rsquo;s own projections. ` +
-    `A <strong>F</strong> beside it means he only gets in through the <strong>flex</strong>.`,
+    `A <strong>F</strong> beside it means they only get in through the <strong>flex</strong>.`,
 
-    `<strong>Read along a row</strong> to see a starter&rsquo;s soft weeks and his bye; ` +
+    `<strong>Read along a row</strong> to see a starter&rsquo;s soft weeks and their bye; ` +
     `<strong>read down a column</strong> to see who covers them. A cell reading <strong>Bye</strong> is ` +
     `the 0.00 ESPN returns for a player whose NFL team is off that week, which is exactly when the mark ` +
     `moves to somebody else &mdash; ` +
@@ -4838,10 +4838,10 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
       : `nobody here starts some weeks and not others, so this position needs no cover over these weeks.`),
 
     `<strong>Depth</strong> and <strong>Avg</strong> are ours, not ESPN&rsquo;s: the order is each ` +
-    `man&rsquo;s mean over the weeks shown, not the slot his manager has him parked in today. ` +
+    `man&rsquo;s mean over the weeks shown, not the slot their manager has them parked in today. ` +
     (gone
       ? `<strong>${plural(gone, 'player')}</strong> here ${gone === 1 ? 'is' : 'are'} <em>italic</em> and ` +
-        `ranked &ldquo;&mdash;&rdquo;: not on this roster in week ${state.week}, but ${gone === 1 ? 'he' : 'they'} ` +
+        `ranked &ldquo;&mdash;&rdquo;: not on this roster in week ${state.week}, but ${gone === 1 ? 'they' : 'they'} ` +
         `filled a lineup spot in one of the weeks shown, and a marked week with no row to sit on would ` +
         `read as a slot going empty. `
       : '') +
@@ -4856,11 +4856,11 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
     // whom is said on screen: the league's STARTERS at the position, which is
     // why a depth chart's bench reads red and that is the honest reading.
     `<strong>The red and green</strong> measure each number against the league&rsquo;s ` +
-    `<strong>starting</strong> ${label === 'FLEX' ? 'players at his position' : `${label}s`}: the ` +
+    `<strong>starting</strong> ${label === 'FLEX' ? 'players at their position' : `${label}s`}: the ` +
     `same week&rsquo;s starters in a week already played, and every starter over the weeks to come ` +
     `ahead of it. Avg is measured against what a squad&rsquo;s starters there average. So a bench ` +
-    `man usually reads red &mdash; he is below a starter &mdash; and the green bar, not the ` +
-    `colour, is what says he is in the lineup. It is the scale the Player rows of Season by ` +
+    `man usually reads red &mdash; they are below a starter &mdash; and the green bar, not the ` +
+    `colour, is what says they are in the lineup. It is the scale the Player rows of Season by ` +
     `week above use, so one man&rsquo;s week is one colour in both.`,
 
     `The swaps in the Roster detail above are a what-if for one week and are deliberately not ` +
@@ -4870,7 +4870,7 @@ function renderStartersNote(weeks, rows, slots, label, unidentified = 0) {
   if (unidentified) {
     paras.push(
       `<strong>${plural(unidentified, label)}</strong> at this position came back from ESPN ` +
-      `with no player id, so ${unidentified === 1 ? 'he is' : 'they are'} left out of both the table ` +
+      `with no player id, so ${unidentified === 1 ? 'they are' : 'they are'} left out of both the table ` +
       `and the lineups above &mdash; there is nothing to say the man in one week is the man in the ` +
       `next, and a marked week with no row to sit on would read as a slot going empty.`
     );
@@ -4944,12 +4944,12 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
   if (byPlayer) {
     parts.push(
       `<strong>Each row is a player on this roster in week ${state.week}</strong>, starters first in ` +
-      `lineup order, then the bench by Avg. A week under “Actual history” shows what he scored, ` +
-      `started or not, on whichever squad in this league held him; a week nobody here held him is a ` +
-      `dash. Switch Actual to <strong>Proj</strong> for what he was projected before kickoff. The ` +
-      `weeks to come are his projection. <strong>Avg</strong> is the mean of the regular-season ` +
-      `numbers shown in his row, a bye left out. Colour compares him with the league’s ` +
-      `starters at his position; the line is where the bench begins. The ` +
+      `lineup order, then the bench by Avg. A week under “Actual history” shows what they scored, ` +
+      `started or not, on whichever squad in this league held them; a week nobody here held them is a ` +
+      `dash. Switch Actual to <strong>Proj</strong> for what they were projected before kickoff. The ` +
+      `weeks to come are their projection. <strong>Avg</strong> is the mean of the regular-season ` +
+      `numbers shown in their row, a bye left out. Colour compares them with the league’s ` +
+      `starters at their position; the line is where the bench begins. The ` +
       `<strong>Starting lineup</strong> band and everything below are as on Position.`
     );
   }
@@ -4960,7 +4960,7 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
     `it picks are then ranked inside their own slot on that week’s projection, so ` +
     `<strong>WR1</strong> is the best receiver in that week’s lineup and <strong>WR2</strong> the ` +
     `second. <strong>FLEX</strong> is whoever the flex actually is. Nobody is named in a cell: ` +
-    `hover or tap one and the line above the table names him and lights up every other week he holds ` +
+    `hover or tap one and the line above the table names them and lights up every other week they hold ` +
     `a slot.`
   );
 
@@ -5081,7 +5081,7 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
     (state.isDemo
       ? 'On a real league a cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a ' +
         'player whose NFL team is off that week — it only reaches a slot when nobody on the roster ' +
-        'projected higher; in the sample data a zero only means he is ruled out, so it is printed ' +
+        'projected higher; in the sample data a zero only means they are ruled out, so it is printed ' +
         'as a number. '
       : 'A cell reading <strong>Bye</strong> is the 0.00 ESPN returns for a player whose NFL team ' +
         'is off that week, and it only reaches a slot when nobody else on the roster projected ' +
@@ -5097,7 +5097,7 @@ function renderSeasonNote(weeks, rows, bars, avgScales) {
     'applied here: this panel answers what the numbers say you would be projected each week, and ' +
     'folding a hand-moved lineup into it would make an experiment look like advice. A man ESPN ' +
     'gave no player id for is left out of the lineups for the same reason “Who to start” leaves ' +
-    'him out — nothing ties the man in one week to the man in the next.'
+    'them out — nothing ties the man in one week to the man in the next.'
   );
 
   if (valueNote()) parts.unshift(valueNote(true));

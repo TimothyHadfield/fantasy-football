@@ -437,7 +437,7 @@ export function describeFloors(floors, { week = null } = {}) {
   const weekOnly = shown.filter((p) => floors.get(p).basis !== 'ros');
   const anyRos = weekOnly.length < shown.length;
   const measure = anyRos
-    ? ` by rest-of-season average (ESPN's rest-of-season projection ÷ the games he has left` +
+    ? ` by rest-of-season average (ESPN's rest-of-season projection ÷ the games they have left` +
       `${w ? `, read in week ${w}` : ''})`
     : `${w ? ` in week ${w}` : ''}`;
   const except = anyRos && weekOnly.length

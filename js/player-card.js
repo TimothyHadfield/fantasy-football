@@ -410,7 +410,7 @@ export function outMark(status, week = null, backWeek = null) {
  */
 export const estText = (v) => `~${fmt(v)}`;
 /** The words for an estimated week, for a title or an aria-label. */
-export const EST_WORDS = 'estimate: ESPN has no projection for him yet (his last one before he was hurt)';
+export const EST_WORDS = 'estimate: ESPN has no projection for them yet (their last one before they were hurt)';
 
 /**
  * His NFL team's bye week, or null when it is not known.
@@ -523,9 +523,9 @@ export function actToken(v) {
 /** Explained only when it actually turns up, so a clean run has no legend. */
 export const RUN_KEYS = {
   bye: 'Bye = the 0.00 ESPN returns for a player whose NFL team is off that week',
-  out: '0.0 over OUT / IR = ESPN projects nothing because he is ruled out, not on bye',
-  none: '— = ESPN carried no number for him that week',
-  off: 'off = he was not on this roster that week',
+  out: '0.0 over OUT / IR = ESPN projects nothing because they are ruled out, not on bye',
+  none: '— = ESPN carried no number for them that week',
+  off: 'off = they were not on this roster that week',
   wait: '· = that week has not been read from ESPN yet',
 };
 
@@ -685,7 +685,7 @@ export function weekRun({
     : null;
   // The words on every cell name the group, because this group is not the one
   // the rest of the site's cells are measured against — see the long note above.
-  const WHAT = scale && scale.base === 'future' ? 'his own weeks to come' : 'his own weeks in this run';
+  const WHAT = scale && scale.base === 'future' ? 'their own weeks to come' : 'their own weeks in this run';
 
   const cols = weeks.map((week, i) => {
     const start = startAt(i);
@@ -848,7 +848,7 @@ const LOOSE_ASKED = new Set();
  * card that is not about one.
  */
 function startsLine(note, cols) {
-  const what = note || 'weeks he makes your best lineup';
+  const what = note || 'weeks they make your best lineup';
   const n = cols.filter((c) => c.bold).length;
   const count = n === 0
     ? 'none of the weeks still to come, on these numbers'
@@ -888,16 +888,16 @@ function heatLine(scale) {
   const base = scale.base === 'future'
     ? (scale.filled
       ? `${at(scale.mean)} over the ${scale.n} week${s} still to come (a bye or 0.0 week counted ` +
-        `as ${at(scale.filled)}, the waiver line at his position); weeks already played are coloured ` +
+        `as ${at(scale.filled)}, the waiver line at their position); weeks already played are coloured ` +
         'against that same average.'
-      : `${at(scale.mean)} over the ${scale.n} week${s} still to come that he is projected to play ` +
+      : `${at(scale.mean)} over the ${scale.n} week${s} still to come that they are projected to play ` +
         '(bye and 0.0 weeks left out); weeks already played are coloured against that same average.')
     : `${at(scale.mean)} over the ${scale.n} week${s} with a number.`;
-  return 'Colour on the Proj row compares each week with HIS OWN other weeks — green is a good ' +
-    'week for him, red a poor one. It is never a comparison with another player or another ' +
+  return 'Colour on the Proj row compares each week with THEIR OWN other weeks — green is a good ' +
+    'week for them, red a poor one. It is never a comparison with another player or another ' +
     `position. Full colour at ${at(scale.mean + edge * scale.sd)} pts ` +
     `or better, ${at(scale.mean - edge * scale.sd)} pts or worse, against an average of ` +
-    `${base} His best ` +
+    `${base} Their best ` +
     'and worst weeks also carry ▲ or ▼, so none of it depends on telling red from green.';
 }
 
@@ -1340,7 +1340,7 @@ function cardNode() {
 function actionsHtml(href, openLabel = null) {
   if (!asSheet) return '';
   const open = href
-    ? `<a class="tc-open" href="${esc(href)}">${openLabel ? esc(openLabel) : 'His next 13 weeks'} &rarr;</a>`
+    ? `<a class="tc-open" href="${esc(href)}">${openLabel ? esc(openLabel) : 'Their next 13 weeks'} &rarr;</a>`
     : '<span class="tc-open tc-open-off">ESPN gives this man no id to look up</span>';
   return `<div class="tc-actions">${open}<button type="button" class="tc-close">Close</button></div>`;
 }
@@ -1453,7 +1453,7 @@ function lineHtml(cols, vsName = '') {
   // played the card makes no claim either way, so it says nothing rather than
   // announcing "not in your lineup" about a week whose lineup is history.
   const spoken = (c) => {
-    if (c.bold) return '<span class="sr-only"> (he starts)</span>';
+    if (c.bold) return '<span class="sr-only"> (they start)</span>';
     if (c.start === false && !c.past) return '<span class="sr-only"> (not in your lineup)</span>';
     return '';
   };
@@ -1463,7 +1463,7 @@ function lineHtml(cols, vsName = '') {
     .map((c) => `<th${extra(c, c.bold ? 'wk-start' : '')} scope="col">${c.week}` +
       (c.poStart ? '<span class="tc-po" aria-hidden="true">PO</span>' : '') +
       (c.vs ? '<span class="tc-vs" aria-hidden="true">↑</span>' : '') +
-      (c.vs ? `<span class="sr-only"> (you play ${esc(vsName || 'him')})</span>` : '') +
+      (c.vs ? `<span class="sr-only"> (you play ${esc(vsName || 'them')})</span>` : '') +
       (c.po ? '<span class="sr-only"> (playoffs)</span>' : '') +
       (c.splitStart ? '<span class="sr-only"> (first week still to come)</span>' : '') +
       (c.dlStart ? `<span class="sr-only"> (trade deadline before week ${c.week})</span>` : '') +
@@ -1553,7 +1553,7 @@ function runBody(run, cap) {
   // guessed at. It is separate from the legend because the legend explains
   // MARKS, and the whole point of a blank is that it is not one.
   const note = run.cols.some((c) => c.act.kind === 'blank')
-    ? '<div class="tc-note">Act is what he actually scored. It is blank for a week with no ' +
+    ? '<div class="tc-note">Act is what they actually scored. It is blank for a week with no ' +
       'result recorded yet.</div>'
     : '';
 

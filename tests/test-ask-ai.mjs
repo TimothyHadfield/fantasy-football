@@ -48,7 +48,7 @@ const full = {
   myLineup: 'starting lineup 121.6 → 123.0/wk',
   hisGain: '−0.6/wk (−6.1 total)',
   hisNote: 'playoff weeks weighted by his chance of playing them',
-  meet: 'week 9; this trade changes his lineup +2.3 that week',
+  meet: 'week 9; this trade changes their lineup +2.3 that week',
   goal: 'Title chance (my goal, 10,000 simulated seasons): 12.0% → 14.1% (+2.1% ±0.4); his 8.0% → 7.2%; app estimates 64% he accepts',
   altGoal: 'Last chance: 9.0% → 8.1%',
   cuts: [],
@@ -84,10 +84,10 @@ ok(text.indexOf('I send:') < text.indexOf('Jahmyr Gibbs') && text.indexOf('Jahmy
   text.indexOf('I get:') < text.indexOf('Puka Nacua'), 'the men are under the right heading');
 ok(text.includes('ESPN status: Questionable') && text.includes('ESPN status: Out'), 'the injury status is passed on');
 ok(text.includes('My lineup gain: +1.4/wk (+18.2 total)'), 'MY +/- exactly as the row prints it');
-ok(text.includes('His lineup gain: −0.6/wk (−6.1 total)'), 'HIS +/- exactly as the row prints it');
-ok(text.includes('I play him in week 9; this trade changes his lineup +2.3'), 'the week I play him');
+ok(text.includes('Their lineup gain: −0.6/wk (−6.1 total)'), 'THEIR +/- exactly as the row prints it');
+ok(text.includes('I play them in week 9; this trade changes their lineup +2.3'), 'the week I play them');
 ok(text.includes('My lineup gain: +1.4/wk (+18.2 total); starting lineup 121.6 → 123.0/wk'), 'my lineup before and after');
-ok(text.includes('His lineup gain: −0.6/wk (−6.1 total); playoff weeks weighted'), 'and why his figure is weighted');
+ok(text.includes('Their lineup gain: −0.6/wk (−6.1 total); playoff weeks weighted'), 'and why their figure is weighted');
 ok(text.includes('Title chance (my goal') && text.includes('64% he accepts'), 'the goal change and the yes chance');
 ok(text.includes('Last chance: 9.0% → 8.1%'), 'the other goal');
 ok(text.includes('Accept by Sat, Oct 3'), 'the accept-by deadline');

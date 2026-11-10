@@ -557,7 +557,7 @@ function analysisChecks(an, name, floors) {
     t1.glance['Bench points'] === '41.7', t1.glance);
   ok('the Starting lineup band is the pre-game projection', t1.split.includes('165.6'), t1.split);
   ok('the basis is said once, behind the toggle (rule 7)',
-    /Week 8 is still being played\. A player whose NFL game is over shows the projection he started with/.test(t1.note),
+    /Week 8 is still being played\. A player whose NFL game is over shows the projection they started with/.test(t1.note),
     t1.note.slice(0, 300));
 
   // -- Team 3: three finished, one mid-game on 4.2, the rest not kicked off --
@@ -781,7 +781,7 @@ if (booted(st, 'stats, week 3 in progress')) {
   const fit = /actual = (-?[\d.]+) \+ ([\d.]+) × projected/.exec(st.playersNote) || [];
   ok(`each ACROSS his pre-game projection, not his score: the fitted line is ${f1(my - slope * mx)} + ${slope.toFixed(2)}x`,
     Number(fit[1]) === r1(my - slope * mx) && Number(fit[2]) === Math.round(slope * 100) / 100, fit.slice(1));
-  ok('and the note says so', /Week 3 is still being played: a player is plotted once his own NFL game is over/.test(st.playersNote));
+  ok('and the note says so', /Week 3 is still being played: a player is plotted once their own NFL game is over/.test(st.playersNote));
   ok('the teams graph has ten dots: four teams over two weeks and the two finished in week 3',
     /10 dots: 4 teams, weeks 1–3/.test(st.teamsNote), st.teamsNote.slice(0, 330));
 }

@@ -685,7 +685,7 @@ export function recommend(board, count = 5) {
     if (topTier.length === 1 && board.myNextPick) {
       const p = topTier[0];
       const s = survivalProbability(p, board.myNextPick, board.currentPick);
-      if (s < 0.5) alerts.push({ kind: 'tier', text: `${p.name} is the last ${pos} in his tier` });
+      if (s < 0.5) alerts.push({ kind: 'tier', text: `${p.name} is the last ${pos} in their tier` });
     }
   }
 

@@ -444,12 +444,12 @@ function srText(el) {
 // Every block that used to sit under the chart, named so a failure says WHICH
 // one came back rather than "some prose is visible".
 const CARD_PROSE = [
-  ['the blank-Act note', /Act is what he actually scored/],
+  ['the blank-Act note', /Act is what they actually scored/],
   ['the PO note', /PO = the playoffs/],
   ['what bold means', /Bold, underlined week numbers/],
   ['where the heavy line falls', /heavy line before week/],
   ['the colour key', /Colour on the Proj row/],
-  ['the glossary of marks', /Bye = the 0\.00 ESPN returns|off = he was not on this roster|= ESPN carried no number for him|that week has not been read from ESPN yet/],
+  ['the glossary of marks', /Bye = the 0\.00 ESPN returns|off = they were not on this roster|= ESPN carried no number for them|that week has not been read from ESPN yet/],
 ];
 
 /**
@@ -633,19 +633,19 @@ async function checkStartsCard(c, document, window) {
   c.ok('and it is on the WEEK NUMBER, never on the projection under it',
     !cols.some((k) => /\bwk-start\b/.test(k.cls(k.proj)) || /\bwk-start\b/.test(k.cls(k.act))),
     'wk-start leaked onto another row');
-  c.ok('a screen reader is told which future weeks he starts',
-    cols.filter((k) => /he starts/.test(k.th.textContent)).map((k) => k.week).join() === '7,9,12,15',
-    cols.filter((k) => /he starts/.test(k.th.textContent)).map((k) => k.week).join());
+  c.ok('a screen reader is told which future weeks they start',
+    cols.filter((k) => /they start/.test(k.th.textContent)).map((k) => k.week).join() === '7,9,12,15',
+    cols.filter((k) => /they start/.test(k.th.textContent)).map((k) => k.week).join());
   c.ok('AND WHICH ONES HE DOES NOT — a starting week has to be tellable from a benched one',
     cols.filter((k) => /not in your lineup/.test(k.th.textContent)).map((k) => k.week).join() ===
       '6,10,11,13,14,16',
     cols.filter((k) => /not in your lineup/.test(k.th.textContent)).map((k) => k.week).join());
   c.ok('while a week already played is spoken of neither way — its lineup is history, not a forecast',
     cols.filter((k) => k.week <= 5)
-      .every((k) => !/he starts|not in your lineup/.test(k.th.textContent)),
+      .every((k) => !/they start|not in your lineup/.test(k.th.textContent)),
     cols.filter((k) => k.week <= 5).map((k) => k.th.textContent).join(' | '));
   c.ok('and the week the caller could not answer for is spoken of neither way either',
-    !/he starts|not in your lineup/.test(cols[7].th.textContent), cols[7].th.textContent);
+    !/they start|not in your lineup/.test(cols[7].th.textContent), cols[7].th.textContent);
 
   // --- the divider, which has to survive the wrap ------------------------
   // Read defensively: a divider that reached one row and not the others is
@@ -680,7 +680,7 @@ async function checkStartsCard(c, document, window) {
   // scale — so every sentence that could be under a chart is under this one.
   checkWordsAreGone(c, card, 'the hand-built sheet', { sheet: true });
   c.ok('the sr-only key carries all four kinds of meaning, not merely some of them',
-    [/Act is what he actually scored/, /PO = the playoffs/, /Bold, underlined week numbers/,
+    [/Act is what they actually scored/, /PO = the playoffs/, /Bold, underlined week numbers/,
       /heavy line before week/, /Colour on the Proj row/]
       .every((re) => re.test(srText(card))),
     srText(card).slice(0, 400));
@@ -769,7 +769,7 @@ async function checkStartsCard(c, document, window) {
     !handColumns(together).some((k) => /\bheat\b/.test(k.cls(k.th)) || /\bheat\b/.test(k.cls(k.act))),
     'the scale leaked off the Proj row');
   c.ok('every coloured cell carries its standing in words, for a reader who cannot see the colour',
-    heated.every((k) => /(highest|lowest) of \d+ · avg [\d.]+ for his own weeks/i
+    heated.every((k) => /(highest|lowest) of \d+ · avg [\d.]+ for their own weeks/i
       .test(k.proj.getAttribute('aria-label') || '') &&
       !/\bSD\b|standard deviation/.test(k.proj.getAttribute('aria-label') || '')),
     heated[0] && heated[0].proj.getAttribute('aria-label'));
@@ -795,8 +795,8 @@ async function checkStartsCard(c, document, window) {
   c.ok('and the ladder it overrides is itself written above a page’s own typography',
     /\.heat\.heat-up-4:not\(html\), \.heat\.heat-dn-4:not\(html\) \{ font-weight: 700; \}/.test(appCss),
     'the heat weight ladder is back at single-class specificity, where .rank .vv beats it');
-  c.ok('and the key says the colour is against HIS OWN weeks, not the league',
-    /compares each week with HIS OWN other weeks/.test(srText(together)),
+  c.ok('and the key says the colour is against THEIR OWN weeks, not the league',
+    /compares each week with THEIR OWN other weeks/.test(srText(together)),
     srText(together).slice(-400));
   c.ok('WHICH A SIGHTED READER NEVER SEES — that key is spoken, not drawn (Tim, 2026-09-20)',
     !/compares each week with HIS OWN other weeks/.test(visibleText(together)),

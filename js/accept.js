@@ -204,7 +204,7 @@ export function acceptVerdict({
   if (finite(lineupPerWeek)) {
     const w = W_LINEUP * (OUT_OF_IT_LINEUP_WEIGHT + (1 - OUT_OF_IT_LINEUP_WEIGHT) * engaged);
     add('lineup', w * lineupPerWeek,
-      lineupPerWeek < 0 ? `he loses ${num(lineupPerWeek)} a week` : `he gains ${num(lineupPerWeek)} a week`);
+      lineupPerWeek < 0 ? `they lose ${num(lineupPerWeek)} a week` : `they gain ${num(lineupPerWeek)} a week`);
   }
 
   const inVal = gets.length ? packageValue(gets) : null;
@@ -213,8 +213,8 @@ export function acceptVerdict({
   const look = menLook !== null ? menLook : (finite(lookPerWeek) ? lookPerWeek : null);
   if (look !== null) {
     add('look', W_LOOK * look, look < 0
-      ? 'on ESPN he gives up more than he gets'
-      : 'on ESPN he gets more than he gives up');
+      ? 'on ESPN they give up more than they get'
+      : 'on ESPN they get more than they give up');
   }
 
   // The injury tag on what he receives.
@@ -222,8 +222,8 @@ export function acceptVerdict({
   if (hurt.length) {
     const pen = hurt.reduce((a, e) => a + (e.k === 'out' ? INJURED_OUT_PENALTY : INJURED_DOUBTFUL_PENALTY), 0);
     const text = hurt.length === 1
-      ? `he gets an injured ${posWord(hurt[0].m.pos)}`
-      : `he gets ${hurt.length} injured men`;
+      ? `they get an injured ${posWord(hurt[0].m.pos)}`
+      : `they get ${hurt.length} injured men`;
     add('injury', -pen, text);
   }
 
@@ -237,12 +237,12 @@ export function acceptVerdict({
   if (filled.size) {
     const best = [...filled].sort((a, b) => b[1].b - a[1].b)[0];
     const bonus = [...filled.values()].reduce((a, f) => a + f.b, 0);
-    add('need', bonus, `it fills his ${best[1].kind === 'empty' ? 'empty' : 'thin'} ${posWord(best[0])} spot`);
+    add('need', bonus, `it fills their ${best[1].kind === 'empty' ? 'empty' : 'thin'} ${posWord(best[0])} spot`);
   }
 
-  add('standing', -OUT_OF_IT_SHIFT * (1 - engaged), 'he is out of the race');
+  add('standing', -OUT_OF_IT_SHIFT * (1 - engaged), 'they are out of the race');
 
-  if (outVal !== null && outVal > 0) add('ownership', -ENDOWMENT_RATE * outVal, 'he values his own men more');
+  if (outVal !== null && outVal > 0) add('ownership', -ENDOWMENT_RATE * outVal, 'they value their own men more');
 
   const anything = finite(lineupPerWeek) || look !== null || hurt.length || filled.size || finite(standing);
   if (!anything) return null;
@@ -266,9 +266,9 @@ function whyOf(parts, word) {
   const told = parts.filter((x) => x.key !== 'ownership' && Math.abs(x.v) >= MIN);
   let pool = told.filter(want);
   if (!pool.length) pool = told;
-  if (!pool.length) return 'about even for him';
+  if (!pool.length) return 'about even for them';
   pool.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
   const first = pool[0].text;
-  const second = pool[1] && Math.abs(pool[1].v) >= 0.5 ? pool[1].text.replace(/^he /, '') : null;
+  const second = pool[1] && Math.abs(pool[1].v) >= 0.5 ? pool[1].text.replace(/^they /, '') : null;
   return second ? `${first} and ${second}` : first;
 }

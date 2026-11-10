@@ -238,7 +238,7 @@ export const hasTrend = (html) => /\btrend-(up|down)\b/.test(html || '');
 
 /** The line behind "How this works" (rule 7), naming the weeks "now" covers. */
 export function trendExplain(weeksLabel, extra = '') {
-  return `<strong>A green ▲ or red ▼ by a name</strong>: his per-week projection is more than ` +
+  return `<strong>A green ▲ or red ▼ by a name</strong>: their per-week projection is more than ` +
     `${THRESHOLD} points above or below ESPN’s preseason one. Preseason is ESPN’s ` +
     `${BASELINE_DATE} projection per game, re-scored with your league’s rules; now is the site’s ` +
     `average of ESPN’s weekly projections${weeksLabel ? `, over ${weeksLabel}` : ''}. A man ESPN had ` +

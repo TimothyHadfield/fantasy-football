@@ -2721,7 +2721,7 @@ async function checkValue(c, scenario) {
     // Every lineup spot of the squad: the man filling it, at his own position.
     const want = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => worth(i, WEEK).toFixed(1));
     const got = V.overview.row.slice(1, 9).map(num);
-    c.ok('VALUE: every lineup spot is its own man’s Value, the FLEX at his position’s lines',
+    c.ok('VALUE: every lineup spot is its own man’s Value, the FLEX at their position’s lines',
       JSON.stringify(got) === JSON.stringify(want), `want ${want} got ${got}`);
     const bench = V.overview.row.slice(iTotal + 1).map(num);
     const wantBench = [9, 10, 11, 12, 13, 14].map((i) => worth(i, WEEK).toFixed(1));
@@ -3586,8 +3586,8 @@ async function check(scenario, boot) {
     (d.body.innerHTML.match(/player=[^"']{0,12}/g) || [])
       .filter((h) => !/^player=\d+$/.test(h)).slice(0, 3).join(' | '));
   c.ok('every reference says where it goes, in the site\u2019s voice',
-    refs.every((a) => /open his next 13 weeks on the Players page/.test(says(a))),
-    refs.find((a) => !/open his next 13 weeks/.test(says(a)))?.outerHTML);
+    refs.every((a) => /open their next 13 weeks on the Players page/.test(says(a))),
+    refs.find((a) => !/open their next 13 weeks/.test(says(a)))?.outerHTML);
   // `title` on the names, `aria-label` on the grid numbers: those cells draw a
   // tip card of their own now, and a `title` beside it would have the browser
   // put a second tooltip on top a moment later. Either way the link says where
@@ -3795,7 +3795,7 @@ async function check(scenario, boot) {
     c.ok('demo never claims a bye it cannot know about',
       rows.every((r) => r.cells.slice(2).every((td) => td.text !== 'Bye')), 'a Bye cell in demo');
     c.ok('the demo note says what a zero means here',
-      /in the sample data a zero only means he is ruled out/.test(note), note);
+      /in the sample data a zero only means they are ruled out/.test(note), note);
 
     // The grid follows the same rule, and demo is the mode Tim sees first.
     const gridCells = (id) =>
@@ -3911,7 +3911,7 @@ async function check(scenario, boot) {
         `${full.length} checked; ${JSON.stringify(full.find((l) => l.text.match(RX)?.[1] !==
           (l.acts.reduce((a, v) => a + Number(v), 0) / 3).toFixed(1)))}`);
       const g = demoGlance();
-      c.ok('the rank is his place at his position by season total across the sample',
+      c.ok('the rank is his place at their position by season total across the sample',
         lines.every((l) => Number(l.text.match(RX)?.[4]) === g.byId.get(l.pid)?.rank),
         JSON.stringify(lines.find((l) => Number(l.text.match(RX)?.[4]) !== g.byId.get(l.pid)?.rank)));
       // Pinned, so a change to the sample or the format is seen.
@@ -4340,7 +4340,7 @@ async function check(scenario, boot) {
       const gap = hoverCard(d, boot.window, cells[4]);
       c.ok('AND A MISSING NUMBER DOES NOT READ AS A BYE',
         gap.values[6] === '—' && !gap.values.includes('Bye') &&
-        /ESPN carried no number for him/.test(gap.legend),
+        /ESPN carried no number for them/.test(gap.legend),
         `${gap.values[6]} / ${gap.legend}`);
       // (He has to be on the roster in the week on screen to have a cell to hover.)
       // 2026-10-14, Tim: "right now the player preview doesn't show any previous
@@ -4371,7 +4371,7 @@ async function check(scenario, boot) {
       !cells[0].hasAttribute('title') && !cells[0].querySelector('a.pref').hasAttribute('title'),
       cells[0].getAttribute('title'));
     c.ok('the link still says where clicking would go, to a screen reader',
-      /Click to open his next 13 weeks on the Players page\./
+      /Click to open their next 13 weeks on the Players page\./
         .test(cells[0].querySelector('a.pref').getAttribute('aria-label') || ''),
       cells[0].querySelector('a.pref').getAttribute('aria-label'));
 
@@ -6517,7 +6517,7 @@ async function check(scenario, boot) {
       const at = colOf(name);
       const tds = rosterRows.map((tr) => tr.children[at]).filter((td) => td && /\d/.test(td.textContent));
       const tinted = tds.filter((td) => /\bheat\b/.test(td.getAttribute('class') || ''));
-      c.ok(`COLOUR: Roster detail ${name} is measured against the league’s starters at his position`,
+      c.ok(`COLOUR: Roster detail ${name} is measured against the league’s starters at their position`,
         at >= 0 && tinted.length > 0 &&
         tinted.every((td) => /for a starting [A-Z/]+ around the league/.test(td.getAttribute('title') || '') &&
           / of \d+ · avg /.test(td.getAttribute('title') || '')),
