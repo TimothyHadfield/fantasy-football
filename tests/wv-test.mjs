@@ -1207,11 +1207,11 @@ function checkHeat(c, d, scenario, note) {
       wireBandsEl && !!wireBandsEl.closest('details.explain'),
       wireBandsEl ? 'no details.explain above it' : 'no #waiverHeatBands at all');
     c.ok('the toggle says the week columns are on the scale, and that the green box sits on top of it',
-      /Each week cell is on the same scale, measured against the other free agents at his position in that same week/.test(note) &&
+      /Each week cell is on the same scale, measured against the other free agents at their position in that same week/.test(note) &&
       /The green box sits on top of it/.test(note) && !/two greens|green number/.test(note) &&
       !/deliberately left off that scale/.test(note),
       note.slice(note.indexOf('And on the week columns'), note.indexOf('And on the week columns') + 500));
-    c.ok('the note argues the pool: the wire at his position, not the whole league',
+    c.ok('the note argues the pool: the wire at their position, not the whole league',
       /compared only with the other free agents in that same position/.test(note) &&
       /nobody wanted/.test(note), note.slice(0, 1400));
   }
@@ -1496,7 +1496,7 @@ async function check(scenario, boot) {
     }
     c.ok('NAME: under a finger a name opens no card, so the tap still opens his row',
       w.nameTouch === '', w.nameTouch);
-    c.ok('AVG: the weeks it is the mean of, the mean, and his rank among the free agents at his position',
+    c.ok('AVG: the weeks it is the mean of, the mean, and his rank among the free agents at their position',
       /Avg, weeks? \d/.test(k('avg').said) && /Week \d+ ?\d+\.\d/.test(k('avg').said) &&
       /Mean of \d+ weeks? ?\d+\.\d/.test(k('avg').said) &&
       /\d+(st|nd|rd|th) of \d+ free-agent (QBs|RBs|WRs|TEs|kickers|defenses)$/.test(k('avg').said),
@@ -1504,18 +1504,18 @@ async function check(scenario, boot) {
     c.ok('AVG: the mean in the card is the number in the cell',
       (k('avg').said.match(/Mean of \d+ weeks? ?(\d+\.\d)/) || [])[1] === k('avg').cell.replace(/\s*[▲▼]$/, ''),
       `${k('avg').cell} | ${k('avg').said}`);
-    c.ok('A WEEK STILL TO PLAY: the projection, the average free agent at his position, and his rank that week',
+    c.ok('A WEEK STILL TO PLAY: the projection, the average free agent at their position, and his rank that week',
       new RegExp(` · Week ${k('wk').week}\\b`).test(k('wk').said) && /Projected ?\d+\.\d/.test(k('wk').said) &&
       /Average free-agent \S+ ?\d+\.\d/.test(k('wk').said) &&
       /\d+(st|nd|rd|th) of \d+ free-agent \S+ this week$/.test(k('wk').said), k('wk').said);
     c.ok('A BOXED CELL says you would start him, and names the man of yours who would sit',
-      /You would start him ?Yes/.test(k('beats').said) && /\S he would sit ?\d+\.\d/.test(k('beats').said) &&
+      /You would start them ?Yes/.test(k('beats').said) && /\S they would sit ?\d+\.\d/.test(k('beats').said) &&
       !/your worst|Worth starting/.test(k('beats').said), k('beats').said);
     c.ok('A PLAYED WEEK: "Projected" and "Scored", side by side',
       /Projected ?(\d+\.\d|—)/.test(k('past').said) && /Scored ?(\d+\.\d|—)/.test(k('past').said), k('past').said);
     c.ok('"Your QB2": your own men at that position, ranked by Avg',
       /^Your \S+ · by Avg, weeks? \d/.test(k('tag').said) && /(QB|RB|WR|TE|K|DST)1 /.test(k('tag').said), k('tag').said);
-    c.ok('TAKEN Avg and week: ranked among the ROSTERED men at his position',
+    c.ok('TAKEN Avg and week: ranked among the ROSTERED men at their position',
       /\d+(st|nd|rd|th) of \d+ rostered \S+$/.test(k('tAvg').said) &&
       /\d+(st|nd|rd|th) of \d+ rostered \S+ this week$/.test(k('tWk').said), `${k('tAvg').said} | ${k('tWk').said}`);
     c.ok('"RB1": that manager’s men at the position, ranked by Avg, him among them',
@@ -1542,7 +1542,7 @@ async function check(scenario, boot) {
         s.open && s.sheet && s.close === 'Close' && s.went.length === 0 && s.shut, JSON.stringify(s));
     }
     c.ok('FINGER: where a click would go is a button on the sheet',
-      /^trade\.html\?with=/.test(w.sheet.pos?.href || '') && /^Trade for him/.test(w.sheet.pos?.label || '') &&
+      /^trade\.html\?with=/.test(w.sheet.pos?.href || '') && /^Trade for them/.test(w.sheet.pos?.label || '') &&
       /^analysis\.html\?team=/.test(w.sheet.own?.href || '') &&
       /^schedule\.html\?week=\d+$/.test(w.sheet.past?.href || '') && w.sheet.avg?.href === null,
       JSON.stringify([w.sheet.pos, w.sheet.own, w.sheet.past, w.sheet.avg]));
@@ -1564,7 +1564,7 @@ async function check(scenario, boot) {
         JSON.stringify(none.cells.slice(0, 3)));
       c.ok('NO TEAM: the title says to pick a team', /^Pick your team above/.test(none.title), none.title);
       c.ok('NO TEAM: the explanation does not describe a column that is empty',
-        !/Gain is what adding him/.test(none.note), none.note.slice(0, 200));
+        !/Gain is what adding them/.test(none.note), none.note.slice(0, 200));
       c.ok('PICKING A TEAM fills the column and costs no request',
         all.spentBefore > 0 && all.spentAfter === all.spentBefore, `${all.spentBefore} -> ${all.spentAfter}`);
     }
@@ -1576,7 +1576,7 @@ async function check(scenario, boot) {
     c.ok('the title names the weeks it is priced over',
       /^Points a week your best lineup gains over weeks? \d+/.test(first.title), first.title);
     c.ok('the explanation behind the toggle says what Gain is, and over which weeks',
-      /Gain is what adding him is worth to your own lineup/.test(first.note) &&
+      /Gain is what adding them is worth to your own lineup/.test(first.note) &&
       /over weeks? \d+/.test(first.note), first.note.slice(0, 300));
     const dsc = ordered(nums(w.desc), false);
     const asc = ordered(nums(w.asc), true);
@@ -1591,7 +1591,7 @@ async function check(scenario, boot) {
         JSON.stringify(nums(w.desc)) !== JSON.stringify(nums(w.asc))), '');
 
     // THE PREVIEW: "Drop <player>", one row a week, and the arithmetic closes —
-    // each row's + is With him − Now, the rows sum to Total, and Total over the
+    // each row's + is With them − Now, the rows sum to Total, and Total over the
     // weeks is the figure in the cell.
     const pop = w.pop || { rows: [], foot: [] };
     const n = (s) => Number(String(s).replace('+', '').replace('−', '-'));
@@ -1602,9 +1602,9 @@ async function check(scenario, boot) {
     c.ok('PREVIEW: and "Drop X" is a link to that man', /^waivers\.html\?player=\d+$/.test(pop.dropHref || ''), pop.dropHref);
     c.ok('PREVIEW: it says where this gain stands among the gains on the wire',
       /^\d+(st|nd|rd|th) of \d+ gains on the wire$/.test(pop.standing || ''), pop.standing);
-    c.ok('PREVIEW: columns are Wk, Now, With him, +',
-      JSON.stringify(pop.cols) === JSON.stringify(['Wk', 'Now', 'With him', '+']), JSON.stringify(pop.cols));
-    c.ok('PREVIEW: one row per priced week, and each + is With him − Now',
+    c.ok('PREVIEW: columns are Wk, Now, With them, +',
+      JSON.stringify(pop.cols) === JSON.stringify(['Wk', 'Now', 'With them', '+']), JSON.stringify(pop.cols));
+    c.ok('PREVIEW: one row per priced week, and each + is With them − Now',
       pop.rows.length > 0 && pop.rows.every((r) => Math.abs(n(r[2]) - n(r[1]) - n(r[3])) < 0.051),
       JSON.stringify(pop.rows));
     const total = pop.foot[0] ? n(pop.foot[0][3]) : NaN;
@@ -2456,8 +2456,8 @@ async function check(scenario, boot) {
         JSON.stringify((w.valueCalls || []).slice().sort((a, b) => a - b)) === '[1,2,3,4,5,6]', JSON.stringify(w.valueCalls));
     }
     c.ok('VALUE: both tucked notes say what Value is',
-      /Points a week over the waiver line at his position/.test(w.note || '') &&
-      /Points a week over the waiver line at his position/.test(w.takenNote || ''),
+      /Points a week over the waiver line at their position/.test(w.note || '') &&
+      /Points a week over the waiver line at their position/.test(w.takenNote || ''),
       (w.note || '').slice(-300));
 
     // A free agent's own Value: his average over the weeks left, as a Value.

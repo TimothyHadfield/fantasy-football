@@ -134,7 +134,7 @@ export const valueWords = () => (valueOn() ? ' Shown as Value.' : '');
 export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** Where a player reference goes, said the same way everywhere. */
-export const OPENS = 'open his next 13 weeks on the Players page';
+export const OPENS = 'open their next 13 weeks on the Players page';
 
 /**
  * Wrap `inner` in a link to this player's row on the Players page.
@@ -358,7 +358,7 @@ export function startMarks(p, starters, hist, team) {
   return {
     starts: weeks.map((w) => (starters.has(w) ? starters.get(w).has(p.playerId) : null)),
     splitAfter: past.length ? past[past.length - 1] : null,
-    startsNote: `weeks he makes ${team ? `${team.name}’s` : 'this team’s'} best lineup`,
+    startsNote: `weeks they make ${team ? `${team.name}’s` : 'this team’s'} best lineup`,
   };
 }
 
@@ -563,7 +563,7 @@ export function seasonCell(v, week, p, isNow, start = null, status = p.injurySta
     const worth = bye ? 0 : asValue(p, round1(v));
     if (worth === null) {
       return `<td class="${cls('muted')}" title="ESPN projects ${fmt(v)} for ${esc(name)} in week ` +
-        `${week}. ${esc(p.position)} has no waiver line, so he has no Value.${says}">—</td>`;
+        `${week}. ${esc(p.position)} has no waiver line, so they have no Value.${says}">—</td>`;
     }
     if (v !== 0) {
       const est = estAt(week, p);
@@ -584,13 +584,13 @@ export function seasonCell(v, week, p, isNow, start = null, status = p.injurySta
     const why = scored
       ? `${esc(name)} scored nothing in week ${week}.`
       : state.isDemo
-      ? `The sample data has ${esc(name)} ruled out in week ${week}, so it projects nothing for him.`
+      ? `The sample data has ${esc(name)} ruled out in week ${week}, so it projects nothing for them.`
       : `ESPN projects nothing for ${esc(name)} in week ${week}` +
-        (byeWeekOf(p, state.byes) ? `, and it is not his bye (week ${byeWeekOf(p, state.byes)})` : '') +
-        (zero === 'out' ? ` — he is listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())}.` : '.');
+        (byeWeekOf(p, state.byes) ? `, and it is not their bye (week ${byeWeekOf(p, state.byes)})` : '') +
+        (zero === 'out' ? ` — they are listed ${esc(String(status).replace(/_/g, ' ').toLowerCase())}.` : '.');
     if (zero === 'out') {
       const back = backOf(week, p);
-      const due = back !== null && week < back ? ` ESPN expects him back in week ${back}.` : '';
+      const due = back !== null && week < back ? ` ESPN expects them back in week ${back}.` : '';
       return `<td class="${cls('zero-out')}" data-v="0" title="${why}${due}${says}">0.0 ` +
         `<span class="zmark">${esc(outMark(status, week, back))}</span></td>`;
     }
@@ -952,7 +952,7 @@ export function manAvg(p, weeks, hist, ahead, index) {
   return v === null ? null : v;
 }
 
-export const PLAYER_AVG_HEAD = 'The mean of the regular-season numbers shown; a bye or a 0.0 week to come counts as the waiver line at his position.';
+export const PLAYER_AVG_HEAD = 'The mean of the regular-season numbers shown; a bye or a 0.0 week to come counts as the waiver line at their position.';
 
 /**
  * The week headers of a table whose rows are MEN — the Player view here and
@@ -996,7 +996,7 @@ export function playerHistoryCell(p, week, mode, teamId, start = null) {
   const e = leagueIndex().get(week).get(p.playerId);
   if (!e) {
     return `<td class="${cls('off')}" title="${esc(p.name)} was on no roster in this league in ` +
-      `week ${week}, so the season read has no number for him.">—</td>`;
+      `week ${week}, so the season read has no number for them.">—</td>`;
   }
   const v = mode === 'proj' ? e.proj : e.actual;
   const bye = byeWeekOf(p, state.byes);
@@ -1019,7 +1019,7 @@ export function playerHistoryCell(p, week, mode, teamId, start = null) {
   const shown = val ? asValue(p, was) : was;
   if (shown === null) {
     return `<td class="${cls('muted')}" title="${esc(`${p.name} was projected ${fmt(was)} in week ` +
-      `${week}. ${posLabel(p)} has no waiver line, so he has no Value.${says}`)}">—</td>`;
+      `${week}. ${posLabel(p)} has no waiver line, so they have no Value.${says}`)}">—</td>`;
   }
   // BOTH NUMBERS IN THE WORDS (Tim, 2026-10-08): the cell draws one of them.
   const o = mode === 'proj' ? e.actual : e.proj;
@@ -1028,7 +1028,7 @@ export function playerHistoryCell(p, week, mode, teamId, start = null) {
     ? `${p.name} was projected ${fmt(was)} before kickoff in week ${week}${val ? `, a Value of ${fmt(shown)}` : ''}` +
       `${other === null ? '' : `, and scored ${other}`}.`
     : `${p.name} scored ${fmt(shown)} in week ${week}${other === null ? '' : `, projected ${other}`}.`) +
-    (e.teamId === teamId ? '' : ' He was on another team then.');
+    (e.teamId === teamId ? '' : ' They were on another team then.');
   return `<td class="${cls()}" data-v="${shown}" title="${esc(why + says)}">${fmt(shown)}</td>`;
 }
 
@@ -1278,28 +1278,28 @@ export function startersData(team) {
 export function startersHeadHtml({ weeks, hist, fut }) {
   const proj = historyMode() === 'proj';
   const cols = playerWeekHeads(weeks, hist, fut, proj,
-    (w) => `ESPN’s projected points for week ${w}, and whether he starts.`);
+    (w) => `ESPN’s projected points for week ${w}, and whether they start.`);
 
   // The Players page's columns (`alignCols`): the Available table's, in its
   // order. Depth's sentence rides on Player, whose cell now leads with the tag.
   if (alignCols) {
     return `${historyBand ? historyGroupRow(weeks, hist, playerHistorySays(proj), 5) : ''}<tr>
-       <th class="name" data-sort data-col="player" title="Everyone who held this position for this team in the weeks shown. How deep he is at his own position on this squad, by the Avg beside it.">Player</th>
-       <th class="left" data-sort data-col="pos" title="His position.">Pos</th>
-       <th class="left" data-sort data-col="team" title="His NFL team.">NFL</th>
+       <th class="name" data-sort data-col="player" title="Everyone who held this position for this team in the weeks shown. How deep they are at their own position on this squad, by the Avg beside it.">Player</th>
+       <th class="left" data-sort data-col="pos" title="Their position.">Pos</th>
+       <th class="left" data-sort data-col="team" title="Their NFL team.">NFL</th>
        <th class="grouped" data-sort data-col="avg" title="${PLAYER_AVG_HEAD}">Avg</th>
-       <th data-sort data-col="extra" title="How many of the weeks read he is in the best legal lineup for, playoff weeks included.">Starts</th>
+       <th data-sort data-col="extra" title="How many of the weeks read they are in the best legal lineup for, playoff weeks included.">Starts</th>
        ${cols}
      </tr>`;
   }
 
   return `${historyBand ? historyGroupRow(weeks, hist, playerHistorySays(proj), 6) : ''}<tr>
-       <th class="left" data-sort title="How deep he is at his own position on this squad, by the Avg beside it.">Depth</th>
+       <th class="left" data-sort title="How deep they are at their own position on this squad, by the Avg beside it.">Depth</th>
        <th class="name" data-sort title="Everyone who held this position for this team in the weeks shown.">Player</th>
-       <th class="left" data-sort title="His position.">Pos</th>
-       <th class="left" data-sort title="His NFL team.">NFL</th>
+       <th class="left" data-sort title="Their position.">Pos</th>
+       <th class="left" data-sort title="Their NFL team.">NFL</th>
        <th class="grouped" data-sort title="${PLAYER_AVG_HEAD}">Avg</th>
-       <th data-sort title="How many of the weeks read he is in the best legal lineup for, playoff weeks included.">Starts</th>
+       <th data-sort title="How many of the weeks read they are in the best legal lineup for, playoff weeks included.">Starts</th>
        ${cols}
      </tr>`;
 }
@@ -1369,7 +1369,7 @@ export function startersBodyHtml(team, { weeks, hist, fut, mode, slots, index, s
       const who = row.held
         ? `${p.name} · ${p.position === 'DST' ? 'DEF' : p.position} · ${p.proTeam}`
         : `${p.name} · ${p.position === 'DST' ? 'DEF' : p.position} · ${p.proTeam} — not on this ` +
-          `roster in week ${state.week}. He is here because he filled a lineup spot in one of the ` +
+          `roster in week ${state.week}. They are here because they filled a lineup spot in one of the ` +
           `weeks shown, and a marked week with no row to put it on would read as an empty slot.`;
       // On the Players page (`alignCols`) depth and name are ONE cell: the tag
       // leads the name, and the cell sorts by the tag.

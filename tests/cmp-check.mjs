@@ -470,10 +470,10 @@ async function check(scenario, boot) {
         tr.children[1].textContent.trim() === 'QB')
         .every((tr) => !tr.querySelector('td.beats')), 'a boxed QB');
     c.ok('the key says what the box means, in Tim’s words',
-      /you would start him/.test(txt($('waiverLegend'))) && !/beats your worst man/.test(txt($('waiverLegend'))),
+      /you would start them/.test(txt($('waiverLegend'))) && !/beats your worst man/.test(txt($('waiverLegend'))),
       txt($('waiverLegend')));
     c.ok('and the note says it in one sentence',
-      /boxed in green is one where he would make your best lineup/.test(note) &&
+      /boxed in green is one where they would make your best lineup/.test(note) &&
       !/out-projects your own worst man/.test(note), note.slice(0, 300));
 
     // In the table with everyone else.
@@ -784,7 +784,7 @@ async function check(scenario, boot) {
     const out4 = at(rowOf(p03), 4);
     c.ok('AN OUT MAN’S 0.00 OUTSIDE HIS BYE IS "0.0 OUT", not Bye',
       out4 && out4.text === '0.0 OUT' && /\bzero-out\b/.test(out4.cls) && out4.v === '0' &&
-      /not his bye \(week 9\)/.test(out4.title), JSON.stringify(out4));
+      /not their bye \(week 9\)/.test(out4.title), JSON.stringify(out4));
     c.ok('and it carries neither green',
       out4 && !/\bhot\b|\bbeats\b/.test(out4.cls), out4 && out4.cls);
 

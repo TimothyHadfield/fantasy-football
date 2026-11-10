@@ -191,7 +191,7 @@ function startNotes({ week, teamId, league, team, slots, isLocked }) {
     // The sample league has no ESPN page: the button shows the man instead.
     const action = href
       ? { label: 'Open ESPN', href }
-      : { label: 'See him', href: playerHref(w.in.playerId) };
+      : { label: 'See them', href: playerHref(w.in.playerId) };
     if (href && moves && moves.length <= MOVES_MAX) {
       action.lineup = { label: 'Change it', week, teamId, moves };
     }
@@ -244,7 +244,7 @@ function badStartNotes({ week, team, isLocked, byes, benched }) {
       title: `${p.name} ${why}`,
       detail: `In your lineup at ${p.slot || slotLabel(p.lineupSlotId)}`,
       suggest: sub ? `Start ${sub.name} instead` : `Add a ${slotLabel(p.lineupSlotId)} this week`,
-      action: { label: 'See him', href: playerHref(p.playerId) },
+      action: { label: 'See them', href: playerHref(p.playerId) },
     });
   }
   return out;
@@ -393,7 +393,7 @@ function pickupNotes(input) {
     detail: `+${fmt1(gain.perWeek)} pts a week`,
     // Without a man to drop the title has already said it all.
     suggest: gain.drop && gain.drop.name ? `Drop ${gain.drop.name}, add ${player.name}` : null,
-    action: { label: 'See him', href: playerHref(player.playerId) },
+    action: { label: 'See them', href: playerHref(player.playerId) },
   }));
 }
 
@@ -540,7 +540,7 @@ export function claimNotes({ claims, claimsAt = null, now = Date.now() } = {}) {
       detail: detail + age,
       suggest: null,
       action: man !== null
-        ? { label: 'See him', href: playerHref(man) }
+        ? { label: 'See them', href: playerHref(man) }
         : { label: 'Open Players', href: 'waivers.html' },
     });
   }

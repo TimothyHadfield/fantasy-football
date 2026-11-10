@@ -247,7 +247,7 @@ function replay(world, { undoMove = null, whatIf = null }) {
       if (holder === null || holder === m.teamId) { agree(pid, effectiveWeek(world, pid, m)); continue; }
       const entry = {
         moveId: m.id, teamId: m.teamId, week: m.week, playerId: pid, kept: [],
-        reason: `${playerName(world, pid)} was not free (${teamLabel(world, holder)} still had him)`,
+        reason: `${playerName(world, pid)} was not free (${teamLabel(world, holder)} still had them)`,
       };
       skipped.push(entry);
       if (!blocked) blocked = entry;

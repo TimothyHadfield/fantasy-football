@@ -171,14 +171,14 @@ ok(rows.every((tr) => !tr.querySelectorAll('td')[avgCol].classList.contains('bea
 
 // --- the key and the note say what the box means ----------------------------
 const flat = (el) => el.textContent.replace(/\s+/g, ' ').trim();
-ok(/you would start him/.test(flat(legend)) && !/beats your worst man/.test(flat(legend)),
-  'the key reads "you would start him"', flat(legend));
+ok(/you would start them/.test(flat(legend)) && !/beats your worst man/.test(flat(legend)),
+  'the key reads "you would start them"', flat(legend));
 ok(legend.querySelectorAll('[data-compare]').length === 2 &&
   [...legend.querySelectorAll('[data-compare]')].every((k) => !k.hasAttribute('hidden')),
   'and it is one of the two keys that need a team, both shown');
 const noteEl = document.getElementById('waiverNote');
 const note = noteEl.textContent;
-const sentence = 'A week boxed in green is one where he would make your best lineup.';
+const sentence = 'A week boxed in green is one where they would make your best lineup.';
 ok(note.includes(sentence), 'the note says it in one sentence', note.slice(0, 200));
 ok(sentence.split(/\s+/).length < 15, 'of under fifteen words', `${sentence.split(/\s+/).length}`);
 ok(noteEl.querySelector('.beats-key') !== null, 'with the box shown in the treatment it describes');

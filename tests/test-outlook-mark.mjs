@@ -81,7 +81,7 @@ ok(typeof o.cleanAvgOf === 'undefined' && typeof o.SHORT_SHARE === 'undefined', 
 // The plain average: a man whose 2 in a game he left hurt drags ESPN's 15.5
 // down is still read at 15.5 — that game is part of his luck and cost.
 eq(kind(17.5, 15.5), 'diamond', 'his plain average 15.5, projected 17.5: a diamond');
-ok(/2 or more a week above \/ below his average/.test(o.OUTLOOK_KEY), 'the key says 2 or more a week above / below his average', o.OUTLOOK_KEY);
+ok(/2 or more a week above \/ below their average/.test(o.OUTLOOK_KEY), 'the key says 2 or more a week above / below their average', o.OUTLOOK_KEY);
 ok(/2 or more points a week/.test(o.OUTLOOK_EXPLAIN) && !/√|games he has played|injur|ruled out/.test(o.OUTLOOK_EXPLAIN),
   'the explanation states the flat 2 and nothing about games or injuries', o.OUTLOOK_EXPLAIN);
 ok(!/injur/.test(o.APPEAL_EXPLAIN), 'Appeal reads the plain average, and says nothing of injuries', o.APPEAL_EXPLAIN);

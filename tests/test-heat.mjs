@@ -478,12 +478,12 @@ eq(heatOfCol(4).mark, HEAT_UP, 'the end of the scale still carries its glyph her
 // reader who assumed the usual meaning would read green as "good in the league"
 // rather than "a good week for him". The cell's words and the key line under
 // the chart both have to close that gap or the colour is misleading.
-ok(/his own weeks/.test(heatOfCol(4).words),
+ok(/their own weeks/.test(heatOfCol(4).words),
   'THE CELL’S OWN WORDS NAME THE GROUP, because this group is not the site’s usual one',
   heatOfCol(4).words);
 const heatNote = states.notes.find((n) => /Colour on the Proj row/.test(n));
 ok(!!heatNote, 'the card carries a key line for the colour', JSON.stringify(states.notes));
-ok(/HIS OWN other weeks/.test(heatNote), 'which says the comparison is with his own weeks', heatNote);
+ok(/THEIR OWN other weeks/.test(heatNote), 'which says the comparison is with his own weeks', heatNote);
 ok(/never a comparison with another player or another position/.test(heatNote),
   'and rules out the reading that would break HANDOFF rule 14', heatNote);
 ok(heatNote.includes('25.0') && heatNote.includes('15.0'),
@@ -554,7 +554,7 @@ eq(fut.cols[5].heat.cls, 'heat heat-0', 'his 14 is the average, uncoloured');
 eq(fut.cols[7].heat.cls, 'heat heat-up-4', 'his 16 is full green');
 ok(fut.cols[6].heat && fut.cols[6].heat.dir === -1, 'the real 0.0 is still painted red');
 eq(fut.cols[8].heat, null, 'the bye is not on the scale at all');
-ok(/his own weeks to come/.test(fut.cols[4].heat.words), 'the cell’s words name the new group',
+ok(/their own weeks to come/.test(fut.cols[4].heat.words), 'the cell’s words name the new group',
   fut.cols[4].heat.words);
 const futNote = fut.notes.find((n) => /Colour on the Proj row/.test(n));
 ok(/average of 14\.0 over the 3 weeks still to come/.test(futNote) && /already played/.test(futNote),
@@ -740,7 +740,7 @@ ok(/never bold/.test(boldNote) && /fact, not a forecast/.test(boldNote),
   'AND SAYS WHY A PLAYED WEEK IS NOT BOLD, which is the half a reader would otherwise call a bug',
   boldNote);
 const unsaid = weekRun({ ...RUN, startsNote: '' });
-ok(/weeks he makes your best lineup/.test(unsaid.notes.find((n) => /^Bold/.test(n))),
+ok(/weeks they make your best lineup/.test(unsaid.notes.find((n) => /^Bold/.test(n))),
   'with no sentence supplied it falls back to a plain one rather than leaving bold unexplained',
   unsaid.notes.find((n) => /^Bold/.test(n)));
 const nobody = weekRun({ ...RUN, starts: [false, false, false, false, false, false, false, false] });

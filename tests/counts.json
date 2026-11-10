@@ -213,6 +213,9 @@
     "tr-send-after-check.mjs": {
       "assertions": 37
     },
+    "tr-them-check.mjs": {
+      "assertions": 60
+    },
     "tr-yes-check.mjs": {
       "assertions": 43
     },

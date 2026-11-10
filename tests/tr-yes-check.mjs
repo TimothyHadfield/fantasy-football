@@ -56,15 +56,15 @@ function readYesCard(card) {
   const c = String(card || '');
   const body = c.slice(0, c.indexOf(' In all '));
   // A part's value is signed ("+0.4", "−1.4") or a plain rounded "0.0"; the
-  // figure inside a label ("He loses 1.3 a week") never carries a sign.
+  // figure inside a label ("They lose 1.3 a week") never carries a sign.
   const parts = [...`${body} `.matchAll(/ ([+−]\d+\.\d|0\.0)(?= )/g)].map((m) => ({ v: num(m[1]) }));
   const all = c.match(/ In all ([+−]?\d+\.\d) /);
-  const end = c.match(/Chance he says yes (likely|maybe|unlikely) \((\d+)%\)/);
-  const lineup = c.match(/ He (loses|gains) (\d+(?:\.\d)?) a week /);
+  const end = c.match(/Chance they say yes (likely|maybe|unlikely) \((\d+)%\)/);
+  const lineup = c.match(/ They (lose|gain) (\d+(?:\.\d)?) a week /);
   const why = c.match(/ Mostly: (.*)\.$/);
   return {
     parts, inAll: all ? num(all[1]) : null, word: end ? end[1] : null, pct: end ? Number(end[2]) : null,
-    lineup: lineup ? (lineup[1] === 'loses' ? -1 : 1) * Number(lineup[2]) : null, why: why ? why[1] : null,
+    lineup: lineup ? (lineup[1] === 'lose' ? -1 : 1) * Number(lineup[2]) : null, why: why ? why[1] : null,
   };
 }
 /** The word the cut-offs give a whole percentage (either side of a cut-off it was rounded onto). */
@@ -91,7 +91,7 @@ ok('every row says before → after and nothing else (no yes word, no ±)',
 
 // ------------------------------------- 2. the goal card's word is the number
 const cardWord = (r) => {
-  const m = String(r.goalCard).match(/Chance he says yes (likely|maybe|unlikely) \((\d+)%\)/);
+  const m = String(r.goalCard).match(/Chance they say yes (likely|maybe|unlikely) \((\d+)%\)/);
   return m ? { word: m[1], pct: Number(m[2]) } : null;
 };
 for (const r of rows) {
@@ -140,7 +140,7 @@ for (const r of rows) {
   if (Math.abs(flat) < 0.05) {
     ok(`${r.key}: no lineup part when his flat change is ~0`, dc.lineup === null || Math.abs(dc.lineup) <= 0.1, `${dc.lineup} vs ${flat}`);
   } else {
-    ok(`${r.key}: "he ${flat < 0 ? 'loses' : 'gains'} X a week" is his FLAT change (${flat.toFixed(2)}), not He gains (${r.their})`,
+    ok(`${r.key}: "they ${flat < 0 ? 'lose' : 'gain'} X a week" is their FLAT change (${flat.toFixed(2)}), not He gains (${r.their})`,
       dc.lineup !== null && Math.abs(dc.lineup - flat) <= 0.06, `${dc.lineup} vs flat ${flat.toFixed(3)} / shown ${shown}`);
   }
 }
@@ -148,8 +148,8 @@ ok('on at least one row the flat figure and the printed He gains differ (so the 
 
 // ------------------------------------------------- 5. pop-up and custom box
 ok('the pop-up opens', d.deal.open === true);
-ok('the pop-up says "he says yes: <word> — <why>", no %',
-  /he says yes: (likely|maybe|unlikely) — \S/.test(d.deal.line) && !/\d+% he says yes/.test(d.deal.line), d.deal.line);
+ok('the pop-up says "they say yes: <word> — <why>", no %',
+  /they say yes: (likely|maybe|unlikely) — \S/.test(d.deal.line) && !/\d+% (he says|they say) yes/.test(d.deal.line), d.deal.line);
 ok('the pop-up\'s word and % are the top row\'s (its goal card)', !!top && !!cardWord(top) &&
   d.deal.word === cardWord(top).word && dc.pct === cardWord(top).pct,
   `${d.deal.word} ${dc.pct}% vs ${top && JSON.stringify(cardWord(top))}`);
@@ -161,7 +161,7 @@ ok('the custom box says "Yes: <word> — <why>" under his figure', /^Yes: (likel
 ok('its word has a preview with the same word, its parts and the %',
   cc.word === d.custom.word && cc.pct !== null && cc.parts.length > 0 && wordsFor(cc.pct).has(cc.word), d.custom.card);
 ok('and its why is the why in that preview', !!cc.why && d.custom.yes.endsWith(`— ${cc.why}`), `${d.custom.yes} / ${cc.why}`);
-ok('the sentence under the box no longer prints "NN% he says yes"', !/he says yes|\d+% yes/.test(d.custom.preview), d.custom.preview);
+ok('the sentence under the box no longer prints "NN% he says yes"', !/he says yes|they say yes|\d+% yes/.test(d.custom.preview), d.custom.preview);
 
 if (fails.length) {
   console.log(`\n${fails.length} FAILED:`);

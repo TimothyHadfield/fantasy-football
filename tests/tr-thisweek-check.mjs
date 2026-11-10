@@ -7,7 +7,7 @@
 // Drives tr-test.mjs's `thisWeek` scenario (the real trade.html and
 // js/trade-page.js on the demo league, in a child process) and checks:
 //   1. the column sits right after Gain, in the finder, Suggested and saved heads;
-//   2. every finder row has it as two halves, You on top, Him under;
+//   2. every finder row has it as two halves, You on top, Them under (Him until 2026-11-10);
 //   3. each half prints a signed tenth, coloured by its sign, and its card says
 //      the same week for both halves and adds up: with − now = the printed figure.
 // Fails on the code before it (no `td.wkproj`, no head).
@@ -51,7 +51,7 @@ const rows = d.rows || [];
 ok('at least five finder rows', rows.length >= 5, rows.length);
 ok('every row has the cell right after Gain', rows.every((r) => r.at > 0 && r.at === r.gainsAt + 1),
   rows.map((r) => `${r.gainsAt}/${r.at}`).join(' '));
-ok('You on top, Him under', rows.every((r) => r.mine && r.theirs && r.mine.label === 'You' && r.theirs.label === 'Him'),
+ok('You on top, Them under', rows.every((r) => r.mine && r.theirs && r.mine.label === 'You' && r.theirs.label === 'Them'),
   JSON.stringify(rows[0] && [rows[0].mine && rows[0].mine.label, rows[0].theirs && rows[0].theirs.label]));
 
 // 3. figures and cards

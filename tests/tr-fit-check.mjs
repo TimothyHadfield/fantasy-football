@@ -140,7 +140,7 @@ if (!c.boot) {
     c.rows.length > 0 && c.rows.every((r) => /^Flip to (Bo|Di)( \+\d)? \(needs QB\)$/.test(r.tag) && / flip\b/.test(r.tagCls)),
     JSON.stringify(c.rows.map((r) => [r.partner, r.tag])));
   ok('C: its card is the Flip card: the man, his Value, and who needs him',
-    flips.length > 0 && flips.every((r) => /^Flip /.test(r.card) && /his bench, Value/.test(r.card) && /needs QB/.test(r.card)),
+    flips.length > 0 && flips.every((r) => /^Flip /.test(r.card) && /their bench, Value/.test(r.card) && /needs QB/.test(r.card)),
     JSON.stringify(flips.map((r) => r.card)));
   ok('C: no near misses with Flip on', c.nearHidden && c.near.length === 0, JSON.stringify([c.nearHidden, c.near.length]));
 }

@@ -207,8 +207,8 @@
   .deal-goal strong { font-size: 15px; }
 
   /* A SPLIT CELL (Tim, 2026-10-12): two halves, one over the other, each a
-     short label and then the figure's own box (`splitHalf`). Chance = first /
-     last, Send = you / him, Gain = you / him. */
+     short label and then the figure's own box (`splitHalf`). Chance, Send,
+     Gain, This week = you / them. */
   td.split { white-space: nowrap; text-align: left; }
   td.split .sp { display: flex; align-items: baseline; gap: 6px; }
   td.split .sp + .sp { margin-top: 3px; }
@@ -223,14 +223,12 @@
 
   .searching { color: var(--dim); font-style: italic; }
 
-  /* THE OTHER GOAL, AS A PREVIEW (2026-09-29): the ranked column's figure in the
-     ranked column's type, one step lighter — it ranks nothing. */
-  .alt-goal-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
-  .alt-goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
-  /* His lineup in the week(s) he plays you. His plus is your red. */
+  /* THEIR CHANCE AT THE SAME GOAL (2026-11-10), under yours: the ranked
+     figure's type, one step lighter — it ranks nothing. */
+  .their-goal-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .their-goal-cell.goal-wait { color: var(--dim); font-weight: 400; }
+  /* Their lineup in the week(s) they play you. Their plus is your red. */
   td.opp-proj { font-variant-numeric: tabular-nums; }
-  .alt-inline { color: var(--dim); white-space: nowrap; }
-  .alt-inline b { font-weight: 600; }
   /* The meeting-week mark in a week table: under the week's button, small. */
   .vs-note { display: block; font-size: 11.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
   /* The meeting week's Difference is yours minus his; your own change sits under it. */
@@ -1557,7 +1555,7 @@
     #tradeTable td.value::before { content: "Value"; }
     #tradeTable td.appeal::before { content: "Appeal"; }
     #tradeTable td.total::before { content: "Total"; }
-    #tradeTable td.opp-proj::before { content: "His proj vs you"; }
+    #tradeTable td.opp-proj::before { content: "Their proj vs you"; }
     #tradeTable td.opp-proj .sub { display: inline; margin-left: 5px; }
     #tradeTable tbody tr.offer > td.espn {
       display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
@@ -1789,7 +1787,7 @@
         <th data-sort>Value</th>
         <th data-sort>Appeal</th>
         <th data-sort>Total</th>
-        <th data-sort id="thOpp">His proj vs you</th>
+        <th data-sort id="thOpp">Their proj vs you</th>
         <th class="left">ESPN</th>
       </tr></thead>
       <tbody></tbody>
@@ -1923,7 +1921,7 @@
           <select id="cuSendAfter"><option value="" selected>now</option></select>
         </div>
         <div class="cu-meet-box">
-          <span class="src-label">You play him</span>
+          <span class="src-label">You play them</span>
           <p class="cu-you" id="cuMeet"></p>
         </div>
         <!-- WHEN TO ACCEPT (Tim, 2026-09-30: "when the trade needs to be
@@ -2084,7 +2082,7 @@
           <th>Value</th>
           <th>Appeal</th>
           <th>Total</th>
-          <th>His proj vs you</th>
+          <th>Their proj vs you</th>
           <th class="left">ESPN</th>
         </tr></thead>
         <tbody id="cuSugRows"></tbody>
@@ -2135,7 +2133,7 @@
         <th>Value</th>
         <th>Appeal</th>
         <th>Total</th>
-        <th>His proj vs you</th>
+        <th>Their proj vs you</th>
         <th class="left">ESPN</th>
         <th></th>
       </tr></thead>

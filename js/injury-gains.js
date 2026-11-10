@@ -252,8 +252,8 @@ export function returnLabel({ back = null, returnDate = null } = {}) {
 export const gainLabel = (g) => `+${g.gain.toFixed(1)}/wk`;
 
 /** The two headings' explanations (one line each). */
-export const RETURN_TITLE = 'ESPN’s expected return, as the week his NFL team next plays. Season = out for the season';
-export const GAINS_TITLE = 'Teammates at his position projected higher while he is out, in points a week';
+export const RETURN_TITLE = 'ESPN’s expected return, as the week their NFL team next plays. Season = out for the season';
+export const GAINS_TITLE = 'Teammates at their position projected higher while they are out, in points a week';
 
 /**
  * Everything one row of an injury table shows, for a man hurt as of `from`.

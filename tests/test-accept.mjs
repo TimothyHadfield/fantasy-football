@@ -97,7 +97,7 @@ const P = (o) => acceptChance(o);
   ok('a thin spot raises it less than an empty one', P(plain) < P(thin) && P(thin) < P(need));
   const v = acceptVerdict({ lineupPerWeek: 1.5, gets: [{ ...LAPORTA, fills: 'empty' }], sends: [NJOKU] });
   ok('a deal that helps him and fills his hole reads likely', v.word === 'likely', `${v.word} ${v.p}`);
-  ok('…and the why names a reason for him', /fills his empty TE spot|gains 1\.5|gets more/.test(v.why), v.why);
+  ok('…and the why names a reason for him', /fills their empty TE spot|gain 1\.5|get more/.test(v.why), v.why);
   const outFill = { lineupPerWeek: 0, gets: [{ ...LAPORTA, fills: 'empty', status: 'OUT' }], sends: [WR_B] };
   ok('an Out man fills no hole', acceptVerdict(outFill).parts.every((x) => x.key !== 'need'));
 }
@@ -145,7 +145,7 @@ const P = (o) => acceptChance(o);
   ok('+3/+3 likely, 0 maybe, −3/−3 unlikely', w(3) === 'likely' && w(0) === 'maybe' && w(-3) === 'unlikely',
     `${w(3)} ${w(0)} ${w(-3)}`);
   ok('with nothing to go on it says nothing', acceptChance({}) === null && acceptVerdict({}) === null);
-  ok('an even deal\'s why says so', acceptVerdict({ lineupPerWeek: 0, lookPerWeek: 0 }).why === 'about even for him');
+  ok('an even deal\'s why says so', acceptVerdict({ lineupPerWeek: 0, lookPerWeek: 0 }).why === 'about even for them');
   ok('the penalties are the ones documented', INJURED_OUT_PENALTY === 3 && HOLE_EMPTY_BONUS === 1.5 && OUT_OF_IT_SHIFT === 0.75);
 }
 

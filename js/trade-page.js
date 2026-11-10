@@ -178,7 +178,7 @@ import { slotRows, fillSlots } from './lineup-slots.js';
 import { statCard, clearPops, wirePops, hidePop, teamWeekSpec } from './pop.js';
 import { teamHref, weekHref, readParam } from './links.js';
 import {
-  zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, yesSpec, altGoalSpec, oppSpec,
+  zeroScale, gainWeeksSpec, slotChangeSpec, goalSpec, yesSpec, theirGoalSpec, oppSpec,
   teamSpec, recordOf, meetSpec, chancePct, chanceChange,
 } from './trade-cards.js';
 // ALL TEAMS · PROJ AVG (Tim, 2026-10-18), the Analysis page's own grid. It reads
@@ -395,7 +395,7 @@ const state = {
   // The simulation that ranks the finder's offers. `token` cancels a run that
   // a newer search has overtaken; `why` says, in words, why there is no ranking
   // when there is none.
-  goalRank: { token: 0, running: false, altRunning: false, done: 0, total: 0, base: null, spread: null, why: null },
+  goalRank: { token: 0, running: false, done: 0, total: 0, base: null, spread: null, why: null },
 };
 
 const cache = new Map(); // `${source}:${week}` -> {week, teams}
@@ -1749,8 +1749,8 @@ function renderCost() {
     ? `<br><br><strong>The weeks it shows but does not price.</strong> ` +
       (past.length
         ? `${weekRange(past)} ${past.length === 1 ? 'has' : 'have'} been played, and ` +
-          `${past.length === 1 ? 'is' : 'are'} read so a player’s card can show his whole ` +
-          `season — including what he ACTUALLY scored, which only a played week has. `
+          `${past.length === 1 ? 'is' : 'are'} read so a player’s card can show their whole ` +
+          `season — including what they ACTUALLY scored, which only a played week has. `
         : '') +
       (po.length
         ? `${weekRange(po)} are the playoff weeks, shown after a line in a deal’s pop-up and in ` +
@@ -2121,7 +2121,7 @@ function playerRef(p, inner) {
   if (p.playerId === null || p.playerId === undefined) return inner;
   return (
     `<a class="pref" href="waivers.html?player=${esc(p.playerId)}" ` +
-    `aria-label="${esc(p.name)} — open his next 13 weeks on the Players page">${inner}</a>`
+    `aria-label="${esc(p.name)} — open their next 13 weeks on the Players page">${inner}</a>`
   );
 }
 
@@ -2441,7 +2441,7 @@ function byeMarkOf(p, dir, meet) {
   if (!p || !meet || !meet.weeks || !meet.weeks.length) return null;
   const bye = byeWeekOf(p, state.byes);
   if (!Number.isFinite(bye) || !meet.weeks.includes(bye)) return null;
-  const who = meet.name || 'him';
+  const who = meet.name || 'them';
   const words = meet.weeks.length > 1
     ? `Bye in week ${bye}, one of the weeks you play ${who} (${meet.weeks.join(', ')})`
     : `Bye in week ${bye}, the week you play ${who}`;
@@ -2449,7 +2449,7 @@ function byeMarkOf(p, dir, meet) {
   return {
     cls: send ? 'bye-send' : 'bye-get',
     words,
-    sr: ` (${words.charAt(0).toLowerCase()}${words.slice(1)}, and you ${send ? 'send' : 'get'} him)`,
+    sr: ` (${words.charAt(0).toLowerCase()}${words.slice(1)}, and you ${send ? 'send' : 'get'} them)`,
   };
 }
 
@@ -2517,9 +2517,9 @@ function nameMarksHtml(name, bye, inj) {
 }
 
 /** The one-sentence keys, only for a mark that is on screen (rule 16). */
-const BYE_KEY = 'Green name: on bye the week you play this manager, and you send him; yellow: you get him.';
+const BYE_KEY = 'Green name: on bye the week you play this manager, and you send them; yellow: you get them.';
 const INJ_KEY = 'Underlined: on ESPN’s injury report.';
-const BYE_PAST_KEY = 'Green name on his side: bye already played.';
+const BYE_PAST_KEY = 'Green name on their side: bye already played.';
 const MARK_KEYS = {
   bye: () => BYE_KEY, past: () => BYE_PAST_KEY, inj: () => INJ_KEY, trend: () => trend.TREND_KEY,
   outlook: () => outlook.OUTLOOK_KEY,
@@ -2650,9 +2650,9 @@ function setAvgKey(id, show) {
 
 /** The line behind "How this works". */
 const BYE_EXPLAIN =
-  ' <strong>A name on green or yellow</strong> is on his NFL team&rsquo;s bye in a regular-season ' +
-  'week still to play in which you meet that manager: green when you send him (he cannot help ' +
-  'that manager against you), yellow when you get him (he cannot help you against him). Only a ' +
+  ' <strong>A name on green or yellow</strong> is on their NFL team&rsquo;s bye in a regular-season ' +
+  'week still to play in which you meet that manager: green when you send them (they cannot help ' +
+  'that manager against you), yellow when you get them (they cannot help you against them). Only a ' +
   'known bye week counts. <strong>An underlined name</strong> is on ESPN&rsquo;s injury report ' +
   '(any status but active, the Home page&rsquo;s rule), bench men included.';
 
@@ -2848,7 +2848,7 @@ function startsRun(p, weeks, ctx) {
       // "Bold, underlined week numbers are <this> — N of the weeks still to
       // come", so a sentence here reads as two sentences jammed together.
       note:
-        `the weeks he would make ${esc(who)}’s best lineup WITH THIS TRADE MADE, solved against ` +
+        `the weeks they would make ${esc(who)}’s best lineup WITH THIS TRADE MADE, solved against ` +
         `that squad’s roster in each week less the men it sends and plus the men it receives`,
     };
   }
@@ -2871,8 +2871,8 @@ function startsRun(p, weeks, ctx) {
     starts,
     // A noun phrase, for the same reason as above.
     note:
-      `the weeks he makes ${holderName ? `${esc(holderName)}’s` : 'his manager’s'} best lineup ` +
-      `— his own squad’s, as it stands today, with no trade made`,
+      `the weeks they make ${holderName ? `${esc(holderName)}’s` : 'their manager’s'} best lineup ` +
+      `— their own squad’s, as it stands today, with no trade made`,
   };
 }
 
@@ -2949,7 +2949,7 @@ function startsPhrase(p) {
   const who = s.team ? ` for ${s.team}` : '';
   return (
     ` · in the best lineup${who} in ${s.starts} of ${plural(s.weeks, 'week')} read` +
-    (s.moved ? ' (he has changed squads this season, so some of those weeks were elsewhere)' : '')
+    (s.moved ? ' (they have changed squads this season, so some of those weeks were elsewhere)' : '')
   );
 }
 
@@ -3231,7 +3231,7 @@ function renderProjAvg() {
 
   const g = gridHtml({
     teams, rows, slots, weeks,
-    teamHead: 'The manager. Point at a name for his record.',
+    teamHead: 'The manager. Point at a name for their record.',
     nameCell: (t) => `<td class="name"><span class="mgr"${teamCardAttr(t)}>${esc(t.name)}</span></td>`,
     // The manager picked at the top of the page is "you" here, as on every
     // other table this page draws.
@@ -3498,7 +3498,7 @@ async function openInEspn(offer, href) {
   if (!bridgeAvailable()) {
     outcome = {
       bad: true,
-      text: `ESPN will open with his players ticked, but not yours: the Fantasy Football Bridge ` +
+      text: `ESPN will open with their players ticked, but not yours: the Fantasy Football Bridge ` +
         `extension isn’t running on this page. Tick ${names} yourself.`,
     };
   } else if (!versionAtLeast(version, MIN_TICK_VERSION)) {
@@ -3542,7 +3542,7 @@ async function openInEspn(offer, href) {
       outcome = outcome || {
         bad: true,
         text: `The extension didn’t take your side (${(res && res.error) || 'no answer'}). ` +
-          `ESPN will open with his players ticked; tick ${names} yourself.`,
+          `ESPN will open with their players ticked; tick ${names} yourself.`,
       };
     }
   } catch (err) {
@@ -3681,7 +3681,7 @@ function espnLinkOrReason(offer) {
     return (
       `<a class="espn-open" href="${esc(href)}" target="_blank" rel="noopener"` +
       ` data-offer="${esc(offerKey(offer))}">` +
-      `Open in ESPN${both ? '' : ' · his players only'}</a>`
+      `Open in ESPN${both ? '' : ' · their players only'}</a>`
     );
   }
   return (
@@ -3910,8 +3910,8 @@ function offerRow(offer, i, key, opts = {}) {
 }
 
 function offerRowAt(offer, i, key, opts = {}) {
-  // `goal` draws BOTH chance columns since 2026-09-29: the ranked goal, then the
-  // other one as a preview (`altGoalCellHtml`). `opp` draws his projection in
+  // `goal` draws the Chance cell: your chance at the goal, then theirs
+  // (`theirGoalCellHtml`, 2026-11-10). `opp` draws his projection in
   // the week(s) he plays you (`oppCellHtml`), after He gains.
   const {
     myGain: showMyGain = true, goal: showGoal = false, opp: showOpp = true,
@@ -4008,14 +4008,14 @@ function offerRowAt(offer, i, key, opts = {}) {
       `<span class="mgr"${teamCardAttr(offer.partner)}>${esc(offer.partner.name)}</span>${merged}${from}${opts.nameTag || ''}</td>`) +
     // THE GOAL, SECOND — right beside the manager, so on a phone the answer is
     // on the first screen rather than past four columns of names.
-    // CHANCE: finishing first on top, finishing last under it, whichever the
-    // goal is — the ranked one keeps its rank number and its weight. The cell
-    // sorts by the ranked one.
+    // CHANCE (Tim, 2026-11-10: "if your win it all is selected, do your chance
+    // to win it all change vs his chance to win it all change, and if don't
+    // lose is selected, do the same with yours and their change in chance to
+    // lose"): the goal on show, yours on top (rank number and all), theirs
+    // under it, both off the same simulated run. The cell sorts by yours.
     (showGoal
       ? `<td class="split chance" data-v="${esc(dataVOf(goalCellHtml(offer)))}">` +
-        (state.goal === 'title'
-          ? splitHalf('First', goalCellHtml(offer)) + splitHalf('Last', altGoalCellHtml(offer))
-          : splitHalf('First', altGoalCellHtml(offer)) + splitHalf('Last', goalCellHtml(offer))) +
+        splitHalf('You', goalCellHtml(offer)) + splitHalf('Them', theirGoalCellHtml(offer)) +
         `</td>`
       : '') +
     // SEND: what you send on top, what he sends under it. No deal column, no
@@ -4023,7 +4023,7 @@ function offerRowAt(offer, i, key, opts = {}) {
     // week-by-week pop-up carries the before and after.
     `<td class="split left deal">` +
       splitHalf('You', `<td class="left pkg send">${send}</td>`) +
-      splitHalf('Him', `<td class="left pkg recv">${receive}</td>`) +
+      splitHalf('Them', `<td class="left pkg recv">${receive}</td>`) +
     `</td>` +
     // GAIN: yours on top (not in the combo — see `comboTableHtml`), his under it.
     `<td class="split gains" data-v="${showMyGain ? myNet : his.gain}">` +
@@ -4031,7 +4031,7 @@ function offerRowAt(offer, i, key, opts = {}) {
         ? splitHalf('You', `<td class="gain${signOf(myNet)}${mine.cls}" data-rc="gain" data-v="${myNet}">` +
           `${gain(myNet, mine.mark)}</td>`)
         : '') +
-      splitHalf('Him', `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-rc="their" data-v="${his.gain}">` +
+      splitHalf('Them', `<td class="their-gain${signOf(his.gain, his.weeks)}${theirs.cls}" data-rc="their" data-v="${his.gain}">` +
         `${weeks && Number.isFinite(his.gain)
           ? weeklyGainHtml(his.gain, his.weeks, theirs.mark, fig.hisWeek)
           : `${signedText(his.gain)}${theirs.mark}`}</td>`) +
@@ -4227,7 +4227,7 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
 
   const opp = oppProjOf(offer);
   const meet = opp && opp.sum !== null
-    ? `week${opp.weeks.length > 1 ? 's' : ''} ${opp.weeks.join(', ')}; this trade changes his lineup ` +
+    ? `week${opp.weeks.length > 1 ? 's' : ''} ${opp.weeks.join(', ')}; this trade changes their lineup ` +
       `${signedText(opp.sum)} ${opp.weeks.length > 1 ? 'in all over those weeks' : 'that week'}`
     : null;
 
@@ -4238,16 +4238,11 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
     const g = goalOf(state.goal);
     goal = `${capFirst(g.chance)} (my goal, ${GOAL_RUNS.toLocaleString('en-US')} simulated seasons): ` +
       `${pct(s.mine.before)} → ${pct(s.mine.after)} (${pctChange(s.mine.before, s.mine.after)} ±${bandText()})` +
-      (fin(s.theirs.before) && fin(s.theirs.after) ? `; his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
+      (fin(s.theirs.before) && fin(s.theirs.after) ? `; theirs ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
       (fin(s.accept)
-        ? `; app's guess whether he accepts: ${yesWordOf(s.verdict || { p: s.accept })}` +
+        ? `; app's guess whether they accept: ${yesWordOf(s.verdict || { p: s.accept })}` +
           (s.verdict && s.verdict.why ? ` (${s.verdict.why})` : '')
         : '');
-  }
-  let altGoal = null;
-  const a = offer.altGoal;
-  if (a && fin(a.before) && fin(a.after)) {
-    altGoal = `${capFirst(goalOf(otherGoal()).chance)}: ${pct(a.before)} → ${pct(a.after)}`;
   }
 
   // The forced cut, as the pop-up states it — priced over the same weeks.
@@ -4258,7 +4253,7 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
       const mine = dealSets(offer, 'mine').span;
       if (mine && mine.cut && mine.cut.length) cuts.push(`Roster limit: I'd have to drop ${names(mine.cut)}`);
       const theirs = offer.partner ? dealSets(offer, 'theirs').span : null;
-      if (theirs && theirs.cut && theirs.cut.length) cuts.push(`Roster limit: he'd have to drop ${names(theirs.cut)}`);
+      if (theirs && theirs.cut && theirs.cut.length) cuts.push(`Roster limit: they'd have to drop ${names(theirs.cut)}`);
     } catch { /* a deal that will not price has no cut to state */ }
   }
 
@@ -4322,8 +4317,8 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
       const t = gainText(net, span.length,
         weekGainShown(net, offer.myGain, offer.myBefore, offer.myAfter, span.length));
       if (!t || !fin(offer.myGain) || !fin(net) || Math.abs(net - offer.myGain) < 0.05) return t;
-      return `${t}, net: my own lineup ${signedText(offer.myGain)} minus his ` +
-        `${signedText(Math.round((offer.myGain - net) * 10) / 10)} in the week(s) I play him`;
+      return `${t}, net: my own lineup ${signedText(offer.myGain)} minus theirs ` +
+        `${signedText(Math.round((offer.myGain - net) * 10) / 10)} in the week(s) I play them`;
     })(),
     myLineup: lineup,
     // NET the same way (2026-10-14): his own lineup less MY change in the
@@ -4332,13 +4327,12 @@ function askAiFacts(offer, { myGainShown = true } = {}) {
       const t = gainText(his.gain, his.weeks);
       const mineVs = myVsHimOf(offer);
       if (!t || !fin(his.gain) || mineVs === null || Math.abs(mineVs) < 0.05) return t;
-      return `${t}, net: his own lineup ${signedText(Math.round((his.gain + mineVs) * 10) / 10)} minus mine ` +
-        `${signedText(mineVs)} in the week(s) he plays me`;
+      return `${t}, net: their own lineup ${signedText(Math.round((his.gain + mineVs) * 10) / 10)} minus mine ` +
+        `${signedText(mineVs)} in the week(s) they play me`;
     })(),
-    hisNote: weeks && his.weeks !== span.length ? 'playoff weeks weighted by his chance of playing them' : null,
+    hisNote: weeks && his.weeks !== span.length ? 'playoff weeks weighted by their chance of playing them' : null,
     meet,
     goal,
-    altGoal,
     cuts,
     acceptBy: acceptLine,
     roster,
@@ -4611,11 +4605,11 @@ function goalMethodHtml(span) {
       `spread measured from this league’s played weeks.` : '') +
     `<br><br>` +
     // TRADE AUDIT PHASE 3 (2026-10-15): the rebuilt estimate, js/accept.js.
-    `<strong>Will he say yes?</strong> An estimate, and the only judgement here. He weighs ` +
-    `what the deal does to <em>his</em> lineup (He gains, a week) and how it looks on ESPN’s ` +
-    `screen: each man’s average, last game and position rank. An injured man he gets counts ` +
+    `<strong>Will they say yes?</strong> An estimate, and the only judgement here. They weigh ` +
+    `what the deal does to <em>their</em> lineup (They gain, a week) and how it looks on ESPN’s ` +
+    `screen: each man’s average, last game and position rank. An injured man they get counts ` +
     `against it, filling an empty or thin spot counts for it, and a manager out of the race ` +
-    `or attached to his own men is harder to sell. The total goes through 1 ÷ (1 + ` +
+    `or attached to their own men is harder to sell. The total goes through 1 ÷ (1 + ` +
     `e<sup>−total ÷ ${ACCEPT_CURVE_SCALE}</sup>): an even deal is 50%.` +
     `<br><br>`
   );
@@ -4651,11 +4645,11 @@ function bracketBasisHtml(span) {
     // HIS COLUMN IS PRICED OVER THE WEEKS HE WILL PLAY (trade plan Phase 3), and
     // that changes which deals are found at all — his loss limit is judged on
     // it — so it is said first.
-    `<strong>He gains counts each playoff week by the chance he plays in it</strong> — ` +
-    `${weekRange(bracket)} weighed by how often the same simulation has him still in the ` +
+    `<strong>They gain counts each playoff week by the chance they play in it</strong> — ` +
+    `${weekRange(bracket)} weighed by how often the same simulation has them still in the ` +
     `bracket that week (a first-round bye counts as a week off), and the regular season in ` +
-    `full — so it is his gain over the weeks he will actually play, and "a week" means a ` +
-    `week he is expected to play. His loss limit and the chance he says yes are judged on ` +
+    `full — so it is their gain over the weeks they will actually play, and "a week" means a ` +
+    `week they are expected to play. Their loss limit and the chance they say yes are judged on ` +
     `that figure too, so it decides which deals are found, not just what the column says. ` +
     `<strong>You gain and the ${esc(goalOf(state.goal).chance)} are not on the same ` +
     `footing.</strong> You gain adds every week in the span up at face value, ` +
@@ -4675,19 +4669,13 @@ function bracketBasisHtml(span) {
  * is on). Shared by the finder's, the combo's and the custom box's notes.
  */
 function extraColumnsHtml() {
-  const alt = otherGoal();
-  const altSpan = spanFor(alt);
-  const altWeeks = altSpan.length ? ` (${weekRange(altSpan)})` : '';
   return (
-    `<strong>Δ ${esc(CHANCE_SHORT[alt])}</strong> is a preview of the goal you are not on: the same ` +
-    `deal re-priced over that goal’s own weeks${altWeeks}` +
-    (alt === 'last' ? ', the regular season only' : ', playoff weeks included') +
-    `, on the same simulated seasons, before → after underneath. It ranks nothing; switch the goal to ` +
-    `rank by it. ` +
-    `<strong>His proj vs you</strong> is how much his starting lineup changes, with the deal, in the ` +
-    `regular-season week(s) left in which he plays you — his plus is your red. A playoff meeting is ` +
+    `<strong>Chance</strong>: your ${esc(goalOf(state.goal).chance)} on top and theirs under it, ` +
+    `off the same simulated seasons, before → after underneath. Only yours ranks the list. ` +
+    `<strong>Their proj vs you</strong> is how much their starting lineup changes, with the deal, in the ` +
+    `regular-season week(s) left in which they play you — their plus is your red. A playoff meeting is ` +
     `not known in advance, so it is not counted. Both chance columns, You gain and which deals are ` +
-    `found include it; He gains does not.` +
+    `found include it; They gain does not.` +
     BYE_EXPLAIN +
     trendExplainHtml() +
     (state.isDemo ? '' : ` ${outlook.OUTLOOK_EXPLAIN} ${outlook.APPEAL_EXPLAIN}`) +
@@ -4816,10 +4804,10 @@ function renderFinderNote(scales = finderScales) {
     `<strong>re-filling both starting lineups</strong> — before the trade and after it — and ` +
     (weighted && state.bothWin
       ? `keeping the ones that <strong>raise your goal-weighted total</strong> (below) and ` +
-        `<strong>raise his lineup too</strong> — the switch above the table. `
+        `<strong>raise their lineup too</strong> — the switch above the table. `
       : weighted
-      ? `keeping the ones that <strong>raise your goal-weighted total</strong> (below) while his ` +
-        `lineup loses no more than ${Math.abs(THEIR_MIN_PER_WEEK)} a week — a deal that costs him ` +
+      ? `keeping the ones that <strong>raise your goal-weighted total</strong> (below) while their ` +
+        `lineup loses no more than ${Math.abs(THEIR_MIN_PER_WEEK)} a week — a deal that costs them ` +
         `a little is kept, not hidden. `
       : `keeping only the ones where <strong>both totals go up</strong>. `) +
     (state.benchValue
@@ -4827,19 +4815,19 @@ function renderFinderNote(scales = finderScales) {
         `(the Values of the men outside your best lineup) and your lineup loses nothing a week, and the ` +
         `list is ordered by the bench gain. A trade with a man ESPN lists as out for the rest of the season is left out. `
       : state.flip
-      ? `<strong>Flip is on:</strong> a trade is kept when a man you get sits on his bench with a Value of 2 to 4, ` +
-        `your Value change is +2 to +4, You gain is −1 a week or better, and another manager needs his position. ` +
+      ? `<strong>Flip is on:</strong> a trade is kept when a man you get sits on their bench with a Value of 2 to 4, ` +
+        `your Value change is +2 to +4, You gain is −1 a week or better, and another manager needs their position. ` +
         `A trade with a man ESPN lists as out for the rest of the season is left out. `
       : `<strong>Your checklist:</strong> a trade worth less than <strong>+${tfit.MIN_YOU.toFixed(1)} a week to you</strong>, ` +
         `or with a Value change under ${signedText(tfit.MIN_VALUE)}, or that lowers your ${esc(g.chance)} by more ` +
         `than ${bandText()} of a point, or that shares a man each way with an offer you sent in the last ` +
         `${tfit.SENT_DAYS} days, is left out (one a little short is listed under Near misses), ` +
         `and so is any trade with a man ESPN lists as out for the rest of the season. The rest are ordered by how ` +
-        `many checks pass (he gains this week, he gains a week, you get a need, he gets a need, you get 💎 or near, ` +
-        `you send 🪙 or near, Value 0 or better; "near" = within 1 of the mark), then his This week, then You gain ` +
+        `many checks pass (they gain this week, they gain a week, you get a need, they get a need, you get 💎 or near, ` +
+        `you send 🪙 or near, Value 0 or better; "near" = within 1 of the mark), then their This week, then You gain ` +
         `(+2 to +4 alike, more after). At most two per manager. `) +
     `There is no trade-value ` +
-    `chart: a bench player is worth nothing to the manager holding him and can be worth a ` +
+    `chart: a bench player is worth nothing to the manager holding them and can be worth a ` +
     `starter to somebody else, which is why a deal can help both sides at once. ` +
     `Valued on ${esc(m.label)} (${m.basis}).` +
     `<br><br>` +
@@ -4871,14 +4859,14 @@ function renderFinderNote(scales = finderScales) {
             `out too</strong>: those games have kicked off, so the lineups are locked and no deal ` +
             `can reach them either. `
           : '') +
-        `<strong>The number beside each player is what he is worth in a week he SCORES</strong> — ` +
-        `averaged over the weeks he is projected to score in, with his byes, the weeks ESPN is ` +
-        `quiet about and any week he is ruled out and projected 0.00 all left out of the divisor. ` +
+        `<strong>The number beside each player is what they are worth in a week they SCORE</strong> — ` +
+        `averaged over the weeks they are projected to score in, with their byes, the weeks ESPN is ` +
+        `quiet about and any week they are ruled out and projected 0.00 all left out of the divisor. ` +
         `That makes it a flattering number for an injured man, deliberately: it answers “what do ` +
-        `I get when he plays”. A gain is the opposite — spread over <em>every</em> week in the ` +
+        `I get when they play”. A gain is the opposite — spread over <em>every</em> week in the ` +
         `span, those weeks included — so the two are <em>not</em> the same arithmetic and the ` +
         `player figures do not add up to the gain.`
-      : `<strong>You gain</strong> and <strong>He gains</strong> are points per week added to each ` +
+      : `<strong>You gain</strong> and <strong>They gain</strong> are points per week added to each ` +
         `best lineup, and so is the figure beside each player.`) +
     // THE THRESHOLDS IN POINTS, behind the toggle where the method lives. The
     // visible key says what the colour COMPARES; this says where the lines
@@ -4891,7 +4879,7 @@ function renderFinderNote(scales = finderScales) {
         // 86 words of page.
         `<strong>You gain</strong>: ${describeZeroHeat(scales.myScale)}` +
         (scales.theirScale
-          ? ` <strong>He gains</strong>: ${describeZeroHeat(scales.theirScale)}`
+          ? ` <strong>They gain</strong>: ${describeZeroHeat(scales.theirScale)}`
           : '') +
         ` The two are scaled separately on purpose: they are two different ` +
         `squads’ answers, and one scale across both would be ranking you against the manager ` +
@@ -4904,7 +4892,7 @@ function renderFinderNote(scales = finderScales) {
       ? `<br><br><strong>No slot is priced below what you could stream.</strong> ` +
         describeFloors(state.floors, { week: state.floorWeek }) +
         ` That applies to BOTH squads in every offer, so a manager with a hole at one position ` +
-        `is not made to look cheaper to trade with than he really is — which is exactly the ` +
+        `is not made to look cheaper to trade with than they really are — which is exactly the ` +
         `direction an unfloored price was wrong in.`
       : '') +
     `<br><br>` +
@@ -4934,16 +4922,16 @@ function renderFinderNote(scales = finderScales) {
       ? `and there is no ESPN league to open in demo, so the <em>Open in ESPN</em> links are off ` +
         `here; switch to <strong>My ESPN league</strong> for them. `
       : `<strong>Open in ESPN</strong> is a deep link and nothing more: it opens ESPN’s own trade ` +
-        `screen with <strong>HIS players ticked only</strong>. There is no parameter for your own ` +
+        `screen with <strong>THEIR players ticked only</strong>. There is no parameter for your own ` +
         `side, so ` +
         (bridgeAvailable()
           ? `the Fantasy Football Bridge extension ticks the men you are sending once ESPN’s ` +
             `page loads — check both sides before you press Propose. `
           : `the men you are sending have to be ticked by hand once you are there — or install ` +
             `the Fantasy Football Bridge extension, which ticks them for you. `)) +
-    `Send the deal with a line saying what it fixes for him, which is the part that gets offers ` +
-    `accepted. Both managers are reading the same ESPN projections, so he can check every number ` +
-    `here himself.`;
+    `Send the deal with a line saying what it fixes for them, which is the part that gets offers ` +
+    `accepted. Both managers are reading the same ESPN projections, so they can check every number ` +
+    `here themselves.`;
 }
 
 /**
@@ -5306,7 +5294,6 @@ function runSearch({ keepDeal = false } = {}) {
   // the new table.
   state.goalRank.token++;
   state.goalRank.running = false;
-  state.goalRank.altRunning = false;
 
   loadPastTrades();
   if (!teams.length || state.myTeamId === null) {
@@ -5659,14 +5646,10 @@ function runGoalRank() {
   const r = state.goalRank;
   const token = ++r.token;
   r.running = false;
-  r.altRunning = false;
   r.why = null;
 
   const search = state.search;
   if (!search || !search.offers.length) return;
-  // The preview column is worked out after the ranking, from the ranking's own
-  // runs; an answer left from an earlier pass is not this pass's.
-  for (const o of search.offers) o.altGoal = undefined;
   // A half-finished earlier pass on this same search (the page re-ranks once the
   // played weeks arrive) left scores on some rows and `unranked` marks on
   // others. Neither is this pass's answer, and a row that has not been played
@@ -5752,13 +5735,9 @@ function runGoalRank() {
     for (const o of search.near || []) if (!o.goalScore) o.goalScore = scoreGoal(o, me, span);
     search.near = (search.near || []).filter(finderGoalOk);
     markTies(search.offers);
-    // The preview of the other goal follows, after the ranked column is done —
-    // marked as still being worked out in this repaint, then filled in place.
-    r.altRunning = true;
     // The combo, custom trades and pop-up read the same context, so this one
     // repaint brings their goal lines in too.
     paint();
-    runAltGoal(search, token);
   };
   setTimeout(step, 0);
 }
@@ -6362,21 +6341,7 @@ function scoreGoal(offer, mineId, span) {
     goal: state.goal,
     // The yes-chance in full — its word, why and parts — for the display.
     verdict,
-    // The OTHER goal's reading off this same run, and the deltas it was run on
-    // — kept so the preview column can use it when, and only when, it is
-    // exactly what a run of that goal would give (`altScore`).
-    offSame: sameRunReading(ctx.base, after, mineId, deltas),
   };
-}
-
-/** The goal the page is NOT on — what the preview column shows. */
-const otherGoal = () => (state.goal === 'title' ? 'last' : 'title');
-
-/** The other goal's before/after off one run, plus the deltas it was run on. */
-function sameRunReading(base, after, mineId, deltas) {
-  const g = goalOf(otherGoal());
-  const row = (res) => (res && res.teams ? res.teams.find((t) => t.teamId === mineId) : null);
-  return { goal: g.key, before: g.read(row(base)), after: g.read(row(after)), deltas };
 }
 
 /** The same, memoised on the deal's identity — for panels that repaint often. */
@@ -6462,178 +6427,39 @@ function goalCellHtml(offer) {
 }
 
 // ======================================================================
-// THE OTHER GOAL, AS A PREVIEW (2026-09-29)
+// THEIR CHANCE AT THE SAME GOAL (2026-11-10)
 // ======================================================================
 //
-// Tim: "Still have the user choose win or loose but in addition, show 2
-// columns on the trade, one for change of win % and one for change of losing
-// %, as a preview for the setting that the user isn't currently on."
+// Tim: "In the trade setion, instead of having the chance be shown of your
+// chance of winning and your chance of loosing change, if your win it all is
+// selected, do your chance to win it all change vs his chance to win it all
+// change, and if don't lose is selected, do the same with yours and their
+// change in chance to lose."
 //
-// The goal he picked still ranks everything (rule 18). The other one is shown
-// beside it and ranks nothing — and it has to be priced as THAT goal would
-// price it, or it is a different number wearing its name:
-//
-//   - "Win it all" prices the bracket weeks (D4); "Don't finish last" does
-//     not. So a title chance read off a "last" run is the title chance of a
-//     deal that stops at the regular season — wrong. The preview re-prices
-//     both squads over the OTHER goal's span (`spanFor`) with the same engine
-//     and floors, and plays that out on the same seed.
-//   - The forced cut of a two-for-one is decided over the span, so even the
-//     regular-season weeks can price differently on the two spans. Re-pricing
-//     catches that too.
-//
-// ONE FREE CASE, TAKEN ONLY WHEN IT IS EXACT. Under "Win it all" the preview is
-// the chance of finishing last, which is the regular-season TABLE (`pLast`,
-// js/forecast.js), and the simulation draws the bracket from a SEPARATE random
-// stream (`poNormal`). So the ranked run — the same seed, with the bracket
-// weeks shifted as well — already holds exactly the last-place chance a
-// regular-season-only run would give, provided its regular-season changes are
-// the same ones. `altOfSides` checks that, week by week and squad by squad, and
-// reads it off the ranked run only then; otherwise it runs its own. Measured in
-// tests/tr-test.mjs against an independent run of each goal.
-
-/** Short names for the two chances, for headings and inline previews. */
-const CHANCE_SHORT = { title: 'title chance', last: 'last chance' };
-
-/** Two deltas maps agree on every week of `span`, for every squad in either. */
-function sameOnWeeks(a, b, span) {
-  const teams = new Set([...(a ? a.keys() : []), ...b.keys()]);
-  for (const t of teams) {
-    for (const w of span) {
-      const x = (a && a.get(t) && a.get(t).get(w)) || 0;
-      const y = (b.get(t) && b.get(t).get(w)) || 0;
-      if (x !== y) return false;
-    }
-  }
-  return true;
-}
+// It replaced the other-goal preview (2026-09-29), which cost a second run per
+// offer. Their before → after is read off the SAME run as yours
+// (`scoreOffer` reads both squads; the deal reaches the simulation as both
+// lineups' raw per-week changes, never the netted figures), so it costs nothing.
 
 /**
- * The other goal's before → after for a deal given as SIDES — each squad's
- * roster and what leaves and arrives — re-priced over that goal's own span and
- * played out on the shared seed. `{why}` when it cannot be worked out, and the
- * page prints "—" rather than a number on a different footing.
- *
- * @param {Array<{teamId, players, send, receive}>} sides
- * @param {number} mineId whose chance is read
- * @param {Object|null} same `offSame` from the ranked run of this deal, if any
- * @param {string} key the deal's identity, for the memo
+ * The Chance cell's lower half: the other manager's chance at the goal on show,
+ * now → with. Coloured by what is good for THEM (a last-place chance that drops
+ * is green), as their half of every other split cell is. `data-v` is that
+ * good-signed change; nothing is ranked by it.
  */
-function altOfSides(sides, mineId, same, key) {
-  if (basis() !== 'weeks') return { why: 'the other goal needs every remaining week priced' };
-  const ctx = goalContext();
-  if (!ctx.base) return { why: ctx.why && ctx.why !== 'waiting' ? ctx.why : 'the simulation is not ready' };
-  const alt = otherGoal();
-  const span = spanFor(alt);
-  if (!span.length) return { why: 'no week is left to price' };
-  if (!span.every((w) => weekly.byWeek.has(w))) return { why: `not every week of ${weekRange(span)} is read yet` };
-  const memo = `alt|${alt}|${key}|${span.join(',')}`;
-  if (ctx.scores.has(memo)) return ctx.scores.get(memo);
-
-  const deltas = new Map();
-  for (const s of sides) {
-    const priced = priceTradeAcrossWeeks({
-      players: s.players, send: s.send, receive: s.receive, slots: state.slots, weeks: span,
-      projFor, zeroIsBye: zeroIsBye(), floors: state.floors,
-    });
-    const m = new Map();
-    for (const w of priced.byWeek) if (Number.isFinite(w.delta) && w.delta !== 0) m.set(w.week, w.delta);
-    if (m.size) deltas.set(s.teamId, m);
+function theirGoalCellHtml(offer) {
+  const s = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore : null;
+  const t = s && s.theirs;
+  if (!t || !Number.isFinite(t.before) || !Number.isFinite(t.after) || offer.goalUnranked) {
+    const r = state.goalRank;
+    return `<td class="their-goal-cell goal-wait" data-v="-1" data-rc="goalt">${r.running ? '…' : '—'}</td>`;
   }
-  let before;
-  let after;
-  const reused = alt === 'last' && !!same && same.goal === 'last' && sameOnWeeks(same.deltas, deltas, span);
-  if (reused) {
-    ({ before, after } = same);
-  } else {
-    before = goalChance(ctx.base, mineId, alt);
-    after = goalChance(simulateWith(ctx.inputs, deltas), mineId, alt);
-  }
-  const out = { goal: alt, before, after, gain: goalGain(before, after, alt), reused, weeks: span };
-  ctx.scores.set(memo, out);
-  return out;
-}
-
-/** The preview for one offer (a finder row, or a custom deal with its own "you"). */
-function altScore(offer, mineId) {
-  if (!offer || offer.combined || !offer.partner) return { why: 'a whole combination is previewed on its headline' };
-  const me = sideOf(offer, 'mine');
-  const him = sideOf(offer, 'theirs');
-  if (!me || !him) return { why: 'one of the two squads is not in this week’s rosters' };
-  const ids = (list) => (list || []).map((p) => p.playerId).sort().join(',');
-  const same = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore.offSame : null;
-  return altOfSides([
-    { teamId: me.team.id, players: me.team.players, send: me.send, receive: me.receive },
-    { teamId: him.team.id, players: him.team.players, send: him.send, receive: him.receive },
-  ], mineId, same, `${mineId}|${offer.partner.id}|${ids(offer.send)}|${ids(offer.receive)}`);
-}
-
-/**
- * The preview's cell: the other goal's change with its band, before → after
- * under it. Coloured by what is GOOD for that goal — a last-place chance that
- * drops is green — and by sign as well as hue. `data-v` is that good-signed
- * change, so a sort on the column puts the best preview first; it is never
- * what the table is ranked by.
- */
-function altGoalCellHtml(offer) {
-  const g = goalOf(otherGoal());
-  const s = offer.altGoal;
-  const r = state.goalRank;
-  if (s === undefined && (r.running || r.altRunning)) {
-    return `<td class="alt-goal-cell goal-wait" data-v="-1" data-rc="alt" ` +
-      `data-why="${esc(`Your ${g.chance}, worked out once the ranking is done…`)}">…</td>`;
-  }
-  if (!s || !Number.isFinite(s.before) || !Number.isFinite(s.after)) {
-    const why = s && s.why ? s.why : r.why && r.why !== 'waiting' ? r.why : 'not worked out yet';
-    return `<td class="alt-goal-cell" data-v="-1" data-rc="alt" data-why="${esc(`No ${g.chance} preview: ${why}.`)}">—</td>`;
-  }
-  const good = chanceCls(s.gain, s.before, s.after).replace(/^(?=.)/, ' ');
+  const good = chanceCls(t.gain, t.before, t.after).replace(/^(?=.)/, ' ');
   return (
-    `<td class="alt-goal-cell${good}" data-v="${s.gain}" data-rc="alt">` +
-    `${pctChange(s.before, s.after)}` +
-    `<span class="sub">${pct(s.before)} → ${pct(s.after)}</span></td>`
+    `<td class="their-goal-cell${good}" data-v="${t.gain}" data-rc="goalt">` +
+    `${pctChange(t.before, t.after)}` +
+    `<span class="sub">${pct(t.before)} → ${pct(t.after)}</span></td>`
   );
-}
-
-/**
- * The preview pass: once every offer is ranked, the other goal for each, top
- * of the table first, a slice at a time. It runs AFTER the ranking so the
- * ranked column (and Phase 2's early top ten) is never kept waiting by a
- * column that ranks nothing. Cells are swapped in place — the table is not
- * rebuilt under the reader for a column he may not be reading.
- */
-function runAltGoal(search, token) {
-  const r = state.goalRank;
-  const offers = search.offers;
-  let i = 0;
-  const step = () => {
-    if (token !== r.token || state.search !== search) return;
-    const t0 = Date.now();
-    while (Date.now() - t0 < 40 && i < offers.length) {
-      offers[i].altGoal = altScore(offers[i], state.myTeamId);
-      i++;
-    }
-    if (i >= offers.length) r.altRunning = false;
-    refreshAltCells();
-    if (i < offers.length) setTimeout(step, 0);
-  };
-  setTimeout(step, 0);
-}
-
-/** Replace every finder preview cell still waiting whose offer now has an answer. */
-function refreshAltCells() {
-  const table = $('tradeTable');
-  if (!table) return;
-  for (const tr of bodyOf(table).querySelectorAll('tr.offer')) {
-    const box = tr.querySelector('.alt-goal-cell.goal-wait');
-    if (!box) continue;
-    const o = state.rows[Number(tr.getAttribute('data-i'))];
-    if (!o || (o.altGoal === undefined && state.goalRank.altRunning)) continue;
-    const holder = document.createElement('div');
-    holder.innerHTML = splitBox(altGoalCellHtml(o));
-    const fresh = holder.firstElementChild;
-    if (fresh) box.parentNode.replaceChild(fresh, box);
-  }
 }
 
 // ======================================================================
@@ -6750,7 +6576,7 @@ function thisWeekCellHtml(offer) {
   return (
     `<td class="split wkproj" data-v="${t && t.mine ? t.mine.delta : -Infinity}">` +
       splitHalf('You', half(t && t.mine, 'wkm')) +
-      splitHalf('Him', half(t && t.theirs, 'wkt')) +
+      splitHalf('Them', half(t && t.theirs, 'wkt')) +
     `</td>`
   );
 }
@@ -6758,7 +6584,7 @@ function thisWeekCellHtml(offer) {
 /** His lineup vs you: HIS gain is YOUR red, and the other way round. */
 function oppCellHtml(offer) {
   const o = oppProjOf(offer);
-  const name = offer && offer.partner ? offer.partner.name : 'He';
+  const name = offer && offer.partner ? offer.partner.name : 'them';
   if (!o || o.sum === null) {
     const why = !o
       ? 'Needs the remaining weeks priced week by week.'
@@ -6820,9 +6646,9 @@ function vsNoteHtml(delta, name, text = null) {
   const cls = delta > 0.05 ? 'neg' : delta < -0.05 ? 'pos' : '';
   return (
     // The same ↑ the player card puts on a week you play him (js/player-card.js).
-    `<span class="vs-note ${cls}"><span aria-hidden="true">↑</span> ${text === null ? `his ${signedText(delta)}` : esc(text)}` +
-    `<span class="sr-only"> — you play ${esc(name || 'him')} this week` +
-    `${text === null ? ', and this is his lineup change' : ''}</span></span>`
+    `<span class="vs-note ${cls}"><span aria-hidden="true">↑</span> ${text === null ? `theirs ${signedText(delta)}` : esc(text)}` +
+    `<span class="sr-only"> — you play ${esc(name || 'them')} this week` +
+    `${text === null ? ', and this is their lineup change' : ''}</span></span>`
   );
 }
 
@@ -6990,13 +6816,13 @@ function weekTableHtml(
     `<th>${esc(label)}</th><th>Difference</th></tr></thead>` +
     `<tbody>${pastRows}${divider}${preRows}${preDivider}${rows}` +
     // Per week FIRST, the total under it — Tim's order for every figure here.
-    `<tr class="total"><td class="name">${weighted ? 'Per week he plays' : 'Per week'}</td>` +
+    `<tr class="total"><td class="name">${weighted ? 'Per week they play' : 'Per week'}</td>` +
     `<td>${fmt(beforeTotal / n)}</td><td>${fmt(afterTotal / n)}</td>` +
     `<td class="delta ${total > 0 ? 'up' : total < 0 ? 'down' : ''}${nettedTotal ? ' netted' : ''}">` +
     `${signedText(netWk)}${ownSub(ownWk)}</td></tr>` +
     `<tr class="total sub-row"><td class="name">` +
     (weighted
-      ? `All weeks, by his chance of playing`
+      ? `All weeks, by their chance of playing`
       : `All ${plural(byWeek.length, 'week')}${pre.length ? ' after it' : past.length ? ' left' : ''}`) +
     `</td>` +
     `<td>${fmt(beforeTotal)}</td><td>${fmt(afterTotal)}</td>` +
@@ -7018,7 +6844,7 @@ function weekTableHtml(
 }
 
 /** Rule 16's one sentence for the netted meeting week. */
-const NET_KEY = 'In a week marked ↑ you play him, so Difference is your change minus his; ' +
+const NET_KEY = 'In a week marked ↑ you play them, so Difference is your change minus theirs; ' +
   'the totals count it too.';
 
 /** The playoff rows and the line above them, or nothing. */
@@ -7213,7 +7039,7 @@ function goalFor(offer) {
  * where "44% he says yes" was (the pop-up and the custom box, which have the
  * room a row does not). Records what the word's preview shows under `key`.
  */
-function yesLineHtml(s, offer, key, lead = ' · he says yes: ') {
+function yesLineHtml(s, offer, key, lead = ' · they say yes: ') {
   if (!s || !Number.isFinite(s.accept)) { yesShown.delete(key); return ''; }
   const v = s.verdict || { p: s.accept };
   yesShown.set(key, { partner: offer && offer.partner ? offer.partner.name : '', verdicts: [{ v }] });
@@ -7231,13 +7057,9 @@ function dealGoalHtml(offer) {
     // said once in "How this works".
     `<strong class="${cls}">${pctChange(s.mine.before, s.mine.after)}</strong> ` +
     `<span class="sub-inline">${pct(s.mine.before)} → ${pct(s.mine.after)}` +
-    (Number.isFinite(s.theirs.before) ? ` · his ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
+    (Number.isFinite(s.theirs.before) ? ` · theirs ${pct(s.theirs.before)} → ${pct(s.theirs.after)}` : '') +
     yesLineHtml(s, offer, 'deal-yes') +
     `</span>` +
-    // The goal you are not on, as the table's preview column gives it.
-    altInlineHtml(offer.altGoal !== undefined && offer.altGoal !== null && !offer.custom
-      ? offer.altGoal
-      : altScore(offer, offer.mineTeamId != null ? offer.mineTeamId : state.myTeamId)) +
     `</p>`
   );
 }
@@ -7336,7 +7158,7 @@ function renderDealAt() {
       `${priced.cut
         .map((p) => `<b>${esc(p.name)}</b>${p.position === 'DST' ? '' : ` ${esc(p.position)}`}`)
         .join(', ')}` +
-      ` — a two-for-one leaves you a man over, and this is his cost.</p>`
+      ` — a two-for-one leaves you a man over, and this is their cost.</p>`
     : '';
 
   const href = espnTradeUrl(offer);
@@ -7345,10 +7167,10 @@ function renderDealAt() {
     // pop-up's link never asks the extension to tick your side.
     ? `<p><a class="espn-open" href="${esc(href)}" target="_blank" rel="noopener"` +
       ` data-offer="${esc(offerKey(offer))}">` +
-      `Open this trade in ESPN${bridgeAvailable() ? '' : ' · his players only'}</a><br>` +
+      `Open this trade in ESPN${bridgeAvailable() ? '' : ' · their players only'}</a><br>` +
       `<span class="espn-off">ESPN’s screen opens with <strong>${offer.receive
         .map((p) => esc(p.name))
-        .join(' and ')}</strong> already ticked on his side. ` +
+        .join(' and ')}</strong> already ticked on their side. ` +
       (bridgeAvailable()
         ? `The extension ticks ${offer.send.map((p) => esc(p.name)).join(' and ')} on yours; ` +
           `check both sides before you press Propose. `
@@ -7362,7 +7184,7 @@ function renderDealAt() {
     : `<p><span class="espn-off">${
         offer.combined
           ? 'A combination is several trades with several managers, so there is no one ESPN ' +
-            'screen for it. Each manager’s own row above opens his.'
+            'screen for it. Each manager’s own row above opens theirs.'
           : state.isDemo
             ? 'There is no ESPN league to open in demo — switch to <strong>My ESPN league</strong> ' +
               'for the deep link.'
@@ -7470,14 +7292,14 @@ function renderDealAt() {
       ? `<strong>The playoff weeks</strong> (${weekRange(playoffWeeksShown())}) are shown after the ` +
         `totals for reference and are in no figure on this page. `
       : '') +
-    `The per-week number beside each player above is a different arithmetic again — it is what he ` +
-    `is worth in a week he SCORES, averaged over only the weeks he is projected to score in, so ` +
-    `his byes, any week without a projection and any week he is ruled out at 0.00 are out of its ` +
+    `The per-week number beside each player above is a different arithmetic again — it is what they ` +
+    `are worth in a week they SCORE, averaged over only the weeks they are projected to score in, so ` +
+    `their byes, any week without a projection and any week they are ruled out at 0.00 are out of its ` +
     `divisor while they are all in these totals. It does not multiply up to them, and is not ` +
     `meant to; for an injured man it is the more flattering of the two on purpose.` +
     (priced.cut.length
       ? ` The forced cut above is applied <strong>once</strong>, for the whole season, rather than ` +
-        `re-decided every week — a manager does not get his dropped man back in week 10.`
+        `re-decided every week — a manager does not get their dropped man back in week 10.`
       : '');
 
   $('dealNote').innerHTML =
@@ -7676,7 +7498,7 @@ function weekSlice(offer, side, week) {
 
 /** "Ana’s lineup" / "Your lineup" — whose squad the breakdown is showing. */
 function sideLabel(offer, side) {
-  if (side === 'theirs') return offer.partner ? `${offer.partner.name}’s lineup` : 'His lineup';
+  if (side === 'theirs') return offer.partner ? `${offer.partner.name}’s lineup` : 'Their lineup';
   return 'Your lineup';
 }
 
@@ -7685,7 +7507,7 @@ function sideToggleHtml(offer, current = 'mine') {
   if (!offer.partner) {
     return (
       `<span class="wkx-noside">A combination has several managers on the other side, so there ` +
-      `is no one lineup to compare against. Each manager’s own row opens his.</span>`
+      `is no one lineup to compare against. Each manager’s own row opens theirs.</span>`
     );
   }
   const btn = (side) =>
@@ -8063,20 +7885,6 @@ function focusEl(el) {
 
 /** Our keys are `f:3` / `c:0`; the colon is legal in an attribute selector. */
 const cssKey = (k) => String(k).replace(/["\\]/g, '');
-
-/**
- * The other goal, inline after a stated chance — " · last chance −0.8% ±0.4" —
- * on the pop-up's goal line. Nothing when there is no
- * honest figure to give.
- */
-function altInlineHtml(s) {
-  if (!s || !Number.isFinite(s.before) || !Number.isFinite(s.after)) return '';
-  const cls = chanceCls(s.gain, s.before, s.after);
-  return (
-    ` <span class="alt-inline">· ${esc(CHANCE_SHORT[s.goal])} ` +
-    `<b class="${cls}">${pctChange(s.before, s.after)}</b></span>`
-  );
-}
 
 // -------------------------------------------------------------------- pickers
 
@@ -8576,7 +8384,7 @@ function renderCuHistory() {
   const rows = tradeHistory({
     moves: pastTrades.moves, ended, pending: mine ? pendingOffers : [], a: c.a, b: c.b, me,
   });
-  const who = esc(partner.name || 'him');
+  const who = esc(partner.name || 'them');
   host.hidden = false;
   if (!rows.length) {
     host.innerHTML = `<p class="panel-note cu-hist-none">No trades with ${who} yet.</p>`;
@@ -9145,7 +8953,7 @@ function priceCustom(entry) {
   if (missing > 0) {
     return {
       error: `${plural(missing, 'player')} in this trade ${missing === 1 ? 'is' : 'are'} no longer ` +
-        `on the squad that was sending ${missing === 1 ? 'him' : 'them'}.`,
+        `on the squad that was sending ${missing === 1 ? 'them' : 'them'}.`,
     };
   }
   if (!sendA.length && !sendB.length) return { error: 'Nobody is moving in this trade.' };
@@ -9297,7 +9105,7 @@ function renderCustomPickers() {
   // thresholds fall — is in "How a custom trade is priced" below.
   const any = [...scales.values()].some(Boolean);
   $('cuHeatKey').innerHTML = any
-    ? heatKeyShort({ thing: 'man', what: 'the others at his own position across the league' })
+    ? heatKeyShort({ thing: 'man', what: 'the others at their own position across the league' })
     : '';
 }
 
@@ -9721,8 +9529,6 @@ function renderCustomSaved() {
     if (!offers[i]) return;
     withSendCut(cuts[i], () => {
       offers[i].goalScore = basis() === 'weeks' ? scoreGoalCached(offers[i], entry.a, weeklySpan()) : null;
-      // And the other goal, on its own weeks (2026-09-29) — memoised the same way.
-      offers[i].altGoal = altScore(offers[i], entry.a);
     });
   });
 
@@ -9920,7 +9726,6 @@ function findSuggestions() {
     // Found under the box's send week, and read under it from now on.
     o.sendAfter = sendCut;
     o.goalScore = scoreGoalCached(o, c.a, weeks);
-    o.altGoal = altScore(o, c.a);
     // Tim's checklist (2026-10-31), from the box's own squad: the row's ✓ tag.
     o.fit = fitOfOffer(o, c.a, teams);
   }
@@ -10067,7 +9872,6 @@ function renderAssumed() {
     const offer = assume.offer;
     const span = weeklySpan();
     offer.goalScore = basis() === 'weeks' ? scoreGoalCached(offer, entry.a, span) : null;
-    offer.altGoal = altScore(offer, entry.a);
     const row = offerRow(offer, 0, 'asm:0', {
       goal: true,
       attrs: ' data-asm="0"',
@@ -10137,16 +9941,16 @@ function renderCustomNote() {
     // is said in the finder's note and the pop-up's, and a reader who only
     // opens this panel would otherwise be the one person not told.
     ` <strong>The figure beside each man</strong> is a different arithmetic from the gains under ` +
-    `the squads: it is what he is worth <em>in a week he scores</em>, averaged over only the ` +
-    `weeks he is projected to score in, so his byes, any week without a projection and any week ` +
-    `he is ruled out at 0.00 are out of its divisor &mdash; while a gain is spread over every week ` +
-    `in the span. For a man who is out for a while that figure flatters him, deliberately: it ` +
-    `answers what you get when he plays.` +
+    `the squads: it is what they are worth <em>in a week they score</em>, averaged over only the ` +
+    `weeks they are projected to score in, so their byes, any week without a projection and any week ` +
+    `they are ruled out at 0.00 are out of its divisor &mdash; while a gain is spread over every week ` +
+    `in the span. For a man who is out for a while that figure flatters them, deliberately: it ` +
+    `answers what you get when they play.` +
     // Rule 7, for the Proj | Value switch — only while there is a switch.
     (state.valueBase
-      ? ` <strong>Value</strong> is points a week over the waiver line at his position; points ` +
+      ? ` <strong>Value</strong> is points a week over the waiver line at their position; points ` +
         `below the starter line count half. Both lines are fixed for the season. On Value the figure ` +
-        `beside each man is his Value over every week left, the one on his card and on the Players page.`
+        `beside each man is their Value over every week left, the one on their card and on the Players page.`
       : '') +
     `<br><br>` +
     `<strong>This box has no opinion about whether a deal is good.</strong> The finder above only ` +
@@ -10173,10 +9977,10 @@ function renderCustomNote() {
     // which was true and was the defect: below the squads it added 767px to
     // this panel at a 900px window and 191px at 390px, because it took enough
     // width off the two rosters that they stacked as well.
-    `<strong>The box is split down the middle: your side on the left, his on the right</strong>, ` +
+    `<strong>The box is split down the middle: your side on the left, theirs on the right</strong>, ` +
     `each with its own week-by-week table that updates as you tick. Yours is the same table the ` +
-    `pop-up draws; his is the same deal from his lineup, with a playoff week counted by the ` +
-    `chance he is still playing in it. Hover, tap or Tab to a week to see it slot by slot. ` +
+    `pop-up draws; theirs is the same deal from their lineup, with a playoff week counted by the ` +
+    `chance they are still playing in it. Hover, tap or Tab to a week to see it slot by slot. ` +
     `<strong>Below about ${INLINE_MIN_WIDTH}px of window ` +
     `there is no room for the tables</strong>, so they are not drawn at all and ` +
     `<strong>Week by week</strong> above opens exactly the same thing in a pop-up — which is how ` +
@@ -10187,8 +9991,8 @@ function renderCustomNote() {
         describeZeroHeat(inlineScale) + ` Played and playoff weeks are in no total, so they are in no scale either.`
       : '') +
     `<br><br>` +
-    `<strong>The colour beside each man</strong> compares him only with the other men at ` +
-    `<em>his own position</em> across these two squads — never a quarterback against a kicker. ` +
+    `<strong>The colour beside each man</strong> compares them only with the other men at ` +
+    `<em>their own position</em> across these two squads — never a quarterback against a kicker. ` +
     `Two men in the same lineup slot would have been the tighter comparison and it is a group of ` +
     `TWO, where every pair comes out equally far from its own average whether they differ by ` +
     `fifteen points or by a tenth; a position across both squads is eight to ten men and a real ` +
@@ -10197,8 +10001,8 @@ function renderCustomNote() {
     `<strong>Both squads are laid out as a lineup</strong> — QB, RB1, RB2, WR1… then the bench — ` +
     `using the same slot rules the Analysis page&rsquo;s season sheet and this page&rsquo;s own deal ` +
     `pop-up use, so WR2 means the same thing in all three. The slot is this page&rsquo;s answer, not ` +
-    `ESPN&rsquo;s: a man is on the bench here when he is not in the best legal lineup, whatever ` +
-    `ESPN&rsquo;s roster says he is parked as today. A slot nobody can fill is still a row, because ` +
+    `ESPN&rsquo;s: a man is on the bench here when they are not in the best legal lineup, whatever ` +
+    `ESPN&rsquo;s roster says they are parked as today. A slot nobody can fill is still a row, because ` +
     `an empty slot is what a hole looks like.` +
     `<br><br>` +
     `<strong>Week by week</strong> opens the deal in the same pop-up a found trade opens &mdash; the ` +
@@ -10504,7 +10308,7 @@ function renderInlineHalf(host, side, priced) {
     const span = weeklySpan();
     const r = offer.partner ? reachFor(offer.partner.id, span) : null;
     opts = {
-      nowLabel: 'As he is now',
+      nowLabel: 'As they are now',
       reach: r ? new Map(span.map((w, i) => [w, r[i]])) : null,
       // In HIS table the difference column already IS his change, so the mark
       // only says which week he plays you.
@@ -10514,7 +10318,7 @@ function renderInlineHalf(host, side, priced) {
   host.innerHTML =
     `<h3 class="cu-inline-title">${mine
       ? 'This deal, week by week'
-      : `${esc(offer.partner ? offer.partner.name : 'His')}’s side, week by week`}</h3>` +
+      : `${offer.partner ? `${esc(offer.partner.name)}’s` : 'Their'} side, week by week`}</h3>` +
     weekTableHtml(sets.span.byWeek, sets.span.delta, {
       label: 'With the trade',
       past: sets.past ? sets.past.byWeek : [],
@@ -11096,7 +10900,7 @@ function acceptDeadlineFor(received) {
     now: Date.now(),
   });
   if (!a) return null;
-  a.who = received.length > 1 ? 'them' : 'him';
+  a.who = received.length > 1 ? 'them' : 'them';
   return a;
 }
 
@@ -11144,7 +10948,7 @@ function renderCustomAcceptAt() {
   const a = acceptDeadlineFor(playersFor(state.custom.b, state.custom.sendB));
   if (!a || a.kind === 'closed') {
     el.textContent = '—';
-    el.setAttribute('title', 'Tick a man he sends to see when to accept.');
+    el.setAttribute('title', 'Tick a man they send to see when to accept.');
     return;
   }
   el.innerHTML = a.kind === 'rule'
@@ -11415,7 +11219,7 @@ function rowCardSpec(cell) {
     const r = byWeek && offer.partner ? reachFor(offer.partner.id, span) : null;
     return {
       ...gainWeeksSpec({
-        title: 'He gains', sub: partner, byWeek,
+        title: 'They gain', sub: partner, byWeek,
         reach: r ? new Map(span.map((w, i) => [w, r[i]])) : null,
         before: offer.theirBefore, after: offer.theirAfter,
         shown: signedText(!weeks ? his.gain : f.hisWeek),
@@ -11433,7 +11237,7 @@ function rowCardSpec(cell) {
       return {
         title: 'Flip', sub,
         rows: [
-          { label: `${man ? man.name : 'He'} (${f.pos})`, note: 'his bench, Value', value: Number.isFinite(v) ? fmt(v) : '—' },
+          { label: `${man ? man.name : 'They'} (${f.pos})`, note: 'their bench, Value', value: Number.isFinite(v) ? fmt(v) : '—' },
           { label: 'Your Value change', value: signedText(valueChangeOfOffer(offer)) },
           { label: 'You gain /wk', value: signedText(shownGainsOf(offer).mine) },
           ...f.toNames.map((n) => ({ label: n, note: `needs ${f.pos}`, value: '✓' })),
@@ -11453,7 +11257,7 @@ function rowCardSpec(cell) {
     const t = thisWeekOf(offer);
     const d = t ? (kind === 'wkm' ? t.mine : t.theirs) : null;
     const spec = gainWeeksSpec({
-      title: kind === 'wkm' ? 'Your lineup' : `${partner || 'His'} lineup`,
+      title: kind === 'wkm' ? 'Your lineup' : `${partner || 'Their'} lineup`,
       sub: t ? `Week ${t.week}, projected` : sub,
       before: d ? d.before : null, after: d ? d.after : null,
       shown: d ? signedText(d.delta) : '—',
@@ -11473,12 +11277,15 @@ function rowCardSpec(cell) {
       ...link,
     };
   }
-  if (kind === 'alt') {
-    const g = goalOf(otherGoal());
-    const s = offer.altGoal;
-    if (why || !s || !Number.isFinite(s.before)) return { title: cap(g.chance), sub, rows: [], foot: why, ...link };
+  if (kind === 'goalt') {
+    // Their half of the Chance cell (2026-11-10): their chance at the same goal.
+    const g = goalOf(state.goal);
+    const s = offer.goalScore && offer.goalScore.goal === state.goal ? offer.goalScore : null;
+    if (why || !s || !s.theirs || !Number.isFinite(s.theirs.before)) {
+      return { title: cap(g.chance), sub, rows: [], foot: why || 'Not worked out yet.', ...link };
+    }
     return {
-      ...altGoalSpec({ chance: g.chance, partner, before: s.before, after: s.after, weeks: weekRange(s.weeks) }),
+      ...theirGoalSpec({ chance: g.chance, partner, theirs: s.theirs }),
       ...link,
     };
   }
@@ -11486,7 +11293,7 @@ function rowCardSpec(cell) {
     const o = oppProjOf(offer);
     return {
       ...oppSpec({
-        partner: partner || 'He', per: o && o.sum !== null ? o.per : [],
+        partner: partner || 'They', per: o && o.sum !== null ? o.per : [],
         shown: o && o.sum !== null ? signedText(o.sum) : '', why,
       }),
       ...link,
@@ -11745,18 +11552,18 @@ const HEAD_TITLES = [
     : `What the deal does to your ${m[1]} chance.`)],
   // The split columns and the two single figures (2026-10-12).
   [/^Chance$/, 'What the deal does to your chance of finishing first, and of finishing last.'],
-  [/^Send$/, 'The men you would give up, and the men he would.'],
-  [/^Gain\b/, 'Points a week the deal adds to your best lineup, and to his.'],
-  [/^This week$/, 'How far the deal moves your projected lineup in the coming week, and his.'],
-  [/^Value$/, 'Your change in total Value. His is the same figure with the sign turned.'],
+  [/^Send$/, 'The men you would give up, and the men they would.'],
+  [/^Gain\b/, 'Points a week the deal adds to your best lineup, and to theirs.'],
+  [/^This week$/, 'How far the deal moves your projected lineup in the coming week, and theirs.'],
+  [/^Value$/, 'Your change in total Value. Theirs is the same figure with the sign turned.'],
   [/^Appeal$/, 'Projection less season average, the men you get minus the men you send.'],
-  [/^Total$/, 'Appeal plus his gain a week.'],
+  [/^Total$/, 'Appeal plus their gain a week.'],
   [/^You send$/, 'The men you would give up.'],
   [/^You get$/, 'The men you would receive.'],
   [/^Your lineup/, 'Your best lineup a week: now, then with the deal.'],
-  [/^You gain/, 'What the deal adds to your best lineup, less his change in a week you play him.'],
-  [/^He gains/, 'What the deal adds to his best lineup.'],
-  [/^His proj vs you$/, 'How far his lineup moves in the weeks he plays you.'],
+  [/^You gain/, 'What the deal adds to your best lineup, less their change in a week you play them.'],
+  [/^They gain/, 'What the deal adds to their best lineup.'],
+  [/^Their proj vs you$/, 'How far their lineup moves in the weeks they play you.'],
   [/^ESPN$/, 'Open the deal on ESPN.'],
   [/^Week$/, 'A week still to play. Open one to see it slot by slot.'],
   [/^As (you are|he is) now$/, 'The best lineup that week as the squads stand.'],

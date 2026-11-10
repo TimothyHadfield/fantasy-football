@@ -460,7 +460,7 @@ export function avgCell(cell, row, team, scale, { waiting = false, prefix = 'ov'
   const more = cell.who.length > 3 ? `, and ${cell.who.length - 3} more` : '';
   const says = (cell.value
     ? `${team.name}'s ${row.key} has a Value of ${fmt(cell.avg)} in an average week — each ` +
-      `week's man at his own Value, averaged over ${plural(cell.n, 'regular-season week')} ` +
+      `week's man at their own Value, averaged over ${plural(cell.n, 'regular-season week')} ` +
       projAvgWord()
     : `${team.name}'s ${row.key} is worth ${fmt(cell.avg)} in an average week — that slot's ` +
       `projection over ${plural(cell.n, 'regular-season week')} ` +

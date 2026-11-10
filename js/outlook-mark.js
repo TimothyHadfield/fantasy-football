@@ -112,7 +112,7 @@ export const APPEAL_EXPLAIN =
 /** The words a screen reader gets, and the card's heading line. */
 export function outlookWords(o) {
   if (!o) return '';
-  return `Projected ${Math.abs(o.delta).toFixed(1)} a week ${o.delta > 0 ? 'above' : 'below'} his average: ` +
+  return `Projected ${Math.abs(o.delta).toFixed(1)} a week ${o.delta > 0 ? 'above' : 'below'} their average: ` +
     `${o.avg.toFixed(1)} so far → ${o.proj.toFixed(1)} projected`;
 }
 
@@ -125,10 +125,10 @@ export function outlookHtml(o) {
 }
 
 /** The one-sentence key, only where a mark is drawn (rule 16). */
-export const OUTLOOK_KEY = '💎 / 🪙 by a name: projected 2 or more a week above / below his average so far.';
+export const OUTLOOK_KEY = '💎 / 🪙 by a name: projected 2 or more a week above / below their average so far.';
 export const hasOutlook = (html) => /\boutlook-(diamond|coin)\b/.test(html || '');
 
 /** The line behind "How this works". */
 export const OUTLOOK_EXPLAIN =
-  `<strong>A 💎 or 🪙 by a name</strong>: his projection for the weeks left is ${THRESHOLD} or more points a week ` +
-  `above (💎) or below (🪙) ESPN’s season average of what he has scored. A man with no average yet gets neither.`;
+  `<strong>A 💎 or 🪙 by a name</strong>: their projection for the weeks left is ${THRESHOLD} or more points a week ` +
+  `above (💎) or below (🪙) ESPN’s season average of what they have scored. A man with no average yet gets neither.`;

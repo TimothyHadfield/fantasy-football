@@ -511,7 +511,7 @@ if (!process.argv[2]) {
           .every((p) => want[i].sendNames.concat(want[i].getNames).includes(p.name))),
         JSON.stringify(want.map((r) => [r.sendNames, r.getNames])));
       eq('live: no row has a "Your lineup, a week" cell any more', live.rows.reduce((n, r) => n + r.lineupCells, 0), 0);
-      eq('live: every row is Manager, Chance, Send, Gain, Value, His proj, ESPN',
+      eq('live: every row is Manager, Chance, Send, Gain, Value, Their proj, ESPN',
         [...new Set(live.rows.map((r) => r.cells.join(' | ')))],
         ['name | split chance | split left deal | split gains | split wkproj | value val-change | appeal | total | opp-proj | left espn']);
 

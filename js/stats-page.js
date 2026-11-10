@@ -2592,16 +2592,16 @@ function renderFit() {
     $('fitPlayersNote').innerHTML = playerPts.length
       ? paras([
         '<strong>Each dot is one player in one finished week</strong> — everyone on a league ' +
-          'roster that week, starters and bench. Across is ESPN&rsquo;s projection for him that ' +
-          'week; up is what he scored. ' +
+          'roster that week, starters and bench. Across is ESPN&rsquo;s projection for them that ' +
+          'week; up is what they scored. ' +
           `${playerPts.length.toLocaleString('en-US')} dots over ${plural(readWeeks.length, 'week')} ` +
           `(${pSpan}).` +
           (going.length
             ? ` Week ${going[going.length - 1]} is still being played: a player is plotted once ` +
-              'his own NFL game is over, against the projection he started with.'
+              'their own NFL game is over, against the projection they started with.'
             : ''),
         'Left out: a player with no projection or no score, and one projected 0 who scored 0 ' +
-          '(a bye, or ruled out) — he was not expected to play and did not, which tests nothing. ' +
+          '(a bye, or ruled out) — they were not expected to play and did not, which tests nothing. ' +
           'Free agents are not plotted.' +
           (missing.length
             ? ` ${plural(missing.length, 'week')} could not be read (${missing.join(', ')}) and ` +
@@ -2612,7 +2612,7 @@ function renderFit() {
         FIT_NUMBERS,
         FIT_GROUPS,
         'Hover or tap a dot for the player and week; a click or tap anywhere on the graph then ' +
-          'opens him on Players.',
+          'opens them on Players.',
       ])
       : '';
     tuckIfEmpty('fitPlayersNote');
@@ -2949,7 +2949,7 @@ function renderPreNow() {
     ? shown.map((r) => `
         <tr>
           <td class="name"><a class="pref" href="${esc(playerHref(r.playerId))}"${tipAttr(cardOf(r))}` +
-            ` aria-label="${esc(r.name)} — open him on the Players page">${esc(r.name)}</a></td>
+            ` aria-label="${esc(r.name)} — open them on the Players page">${esc(r.name)}</a></td>
           <td>${esc(posLabel(r.position))}</td>
           <td data-v="${r.pre}">${fmt(r.pre)}</td>
           <td data-v="${r.avg}">${fmt(r.avg)}</td>
@@ -2967,8 +2967,8 @@ function renderPreNow() {
   $('preNowNote').innerHTML = paras([
     '<strong>Each dot or row is one player.</strong> <strong>Pre</strong> (across) is ESPN&rsquo;s ' +
       `${trend.BASELINE_DATE} projection for the season, per game, re-scored with this league&rsquo;s ` +
-      'rules. <strong>Avg</strong> (up) is ESPN&rsquo;s season average so far, the Avg on his card: ' +
-      'the weeks he played. <strong>Rest</strong> is his projected average over the weeks left, ' +
+      'rules. <strong>Avg</strong> (up) is ESPN&rsquo;s season average so far, the Avg on their card: ' +
+      'the weeks they played. <strong>Rest</strong> is their projected average over the weeks left, ' +
       'bye and ruled-out weeks left out (rostered players only). ' +
       '<strong>Diff</strong> = Avg &minus; Pre, as printed.',
     `<strong>${n(counts.all)} players:</strong> ${n(counts.rostered)} on a roster in week ${week}` +
@@ -2976,13 +2976,13 @@ function renderPreNow() {
         ? `, and ${n(counts.free)} of the ${n(wire.players.length)} most-owned free agents ESPN lists`
         : ', free agents not read') +
       '. Left out: a player ESPN had no preseason projection for, and one who has not played.',
-    '<strong>Dotted line</strong> = no change: Avg equals Pre. Above it he is beating his preseason ' +
-      'projection, below it he is short. Both axes share one scale. <strong>Solid line</strong> = the ' +
+    '<strong>Dotted line</strong> = no change: Avg equals Pre. Above it they are beating their preseason ' +
+      'projection, below it they are short. Both axes share one scale. <strong>Solid line</strong> = the ' +
       'least-squares line through the dots shown.',
     'Diff is coloured on the site&rsquo;s red&ndash;green scale against every player in the panel, ' +
       'whatever the filters show. Choosing a user shows that team&rsquo;s roster, so Rostered follows; ' +
       'All or Free agents lets go of the user.',
-    'Hover or tap a dot or a name for the player&rsquo;s card; a click then opens him on Players.',
+    'Hover or tap a dot or a name for the player&rsquo;s card; a click then opens them on Players.',
   ]);
 }
 

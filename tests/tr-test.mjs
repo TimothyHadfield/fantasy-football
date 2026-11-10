@@ -603,7 +603,7 @@ function readOfferRows(table) {
       // trade, one for change of win % and one for change of losing %"). The
       // ranked goal stays `goal`; this is the goal NOT selected, read the same way.
       alt: (() => {
-        const td = half('alt-goal-cell');
+        const td = half('their-goal-cell');
         if (!td) return null;
         const sub = td.querySelector('.sub');
         const all = text(td);
@@ -1906,7 +1906,7 @@ const SCENARIOS = {
         // `all`: the whole cell, rank and band included — the printed change is in it.
         // `yes`: the word, off the cell's own card since the row stopped printing
         // it (Tim, 2026-10-28).
-        const yes = (popText(td).match(/Chance he says yes (likely|maybe|unlikely)/) || [])[1] || null;
+        const yes = (popText(td).match(/Chance they say yes (likely|maybe|unlikely)/) || [])[1] || null;
         return { sub, yes, all: text(td) };
       })(),
       opp: text(tr.querySelector('td.opp-proj')),
@@ -1932,7 +1932,7 @@ const SCENARIOS = {
       b.dispatchEvent(new window.Event('click', { bubbles: true }));
       await settle(20);
       const c = copied[at];
-      if (c) out.hisLines.push(((c.text.match(/His lineup gain:.*/) || [''])[0]));
+      if (c) out.hisLines.push(((c.text.match(/Their lineup gain:.*/) || [''])[0]));
       copied.length = out.copied.length;
     }
     return out;
@@ -4497,8 +4497,8 @@ SCENARIOS.twoGoals = async function twoGoals() {
   const rankedOn = (chance) => /ranked by (?:net increase|your checklist|Value change|bench value)/.test(line()) &&
     document.getElementById('tradeTable').getAttribute('data-ranked') === (/title/.test(chance) ? 'title' : 'last') &&
     !/ yet: /.test(line()) && !/playing each offer out/.test(line());
-  const altPending = () => document.querySelectorAll('#tradeTable .hv.alt-goal-cell.goal-wait').length;
-  const hasAlt = () => !!document.querySelector('#tradeTable .hv.alt-goal-cell');
+  const altPending = () => document.querySelectorAll('#tradeTable .hv.their-goal-cell.goal-wait').length;
+  const hasAlt = () => !!document.querySelector('#tradeTable .hv.their-goal-cell');
   const startGoal = process.env.TR_GOAL || 'last';
   const chanceOf = (g) => (g === 'title' ? 'title chance' : 'chance of finishing last');
 
@@ -4697,7 +4697,7 @@ SCENARIOS.previews = async function previews() {
     lineupCards: qa('tr.offer [data-rc="lineup"]').length,
     offerRows: qa('tr.offer').length,
     goal: cell(row && row.querySelector('.hv.goal-cell')),
-    alt: cell(row && row.querySelector('.hv.alt-goal-cell')),
+    alt: cell(row && row.querySelector('.hv.their-goal-cell')),
     opp: cell(row && row.querySelector('td.opp-proj')),
     mgr: cell(row && row.querySelector('.mgr')),
     // Every gain in the table with its colour step: the zero-anchored scale.
@@ -5136,6 +5136,61 @@ SCENARIOS.thisWeek = async function thisWeek() {
 };
 
 /**
+ * THE CHANCE CELL, YOU / THEM (Tim, 2026-11-10: "if your win it all is
+ * selected, do your chance to win it all change vs his chance to win it all
+ * change, and if don't lose is selected, do the same with yours and their
+ * change in chance to lose"). Read by tr-them-check.mjs: every finder row's
+ * Chance halves (label, figure, before → after, class, card) and the other
+ * split cells' labels, under the goal the page opens on and then the other.
+ */
+SCENARIOS.chanceThem = async function chanceThem() {
+  const { document, window, errors } = await boot();
+  const fire = (el, type) => el && el.dispatchEvent(new window.Event(type, { bubbles: true }));
+  await settleGoal(document);
+  const half = (sp) => {
+    const hv = sp && sp.querySelector('.hv');
+    if (!hv) return null;
+    const sub = text(hv.querySelector('.sub'));
+    const all = text(hv);
+    const place = text(hv.querySelector('.place'));
+    let head = sub ? all.slice(0, all.length - sub.length).trim() : all;
+    if (place && head.startsWith(place)) head = head.slice(place.length).trim();
+    return { label: text(sp.querySelector('.hk')), head, sub, cls: String(hv.className), rc: hv.getAttribute('data-rc'),
+      v: hv.getAttribute('data-v'), card: popText(hv) };
+  };
+  const read = () => {
+    const rows = [...document.querySelectorAll('#tradeTable tbody tr.offer')].slice(0, 10).map((tr) => {
+      const td = tr.querySelector('td.chance');
+      const sps = td ? [...td.querySelectorAll('.sp')] : [];
+      return {
+        key: tr.getAttribute('data-key'),
+        partner: text(tr.querySelector('.mgr')),
+        halves: sps.map(half),
+        labels: [...tr.querySelectorAll('td.split .sp > .hk')].map((k) => text(k)),
+      };
+    });
+    return {
+      goal: document.getElementById('tradeTable').getAttribute('data-ranked'),
+      rows,
+      // the retired other-goal preview (.alt-goal-cell), counted so its absence is checked
+      altCells: document.querySelectorAll('.alt-goal-cell').length,
+      labelsAll: [...document.querySelectorAll('td.split .sp > .hk')].map((k) => text(k)),
+    };
+  };
+  const first = read();
+  const other = first.goal === 'title' ? 'last' : 'title';
+  const btn = document.querySelector(`[data-goal-toggle] button[data-goal="${other}"]`);
+  fire(btn, 'click');
+  const max = scaledBudget(120000, machineFactor());
+  const t0 = Date.now();
+  await settle(300);
+  while (Date.now() - t0 < max && document.getElementById('tradeTable').getAttribute('data-ranked') !== other) await settle(100);
+  await settleGoal(document);
+  const second = read();
+  return { errors, first, second };
+};
+
+/**
  * Sweep 2026-10-16 rows 5, 15 and 16, read by tr-fixes-check.mjs:
  *   5  an "Ask AI" key from a repaint ago no longer copies (the map is cleared
  *      with the rows it was built for);
@@ -5494,7 +5549,7 @@ const eq = (a, b, msg) => ok(msg, Object.is(a, b), `got ${JSON.stringify(a)}, wa
     const heads = [...html.matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
     const finderHeads = (html.match(/<table id="tradeTable">[\s\S]*?<\/thead>/) || [''])[0];
     for (const [cls, word] of [['chance', 'Chance'], ['deal', 'Send'], ['gains', 'Gain'], ['wkproj', 'This week'],
-      ['value', 'Value'], ['appeal', 'Appeal'], ['total', 'Total'], ['opp-proj', 'His proj vs you']]) {
+      ['value', 'Value'], ['appeal', 'Appeal'], ['total', 'Total'], ['opp-proj', 'Their proj vs you']]) {
       const c = decl(`#tradeTable td.${cls}::before`, 'content', PHONE);
       ok(`the phone card labels ${cls} "${word}", the column head's word`,
         c === `"${word}"` && finderHeads.includes(`>${word}</th>`) && heads.includes(word), `content=${c}`);
@@ -5622,12 +5677,12 @@ if (!fresh.boot) {
   {
     const rows = fresh.trades;
     const WANT_CELLS = 'name | split chance | split left deal | split gains | split wkproj | value val-change | appeal | total | opp-proj | left espn';
-    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, This week, Value, Appeal, Total, His proj vs you, ESPN — in that order',
+    ok('ROW: every finder row is exactly Manager, Chance, Send, Gain, This week, Value, Appeal, Total, Their proj vs you, ESPN — in that order',
       rows.length > 0 && rows.every((t) => t.cells.join(' | ') === WANT_CELLS),
       [...new Set(rows.map((t) => t.cells.join(' | ')))].join(' ¦ '));
     ok('ROW: and the head names those ten columns, one heading per cell',
       fresh.heads.map((h) => h.replace(/ a week \(weeks \d+–\d+\)$/, '')).join(' | ') ===
-        'Manager | Chance | Send | Gain | This week | Value | Appeal | Total | His proj vs you | ESPN',
+        'Manager | Chance | Send | Gain | This week | Value | Appeal | Total | Their proj vs you | ESPN',
       fresh.heads.join(' | '));
     // TOTAL (Tim, 2026-10-12) = Appeal + both gains a week: a whole cell right
     // after Appeal, and with no Appeal on the sample league a dash as well. Its
@@ -5685,27 +5740,30 @@ if (!fresh.boot) {
     }
     const labels = (s) => (s ? s.halves.map((h) => h.label).join(',') : 'none');
     const shaped = (s) => !!s && s.halves.every((h) => h.wrap === 'sp' && h.labelFirst && h.cls[0] === 'hv');
-    ok('ROW: Chance is two halves, "First" over "Last", each a label and then its figure',
-      rows.every((t) => labels(t.chance) === 'First,Last' && shaped(t.chance)),
+    // REPLACED, 2026-11-10 (Tim: "do your chance to win it all change vs his
+    // chance to win it all change"): was "First" over "Last", both yours. Now
+    // "You" over "Them", both at the goal on show.
+    ok('ROW: Chance is two halves, "You" over "Them", each a label and then its figure',
+      rows.every((t) => labels(t.chance) === 'You,Them' && shaped(t.chance)),
       JSON.stringify(rows.slice(0, 2).map((t) => t.chance)));
-    // This scenario runs on "Don't finish last" (see `boot`): the ranked goal
-    // is the LAST half. The title goal's own check is in `twoGoals`.
-    ok('ROW: under "Don’t finish last" the First half is the preview (`.alt-goal-cell`, data-rc "alt") and the Last half the ranked goal (`.goal-cell`, data-rc "goal")',
+    // This scenario runs on "Don't finish last" (see `boot`). The check across
+    // both goals, with the arithmetic, is tr-them-check.mjs.
+    ok('ROW: the You half is the ranked goal (`.goal-cell`, data-rc "goal") and the Them half theirs (`.their-goal-cell`, data-rc "goalt")',
       rows.every((t) => t.chance && t.chance.halves.length === 2 &&
-        t.chance.halves[0].cls.includes('alt-goal-cell') && !t.chance.halves[0].cls.includes('goal-cell') && t.chance.halves[0].rc === 'alt' &&
-        t.chance.halves[1].cls.includes('goal-cell') && t.chance.halves[1].rc === 'goal'),
+        t.chance.halves[0].cls.includes('goal-cell') && t.chance.halves[0].rc === 'goal' &&
+        t.chance.halves[1].cls.includes('their-goal-cell') && !t.chance.halves[1].cls.includes('goal-cell') && t.chance.halves[1].rc === 'goalt'),
       JSON.stringify(rows.slice(0, 2).map((t) => t.chance && t.chance.halves.map((h) => [h.label, h.cls.join('.'), h.rc]))));
-    ok('ROW: the Chance cell sorts by the RANKED goal — its own data-v is the Last half’s here, not the preview’s',
-      rows.every((t) => t.chance && t.chance.v !== null && t.chance.v === t.chance.halves[1].v) &&
+    ok('ROW: the Chance cell sorts by YOUR figure — its own data-v is the You half’s, not theirs',
+      rows.every((t) => t.chance && t.chance.v !== null && t.chance.v === t.chance.halves[0].v) &&
         rows.some((t) => t.chance.halves[0].v !== t.chance.halves[1].v),
       JSON.stringify(rows.slice(0, 3).map((t) => t.chance && [t.chance.v, t.chance.halves.map((h) => h.v)])));
-    ok('ROW: Send is two halves, "You" (the men you send) over "Him" (the men he sends)',
-      rows.every((t) => labels(t.deal) === 'You,Him' && shaped(t.deal) &&
+    ok('ROW: Send is two halves, "You" (the men you send) over "Them" (the men they send)',
+      rows.every((t) => labels(t.deal) === 'You,Them' && shaped(t.deal) &&
         ['left', 'pkg', 'send'].every((c) => t.deal.halves[0].cls.includes(c)) &&
         ['left', 'pkg', 'recv'].every((c) => t.deal.halves[1].cls.includes(c))),
       JSON.stringify(rows.slice(0, 2).map((t) => t.deal && t.deal.halves.map((h) => [h.label, h.cls.join('.')]))));
-    ok('ROW: Gain is two halves, "You" (`.gain`) over "Him" (`.their-gain`), each with its own number and card',
-      rows.every((t) => labels(t.gains) === 'You,Him' && shaped(t.gains) &&
+    ok('ROW: Gain is two halves, "You" (`.gain`) over "Them" (`.their-gain`), each with its own number and card',
+      rows.every((t) => labels(t.gains) === 'You,Them' && shaped(t.gains) &&
         t.gains.halves[0].cls.includes('gain') && t.gains.halves[0].rc === 'gain' && Number(t.gains.halves[0].v) === t.myGain &&
         t.gains.halves[1].cls.includes('their-gain') && t.gains.halves[1].rc === 'their' && Number(t.gains.halves[1].v) === t.theirGain),
       JSON.stringify(rows.slice(0, 2).map((t) => t.gains)));
@@ -5865,8 +5923,8 @@ for (const noApi of [false, true]) {
   // play him, so the copied line says so with both parts, and they add up.
   {
     const line = (t.match(/My lineup gain:.*/) || [''])[0];
-    const hisMeet = num((t.match(/this trade changes his lineup ([+−-]?[\d.]+)/) || [])[1] || '0');
-    const m = line.match(/\(([+−-]?[\d.]+) total\), net: my own lineup ([+−-]?[\d.]+) minus his ([+−-]?[\d.]+) in the week/);
+    const hisMeet = num((t.match(/this trade changes their lineup ([+−-]?[\d.]+)/) || [])[1] || '0');
+    const m = line.match(/\(([+−-]?[\d.]+) total\), net: my own lineup ([+−-]?[\d.]+) minus theirs ([+−-]?[\d.]+) in the week/);
     ok(`MY +/- is net of his change in the week(s) I play him, both parts stated${tag}`,
       Math.abs(hisMeet) < 0.05 ? !/net:/.test(line)
         : !!m && Math.abs(num(m[3]) - hisMeet) <= 0.051 && Math.abs(num(m[2]) - num(m[3]) - num(m[1])) <= 0.051,
@@ -5879,7 +5937,7 @@ for (const noApi of [false, true]) {
   // (no row had a net His line).
   if (!noApi) {
     const parts = (ai.hisLines || []).map((l) =>
-      l.match(/\(([+−-]?[\d.]+) total\), net: his own lineup ([+−-]?[\d.]+) minus mine ([+−-]?[\d.]+) in the week/));
+      l.match(/\(([+−-]?[\d.]+) total\), net: their own lineup ([+−-]?[\d.]+) minus mine ([+−-]?[\d.]+) in the week/));
     ok('HIS +/- is net of my change in the week(s) he plays me, on some row, both parts stated',
       parts.some(Boolean), `${(ai.hisLines || []).length} rows: ${(ai.hisLines || []).slice(0, 3).join(' | ')}`);
     ok('and on every row that states it, his own less mine is the printed total',
@@ -5887,8 +5945,8 @@ for (const noApi of [false, true]) {
       JSON.stringify(parts.filter(Boolean).slice(0, 3).map((m) => m.slice(1))));
   }
   ok(`HIS +/- is the row's own He gains, per week and total${tag}`,
-    !!ai.row.their && t.includes(`His lineup gain: ${ai.row.their.head} (${ai.row.their.sub}`),
-    `${JSON.stringify(ai.row.their)} / ${(t.match(/His lineup gain:.*/) || [''])[0]}`);
+    !!ai.row.their && t.includes(`Their lineup gain: ${ai.row.their.head} (${ai.row.their.sub}`),
+    `${JSON.stringify(ai.row.their)} / ${(t.match(/Their lineup gain:.*/) || [''])[0]}`);
   const sendAt = t.indexOf('I send:');
   const getAt = t.indexOf('I get:');
   ok(`every man sent is listed under "I send" with the row's per-week figure${tag}`,
@@ -5903,7 +5961,7 @@ for (const noApi of [false, true]) {
     (t.match(/^Date:.*/m) || [''])[0]);
   ok(`and the league's own shape${tag}`, /^League: 10 teams · PPR · starters: QB/m.test(t), (t.match(/^League:.*/m) || [''])[0]);
   ok(`the goal and the yes chance as the goal cell gives them${tag}`,
-    !!ai.row.goal.yes && t.includes(`whether he accepts: ${ai.row.goal.yes}`) && t.includes(ai.row.goal.sub.split(' · ')[0]),
+    !!ai.row.goal.yes && t.includes(`whether they accept: ${ai.row.goal.yes}`) && t.includes(ai.row.goal.sub.split(' · ')[0]),
     `${JSON.stringify(ai.row.goal)} / ${(t.match(/chance \(my goal.*/) || [''])[0]}`);
   {
     // "6% → 10% (+4% ±0.4)": the change it quotes is those two subtracted
@@ -6129,15 +6187,19 @@ async function rederiveGoal(page, row, goal) {
   const built = capture.buildProjection(data, capture.pickWeeks(weekTeams, bracket), null);
   const spread = capture.leagueSpread(data, (g) => !isRemaining(g), null);
   const inputs = capture.simulationInputs({ data, isRemaining, proj: built ? built.proj : null, sigma: spread.sigma });
-  const before = odds.goalChance(odds.simulateWith(inputs), myId, goal);
-  const after = odds.goalChance(odds.simulateWith(inputs, deltas), myId, goal);
+  const simBefore = odds.simulateWith(inputs);
+  const simAfter = odds.simulateWith(inputs, deltas);
+  const before = odds.goalChance(simBefore, myId, goal);
+  const after = odds.goalChance(simAfter, myId, goal);
+  // The other manager's chance at the same goal, off the same two runs (2026-11-10).
+  const theirs = { before: odds.goalChance(simBefore, partner.id, goal), after: odds.goalChance(simAfter, partner.id, goal) };
 
   const ros = (list) => list.reduce((a, p) => a + span.reduce((s, w) => s + (projFor(p, w) ?? 0), 0), 0);
   const accept = odds.acceptChance({
     lineupPerWeek: his.delta / span.length,
     lookPerWeek: (ros(send) - ros(receive)) / span.length,
   });
-  return { before, after, accept };
+  return { before, after, accept, theirs };
 }
 
 /**
@@ -6354,7 +6416,7 @@ if (!wk.boot) {
       (rows[0] || { myHeat: {} }).myHeat.title);
     ok('titled as its own column, never the other’s',
       rows.every((r) => /^You gain/.test(r.myHeat.title)) &&
-      rows.every((r) => /^He gains/.test(r.theirHeat.title)),
+      rows.every((r) => /^They gain/.test(r.theirHeat.title)),
       `${(rows[0] || { myHeat: {} }).myHeat.title.slice(0, 40)} | ${(rows[0] || { theirHeat: {} }).theirHeat.title.slice(0, 40)}`);
     ok('and none carries a raw title to compete with it',
       rows.every((r) => r.myHeat.rawTitle === '' && r.theirHeat.rawTitle === ''));
@@ -7071,7 +7133,7 @@ if (!live.boot) {
   // the first click, so the words are part of the feature rather than a
   // courtesy.
   ok('the finder note explains that only HIS side is ticked',
-    /HIS players ticked only/.test(live.after.note), live.after.note.slice(-500));
+    /THEIR players ticked only/.test(live.after.note), live.after.note.slice(-500));
   ok('and that nothing is sent to ESPN from here',
     /Nothing is sent to ESPN/.test(live.after.note), live.after.note.slice(-500));
 
@@ -7545,7 +7607,7 @@ if (!live.boot) {
   ok('finder: every man you send to Cy, off in week 8, is on green', every(sent, green), dump(sent));
   ok('with the week and the partner on his card, and no tooltip of its own', every(sent, (m) => onCard(m, WORDS)), dump(sent));
   ok('and in sr-only words that say you send him', every(sent, (m) => /bye in week 8/i.test(m.sr) &&
-    /play Cy/.test(m.sr) && /you send him/.test(m.sr)), dump(sent));
+    /play Cy/.test(m.sr) && /you send them/.test(m.sr)), dump(sent));
   ok('the sr-only words are not in the visible text', every(sent, (m) => !/bye in week/i.test(m.visible) &&
     m.hlText.length > 0 && m.visible.startsWith(m.hlText)), dump(sent));
   ok('finder: the men you get (no bye) are not marked', every(men(cyRows(sends), 'recv'), plain),
@@ -7579,7 +7641,7 @@ if (!live.boot) {
   const got = men(cyRows(gets), 'recv');
   ok('finder: every man you get from Cy, off in week 8, is on yellow', every(got, yellow), dump(got));
   ok('with the same words on his card', every(got, (m) => onCard(m, WORDS)), dump(got));
-  ok('and sr-only words that say you get him', every(got, (m) => /you get him/.test(m.sr)), dump(got));
+  ok('and sr-only words that say you get him', every(got, (m) => /you get them/.test(m.sr)), dump(got));
   ok('finder: the men you send (no bye) are not marked', every(men(cyRows(gets), 'send'), plain),
     dump(men(cyRows(gets), 'send')));
   const gGet = (gets.deal.find((s) => s.head === 'You get') || { men: [] }).men;
@@ -8503,7 +8565,7 @@ if (!live.boot) {
     `${tinted.filter((r) => r.card).length} of ${tinted.length}`);
   ok('the key under the lists says the scale is per position, not across the table',
     // Across the LEAGUE since 2026-10-08, as Players does — never the two squads.
-    /his own position across the league/i.test(cu.heatKey) && !/these two squads/i.test(cu.heatKey) &&
+    /their own position across the league/i.test(cu.heatKey) && !/these two squads/i.test(cu.heatKey) &&
       /[▲▼]/.test(cu.heatKey) && /heavier type/i.test(cu.heatKey),
     cu.heatKey.slice(0, 200));
   ok('and it is one short line, with the reasoning in the method below',
@@ -8693,7 +8755,7 @@ if (!live.boot) {
     ok('CUSTOM: and the colour is still there (some weeks tinted)',
       aw.some((r) => /heat-(up|dn)-\d/.test(r.heat)), aw.map((r) => r.heat).join(','));
     ok('its "before" column is headed as his',
-      B.weeks && B.weeks.heads[1] === 'As he is now', JSON.stringify(B.weeks && B.weeks.heads));
+      B.weeks && B.weeks.heads[1] === 'As they are now', JSON.stringify(B.weeks && B.weeks.heads));
     ok('its slot-by-slot panel opens by itself, on HIS lineup',
       B.host && B.opening && /moves most/.test(B.opening.lead) &&
         JSON.stringify(B.opening.pressed) === '["theirs"]' && /’s lineup$/.test(B.opening.title),
@@ -8860,7 +8922,7 @@ if (!live.boot) {
       /No ESPN league in demo/.test(r.espn), r.espn);
     eq(cu.savedRemove, 1, 'and Remove as one extra cell on the end');
     ok('the head names every column the row draws',
-      cu.savedHeads.slice(0, 10).join(' | ') === 'With | Chance | Send | Gain | This week | Value | Appeal | Total | His proj vs you | ESPN',
+      cu.savedHeads.slice(0, 10).join(' | ') === 'With | Chance | Send | Gain | This week | Value | Appeal | Total | Their proj vs you | ESPN',
       cu.savedHeads.join(' | '));
   }
 
@@ -9027,8 +9089,8 @@ if (!gt.boot) {
   // -- the column, second, beside the manager --------------------------------
   // 2026-10-12: one "Chance" column, split — First (the title) over Last.
   eq(T.heads[1], 'Chance', 'the column right after Manager is Chance');
-  ok('every row carries a goal cell in that position — the "First" half under this goal',
-    T.trades.length > 2 && T.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'First'),
+  ok('every row carries a goal cell in that position — the "You" half',
+    T.trades.length > 2 && T.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'You'),
     JSON.stringify(T.trades.slice(0, 2).map((t) => t.goal)));
 
   // -- THE SPAN REACHES THE PLAYOFF WEEKS -------------------------------------
@@ -9170,9 +9232,9 @@ if (!gt.boot) {
   // The rebuilt estimate (trade audit Phase 3, js/accept.js): its curve, and
   // nothing left of the old generous one.
   ok('the method prints the yes-curve with its constant, so a row can be checked',
-    /Will he say yes\?/.test(T.note) && /total ÷ 2/.test(T.note) && /even deal is 50%/.test(T.note) &&
+    /Will they say yes\?/.test(T.note) && /total ÷ 2/.test(T.note) && /even deal is 50%/.test(T.note) &&
       !/88% at dead even/.test(T.note),
-    T.note.slice(T.note.indexOf('Will he'), T.note.indexOf('Will he') + 400));
+    T.note.slice(T.note.indexOf('Will they'), T.note.indexOf('Will they') + 400));
 
   // -- RE-DERIVED: the top row's title chance, from nothing of the page's -----
   //
@@ -9302,7 +9364,7 @@ if (!gt.boot) {
     // Trade audit Phase 2 (2026-10-15): the goal-chance guard is part of the order.
     // Tim's checklist (2026-10-31).
     /The rest are ordered by how many checks pass/.test(T.note) && /At most two per manager\./.test(T.note) &&
-      !/ordered by You gain \+ He gains/.test(T.note) &&
+      !/ordered by You gain \+ They gain/.test(T.note) &&
       !/The list is ranked by what each deal does/.test(T.note) && !/shown as level/.test(T.note),
     T.note.slice(0, 300));
   ok('and no column heading still says the list is ranked by a chance',
@@ -9359,10 +9421,10 @@ if (!gt.boot) {
   // HIS SIDE'S BASIS (trade plan Phase 3): He gains weighs each of his playoff
   // weeks by the chance he plays it, and that figure decides which deals exist.
   ok('the note states He gains is counted over the weeks he will actually play',
-    /He gains counts each playoff week by the chance he plays in it/.test(T.note) &&
+    /They gain counts each playoff week by the chance they play in it/.test(T.note) &&
       /a first-round bye counts as a week off/.test(T.note) &&
       /decides which deals are found/.test(T.note),
-    T.note.slice(T.note.indexOf('He gains counts'), T.note.indexOf('He gains counts') + 400));
+    T.note.slice(T.note.indexOf('They gain counts'), T.note.indexOf('They gain counts') + 400));
   ok('and under "Don’t finish last" it does not, since no playoff week is priced',
     !/He gains counts each playoff week/.test(gt.last.note), gt.last.note.slice(0, 200));
 
@@ -9380,10 +9442,10 @@ if (!gt.boot) {
   // 2026-09-29: the saved table matches the finder's new columns, header and cell.
   // 2026-10-12: both chances are ONE split column now ("Chance": First over Last).
   ok('the saved table’s head matches the finder’s: Chance, and his projection vs you',
-    gt.cuHeads[1] === 'Chance' && gt.cuHeads[2] === 'Send' && gt.cuHeads.includes('His proj vs you'),
+    gt.cuHeads[1] === 'Chance' && gt.cuHeads[2] === 'Send' && gt.cuHeads.includes('Their proj vs you'),
     gt.cuHeads.join(' | '));
-  ok('and the saved row fills the preview (the "Last" half of the same cell) and his-projection cells',
-    !!gt.cuRow && gt.cuRow.alt && gt.cuRow.alt.index === 1 && gt.cuRow.alt.half === 'Last' && gt.cuRow.goal.half === 'First' &&
+  ok('and the saved row fills their chance (the "Them" half of the same cell) and their-projection cells',
+    !!gt.cuRow && gt.cuRow.alt && gt.cuRow.alt.index === 1 && gt.cuRow.alt.half === 'Them' && gt.cuRow.goal.half === 'You' &&
       /%/.test(gt.cuRow.alt.head) && !!gt.cuRow.opp,
     JSON.stringify(gt.cuRow && [gt.cuRow.alt, gt.cuRow.opp]));
 
@@ -9392,8 +9454,8 @@ if (!gt.boot) {
   eq(L.goalOn, 'Don’t finish last', 'pressing "Don’t finish last" lights it');
   eq(gt.stored, 'last', 'and the choice is remembered');
   eq(L.heads[1], 'Chance', 'the column is still headed Chance');
-  ok('and the ranked goal moves to its "Last" half: the chance of finishing last',
-    L.trades.length > 0 && L.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'Last'),
+  ok('and the ranked goal stays in the "You" half, now the chance of finishing last',
+    L.trades.length > 0 && L.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'You'),
     JSON.stringify(L.trades.slice(0, 2).map((t) => t.goal && [t.goal.index, t.goal.half])));
   ok('and the span drops back to the regular season — the playoffs cannot move last place',
     L.heads.some((h) => h === `Gain a week (weeks ${firstWeek}–13)`), L.heads.join(' | '));
@@ -9424,8 +9486,8 @@ if (!ch.boot) {
   // opponent's projection change to your difference" (+5.6 and his −5.4 is +11.0).
   {
     const aw = (ch.weeksA && ch.weeksA.weeks) || [];
-    const meet = aw.filter((r) => /his/.test(r.vs));
-    const hisOf = (r) => num((r.vs.match(/his\s*([+−-]?[\d.]+)/) || [])[1] || 'NaN');
+    const meet = aw.filter((r) => /\btheirs\b/.test(r.vs));
+    const hisOf = (r) => num((r.vs.match(/theirs\s*([+−-]?[\d.]+)/) || [])[1] || 'NaN');
     ok('NET WEEK: in YOUR table, a week you play him prints your change minus his',
       meet.length > 0 && meet.every((r) => {
         const his = hisOf(r);
@@ -9462,7 +9524,7 @@ if (!ch.boot) {
   ok('which is not the flat sum, or the weighting is doing nothing',
     Math.abs(flat - want) > 0.05, `flat ${flat.toFixed(2)} vs weighted ${want.toFixed(2)}`);
   ok('and the rows say so',
-    ch.weeksB && ch.weeksB.perRow && /he plays/.test(ch.weeksB.perRow.label) &&
+    ch.weeksB && ch.weeksB.perRow && /they play/.test(ch.weeksB.perRow.label) &&
       /chance of playing/.test(ch.weeksB.totalRow.label),
     JSON.stringify(ch.weeksB && [ch.weeksB.perRow, ch.weeksB.totalRow].map((r) => r && r.label)));
 }
@@ -9813,7 +9875,7 @@ if (!cs.boot && cs.A.now && cs.A.after && cs.B.now && cs.B.after) {
     ok('SUGGESTED: every row ADDS a man to the ticked deal',
       sg.one.rows.every((r) => r.send.length + r.receive.length > 1), sum(sg.one));
     ok('SUGGESTED: rows carry the saved table\'s columns', JSON.stringify(sg.one.heads) === JSON.stringify(
-      ['With', 'Chance', 'Send', 'Gain', 'This week', 'Value', 'Appeal', 'Total', 'His proj vs you', 'ESPN']), sg.one.heads.join(' | '));
+      ['With', 'Chance', 'Send', 'Gain', 'This week', 'Value', 'Appeal', 'Total', 'Their proj vs you', 'ESPN']), sg.one.heads.join(' | '));
     ok('SUGGESTED: every row is with the custom partner', sg.one.rows.every((r) => r.partner === sg.partnerName),
       sg.one.rows.map((r) => r.partner).join(','));
     // REPLACED, 2026-10-12: was "every row has Open in custom trades, Ask AI
@@ -10127,8 +10189,8 @@ if (!gl.boot) {
   ok('the shape filter offers 2 for 2', gl.kinds.includes('2 for 2'), gl.kinds.join(' | '));
   ok('no console errors on the live title path', gl.errors.length === 0, gl.errors.slice(0, 2).join(' | '));
   eq(gl.heads[1], 'Chance', 'the live page carries the Chance column');
-  ok('with the title chance in its "First" half on every live row',
-    gl.trades.length > 0 && gl.trades.every((t) => t.goal && t.goal.half === 'First'),
+  ok('with your title chance in its "You" half on every live row',
+    gl.trades.length > 0 && gl.trades.every((t) => t.goal && t.goal.half === 'You'),
     JSON.stringify(gl.trades.slice(0, 2).map((t) => t.goal && t.goal.half)));
   ok('and every live offer was played out and ranked',
     gl.trades.length > 0 && gl.trades.every((t) => t.goal && /%/.test(t.goal.head)) &&
@@ -10176,48 +10238,53 @@ if (!gl.boot) {
     // "Last" always last place; which half is the RANKED goal follows the goal.
     eq(A.heads[1], 'Chance', 'the second column is Chance — one column for both chances');
     eq(A.heads[2], 'Send', 'and the next column is Send: there is no second chance column');
-    ok('under "Win it all" the ranked goal is the "First" half on every row',
-      A.trades.length > 2 && A.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'First'),
+    // REPLACED, 2026-11-10 (Tim: "do your chance to win it all change vs his
+    // chance to win it all change, and if don't lose is selected, do the same
+    // with yours and their change in chance to lose"): the halves were First
+    // over Last, both yours, the other goal a preview. Now You over Them, both
+    // at the goal on show; `alt` reads the "Them" half.
+    ok('under "Win it all" your title chance is the "You" half on every row',
+      A.trades.length > 2 && A.trades.every((t) => t.goal && t.goal.index === 1 && t.goal.half === 'You'),
       JSON.stringify(A.trades.slice(0, 2).map((t) => t.goal && [t.goal.index, t.goal.half])));
-    ok('every row carries the preview in the same cell, its "Last" half, filled in (not still waiting)',
-      A.trades.length > 2 && A.trades.every((t) => t.alt && t.alt.index === 1 && t.alt.half === 'Last' && !t.alt.wait),
+    ok('every row carries their chance in the same cell, its "Them" half, filled in (not still waiting)',
+      A.trades.length > 2 && A.trades.every((t) => t.alt && t.alt.index === 1 && t.alt.half === 'Them' && !t.alt.wait),
       JSON.stringify(A.trades.slice(0, 2).map((t) => t.alt)));
-    ok('each preview states the change, and before → after under it',
+    ok('each Them half states the change, and before → after under it',
       A.trades.every((t) => t.alt && chanceRe.test(t.alt.head) && subRe.test(t.alt.sub)),
       A.trades.slice(0, 3).map((t) => `${t.alt && t.alt.head} / ${t.alt && t.alt.sub}`).join(' | '));
-    ok('a last-place chance that DROPS is green and one that rises is red — sign and hue agree',
+    ok('their title chance that RISES is green and one that drops is red — sign and hue agree',
       A.trades.every((t) => {
         const m = (t.alt || NA).sub.match(subRe);
         if (!m) return false;
         const d = Number(m[2]) - Number(m[1]);
-        return (/\bpos\b/.test((t.alt || NA).cls) ? /^−/.test((t.alt || NA).head) && d <= 0 : true) &&
-          (/\bneg\b/.test((t.alt || NA).cls) ? /^\+/.test((t.alt || NA).head) && d >= 0 : true);
+        return (/\bpos\b/.test((t.alt || NA).cls) ? /^\+/.test((t.alt || NA).head) && d >= 0 : true) &&
+          (/\bneg\b/.test((t.alt || NA).cls) ? /^−/.test((t.alt || NA).head) && d <= 0 : true);
       }),
-      A.trades.map((t) => `${(t.alt || NA).cls.replace('alt-goal-cell', '').trim()}:${(t.alt || NA).head}`).slice(0, 8).join(' '));
-    ok('and the sample league offers both colours there, or the check above is vacuous',
+      A.trades.map((t) => `${(t.alt || NA).cls.replace('their-goal-cell', '').trim()}:${(t.alt || NA).head}`).slice(0, 8).join(' '));
+    ok('and the sample league offers a colour there, or the check above is vacuous',
       A.trades.some((t) => /\bpos\b/.test((t.alt || NA).cls)) || A.trades.some((t) => /\bneg\b/.test((t.alt || NA).cls)),
       A.trades.map((t) => (t.alt || NA).cls).slice(0, 8).join(' '));
-    ok('the ranking is unchanged by the preview column: still checklist order',
+    ok('the ranking is unchanged by their half: still checklist order',
       fitOrdered(A.trades), fitLine(A.trades));
-    ok('the method names what the preview column is and what it is priced over',
-      /Δ last chance/.test(A.note) && /regular season/.test(A.note.slice(A.note.indexOf('Δ last chance'))),
-      A.note.slice(A.note.indexOf('Δ last chance'), A.note.indexOf('Δ last chance') + 300));
+    ok('the method says the Chance cell is yours on top and theirs under it, and only yours ranks',
+      /your .+? on top and theirs under it/.test(A.note) && /Only yours ranks the list/.test(A.note),
+      A.note.slice(Math.max(0, A.note.indexOf('on top and theirs') - 120), A.note.indexOf('on top and theirs') + 200));
 
-    // THE PREVIEW IS AN INDEPENDENT RUN OF THE OTHER GOAL, on its own weeks.
-    // FALSIFIABLE: read pTitle off a "last" run, or price the "last" preview
-    // over the title span, and these move.
+    // THEIR CHANCE IS THE SAME RUN AS YOURS, re-derived from the engine alone:
+    // the partner's title chance before and after, off the two runs that give
+    // yours. FALSIFIABLE: read your own team's row, or the other goal, and these move.
     for (const row of A.trades.slice(0, 3)) {
-      const re = await rederiveGoal(A, row, 'last');
+      const re = await rederiveGoal(A, row, 'title');
       const m = (row.alt || NA).sub.match(subRe);
-      ok(`the last-chance preview of ${row.partner}'s deal re-derives from the engine alone`,
+      ok(`${row.partner}'s title chance in the Them half re-derives from the engine alone`,
         // Whole percent since 2026-10-15 (Phase 4): the print is within half a point.
-        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.501 &&
-          Math.abs(Number(m[2]) - re.after * 100) <= 0.651,
-        `page ${row.alt.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
+        !!re && !!m && Math.abs(Number(m[1]) - re.theirs.before * 100) <= 0.501 &&
+          Math.abs(Number(m[2]) - re.theirs.after * 100) <= 0.651,
+        `page ${row.alt && row.alt.sub} vs engine ${re && `${(re.theirs.before * 100).toFixed(2)} → ${(re.theirs.after * 100).toFixed(2)}`}`);
     }
 
     // -- (3) HIS PROJECTION IN THE WEEK HE PLAYS YOU ---------------------------
-    ok('the finder has a "His proj vs you" column', A.heads.includes('His proj vs you'), A.heads.join(' | '));
+    ok('the finder has a "Their proj vs you" column', A.heads.includes('Their proj vs you'), A.heads.join(' | '));
     const his = await rederiveHis(A, A.trades, 'title');
     ok('every row re-derives (partner found)', his.every((h) => !h.error), JSON.stringify(his.find((h) => h.error)));
     ok('each row prints the sum of HIS lineup change over the regular-season weeks you still play him',
@@ -10246,9 +10313,9 @@ if (!gl.boot) {
         : (t.opp || NA).v > 0.05 ? (t.opp || NA).sign === 'neg' : (t.opp || NA).v < -0.05 ? (t.opp || NA).sign === 'pos' : (t.opp || NA).sign === ''),
       A.trades.map((t) => `${(t.opp || NA).v}:${(t.opp || NA).sign}`).slice(0, 8).join(' '));
     ok('the method says what the column is, over which weeks, and that playoff meetings are not known',
-      /His proj vs you/.test(A.note) && /playoff/i.test(A.note.slice(A.note.indexOf('His proj vs you'),
-        A.note.indexOf('His proj vs you') + 400)),
-      A.note.slice(A.note.indexOf('His proj vs you'), A.note.indexOf('His proj vs you') + 400));
+      /Their proj vs you/.test(A.note) && /playoff/i.test(A.note.slice(A.note.indexOf('Their proj vs you'),
+        A.note.indexOf('Their proj vs you') + 400)),
+      A.note.slice(A.note.indexOf('Their proj vs you'), A.note.indexOf('Their proj vs you') + 400));
     // The pop-up of a row that meets you: the meeting week's row says so, with his change.
     ok('a row that meets you opens its pop-up', !!tw.deal && !!tw.deal.weeks, JSON.stringify(tw.deal).slice(0, 200));
     if (tw.deal && tw.deal.weeks) {
@@ -10281,17 +10348,17 @@ if (!gl.boot) {
       g.buttons.every((b) => b.pressed === String(b.on) && b.on === (b.goal === 'last'))),
     JSON.stringify(B.toggles.map((g) => [g.panel, g.on, g.buttons.map((b) => b.pressed)])));
     eq(tw.stored, 'last', 'and the choice is remembered, one preference');
-    // "First" stays on top and "Last" under it; the RANKED goal changes halves.
+    // "You" stays on top and "Them" under it under both goals (2026-11-10).
     eq(B.heads[1], 'Chance', 'the column is still Chance');
-    ok('under "Don’t finish last" the FIRST half is the preview (`.alt-goal-cell`) and the LAST half the ranked goal (`.goal-cell`)',
+    ok('under "Don’t finish last" the top half is still You (`.goal-cell`) and the lower Them (`.their-goal-cell`)',
       B.trades.length > 2 && B.trades.every((t) => t.chance && t.chance.halves.length === 2 &&
-        t.chance.halves[0].label === 'First' && t.chance.halves[0].cls.includes('alt-goal-cell') && !t.chance.halves[0].cls.includes('goal-cell') &&
-        t.chance.halves[1].label === 'Last' && t.chance.halves[1].cls.includes('goal-cell')),
+        t.chance.halves[0].label === 'You' && t.chance.halves[0].cls.includes('goal-cell') &&
+        t.chance.halves[1].label === 'Them' && t.chance.halves[1].cls.includes('their-goal-cell') && !t.chance.halves[1].cls.includes('goal-cell')),
       JSON.stringify(B.trades.slice(0, 2).map((t) => t.chance && t.chance.halves.map((h) => [h.label, h.cls.join('.')]))));
-    ok('and under "Win it all" it was the other way round: First ranked, Last the preview',
+    ok('and the same under "Win it all"',
       A.trades.every((t) => t.chance && t.chance.halves.length === 2 &&
-        t.chance.halves[0].label === 'First' && t.chance.halves[0].cls.includes('goal-cell') &&
-        t.chance.halves[1].label === 'Last' && t.chance.halves[1].cls.includes('alt-goal-cell')),
+        t.chance.halves[0].label === 'You' && t.chance.halves[0].cls.includes('goal-cell') &&
+        t.chance.halves[1].label === 'Them' && t.chance.halves[1].cls.includes('their-goal-cell')),
       JSON.stringify(A.trades.slice(0, 2).map((t) => t.chance && t.chance.halves.map((h) => [h.label, h.cls.join('.')]))));
     ok('and the list is ranked again', /ranked by (?:net increase|your checklist|Value change|bench value)/.test(B.count), B.count.slice(0, 200));
     {
@@ -10300,17 +10367,26 @@ if (!gl.boot) {
         !gt.boot && B.trades.map(key).join(' ; ') === gt.last.trades.map(key).join(' ; '),
         `${B.trades.slice(0, 4).map(key).join(' ; ')} vs ${gt.last && gt.last.trades.slice(0, 4).map(key).join(' ; ')}`);
     }
-    // The title preview under "Don't finish last" is priced over the title's
-    // own span — the bracket bought and priced — not read off the "last" run.
+    // Under "Don't finish last" their half is their chance of LAST, on the
+    // regular-season weeks — the same run as yours — and a drop is green.
     for (const row of B.trades.slice(0, 3)) {
-      const re = await rederiveGoal(B, row, 'title');
+      const re = await rederiveGoal(B, row, 'last');
       const m = row.alt && (row.alt || NA).sub.match(subRe);
-      ok(`the title-chance preview of ${row.partner}'s deal re-derives on the title's own weeks`,
+      ok(`${row.partner}'s last-place chance in the Them half re-derives on the regular-season weeks`,
         // Whole percent since 2026-10-15 (Phase 4): the print is within half a point.
-        !!re && !!m && Math.abs(Number(m[1]) - re.before * 100) <= 0.501 &&
-          Math.abs(Number(m[2]) - re.after * 100) <= 0.651,
-        `page ${row.alt && row.alt.sub} vs engine ${re && `${(re.before * 100).toFixed(2)} → ${(re.after * 100).toFixed(2)}`}`);
+        !!re && !!m && Math.abs(Number(m[1]) - re.theirs.before * 100) <= 0.501 &&
+          Math.abs(Number(m[2]) - re.theirs.after * 100) <= 0.651,
+        `page ${row.alt && row.alt.sub} vs engine ${re && `${(re.theirs.before * 100).toFixed(2)} → ${(re.theirs.after * 100).toFixed(2)}`}`);
     }
+    ok('a last-place chance of theirs that DROPS is green and one that rises is red',
+      B.trades.length > 0 && B.trades.every((t) => {
+        const m = (t.alt || NA).sub.match(subRe);
+        if (!m) return false;
+        const d = Number(m[2]) - Number(m[1]);
+        return (/\bpos\b/.test((t.alt || NA).cls) ? /^−/.test((t.alt || NA).head) && d <= 0 : true) &&
+          (/\bneg\b/.test((t.alt || NA).cls) ? /^\+/.test((t.alt || NA).head) && d >= 0 : true);
+      }),
+      B.trades.map((t) => `${(t.alt || NA).cls.replace('their-goal-cell', '').trim()}:${(t.alt || NA).head}`).slice(0, 8).join(' '));
     {
       const hisB = await rederiveHis(B, B.trades, 'last');
       ok('his projection vs you follows the new span and still re-derives',
@@ -10330,7 +10406,7 @@ if (!gl.boot) {
   ok('the two-goals scenario boots on the slowed live league', !tl.boot, tl.boot);
   if (!tl.boot) try {
     ok('no console errors there', tl.errors.length === 0, tl.errors.slice(0, 2).join(' | '));
-    ok('and every row’s preview is filled once the ranking is done',
+    ok('and every row’s Them half is filled once the ranking is done',
       tl.first.trades.length > 0 && tl.first.trades.every((t) => t.alt && !t.alt.wait && /%/.test(t.alt.head)),
       JSON.stringify(tl.first.trades.slice(0, 2).map((t) => t.alt)));
     console.log(`twoGoals timing (live stub, 150 ms/week): title ranked ${tl.timing.tRanked} ms, ` +
@@ -10361,7 +10437,7 @@ if (!gl.boot) {
     const sub = (c) => (c.text.match(/([+−-]?\d+\.\d) total/) || ['', ''])[1];
 
     // -- You gain / He gains / Your lineup: the week table --------------------
-    for (const [name, c, title] of [['You gain', F.gain, /^You gain · with /], ['He gains', F.their, /^He gains · /]]) {
+    for (const [name, c, title] of [['You gain', F.gain, /^You gain · with /], ['He gains', F.their, /^They gain · /]]) {
       ok(`${name}: opens a week table — now, with the trade, the change`,
         title.test(c.card) && /Wk Now With trade \+\/−/.test(c.card), c.card.slice(0, 120));
       ok(`${name}: carries no raw title beside it`, c.rawTitle === '', c.rawTitle);
@@ -10391,11 +10467,14 @@ if (!gl.boot) {
     ok('the goal cell: you now → with, him now → with, the chance he says yes',
       /You now → with \d+% → \d+%/.test(F.goal.card) &&
       F.goal.card.includes(`${F.partner} now → with`) &&
-      /Chance he says yes (likely|maybe|unlikely) \(\d+%\)/.test(F.goal.card), F.goal.card);
+      /Chance they say yes (likely|maybe|unlikely) \(\d+%\)/.test(F.goal.card), F.goal.card);
     ok('and not the long sentence about simulated seasons', !/simulated seasons/.test(F.goal.card) && F.goal.rawTitle === '',
       F.goal.card + F.goal.rawTitle);
-    ok('the other goal: yours only, and it says it ranks nothing',
-      /You now → with/.test(F.alt.card) && /does not rank/.test(F.alt.card) && F.alt.rawTitle === '', F.alt.card);
+    // 2026-11-10: the lower half is their chance at the same goal, no longer
+    // your other goal (which said "does not rank").
+    ok('their chance: a card named for them, their before → after, nothing about ranking',
+      new RegExp(`^${F.partner}’s `).test(F.alt.card) && new RegExp(`${F.partner} now → with \\d+% → \\d+%`).test(F.alt.card) &&
+        !/does not rank/.test(F.alt.card) && F.alt.rawTitle === '', F.alt.card);
     ok('his projection against you opens a card of its own', new RegExp(`^${F.partner} vs you`).test(F.opp.card) &&
       F.opp.rawTitle === '', F.opp.card);
 
@@ -10432,7 +10511,7 @@ if (!gl.boot) {
     const C = pv.custom;
     ok('the builder’s You gain opens the same week table', /^You gain · with /.test(C.gainA.card) &&
       head(C.gainA) !== '' && C.gainA.card.includes(` ${head(C.gainA)}`), `${C.gainA.text} / ${C.gainA.card.slice(-90)}`);
-    ok('and his figure opens his', /^He gains · /.test(C.gainB.card) && head(C.gainB) !== '' &&
+    ok('and his figure opens his', /^They gain · /.test(C.gainB.card) && head(C.gainB) !== '' &&
       C.gainB.card.includes(` ${head(C.gainB)}`), `${C.gainB.text} / ${C.gainB.card.slice(-90)}`);
     ok('"You play him" opens the meetings', /^You play /.test(C.meet.card), C.meet.card);
     ok('the builder’s two names open team cards', /Record/.test(C.you.card) && /Record/.test(C.head.card),
