@@ -1207,10 +1207,10 @@ function renderNote(view, sim, inputs) {
       `consolation ladder, which is not modelled at all.`
     );
     parts.push(
-      `<strong>Chance</strong> shows whichever of Bye % (a first-round bye), Playoff % and ` +
-      `Loser % is least settled for that manager — the one closest to 50%, ties going ` +
-      `Playoff, then Bye, then Loser — tagged with which it is, or, once all three are ` +
-      `settled, the outcome: bye, playoffs or last.`
+      `<strong>Chance</strong> shows Bye % (a first-round bye) for a manager with a playoff ` +
+      `chance of 90% or more, Loser % for one at 10% or less, and Playoff % otherwise, ` +
+      `tagged with which it is; once all three are settled it shows the outcome: bye, ` +
+      `playoffs or last.`
     );
 
     if (sim && sim.result) {
@@ -1320,7 +1320,7 @@ function cardLines(view, sim, inputs) {
   // definition at all, because the reader cannot tell it was cut.
   lines.push(`Title % = wins the championship round.`);
   // Short on purpose: the page's word ceiling counts this text (text-audit).
-  lines.push(`Chance = Bye/Playoff/Loser % nearest to 50%.`);
+  lines.push(`Chance: BYE ≥90% playoff, LOSER ≤10%.`);
   lines.push(
     `Loser % = LAST IN THE REGULAR SEASON — not the playoffs, ` +
     `not the consolation ladder.`
@@ -1547,7 +1547,7 @@ function renderCard(view, rows, sim, inputs) {
 
   // Columns. Names left, every number right-aligned on its own edge.
   // RECORD, LUCK, TITLE %, CHANCE (Tim, 2026-11-10): the last column is the
-  // least settled of Bye / Playoff / Loser %, a small tag naming which before
+  // Bye / Playoff / Loser % by the 90/10 playoff rule, a small tag naming which before
   // the figure. 170 for it fits "PLAYOFF 100%" (tag 14px bold + 22px figure);
   // 110 before TITLE % keeps its 17px heading clear of LUCK's.
   const colPick = CARD_W - pad;

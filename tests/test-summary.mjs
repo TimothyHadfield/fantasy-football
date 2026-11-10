@@ -270,8 +270,8 @@ function readTable(document) {
   // Columns found BY HEADER, so a column added or moved cannot silently shift
   // every other read by one. A missing column reads as -1 and its cells as null.
   const heads = [...table.querySelectorAll('thead th')].map((th) => text(th));
-  // Since 2026-11-10 (Tim) the last column is Chance: the least settled of
-  // Bye / Playoff / Loser %, `data-pick` naming which. Loser % is gone from the
+  // Since 2026-11-10 (Tim) the last column is Chance: one of
+  // Bye / Playoff / Loser % by the 90/10 playoff rule, `data-pick` naming which. Loser % is gone from the
   // page, so `last` reads null; `pick` carries the Chance cell.
   const [iName, iRec, iLuck, iTitle, iLast, iPick] =
     ['Member', 'Record', 'LUCK', 'Title %', 'Loser %', 'Chance'].map((h) => heads.indexOf(h));
@@ -918,12 +918,21 @@ if (!fresh.boot) {
       eq(r.pickText, `${PICK_KINDS[want.kind].tag} ${pct(want.p)}`, `${r.name}: the cell reads "${PICK_KINDS[want.kind].tag} ${pct(want.p)}"`);
     }
     ok('(the demo is a real test: the column shows more than one kind)', kinds.size >= 2, [...kinds].join(','));
-    // Tim's first example on real numbers: the demo's manager on 98% playoffs
-    // shows BYE. (Nolan, 94% playoffs with a 6% bye, shows PLAYOFF: 94 is
-    // nearer 50 than his bye is. The rule is closeness, not a threshold.)
-    const sure = fresh.rows.filter((r) => pct(sim8.byName.get(r.name).pPlayoffs) === '98%');
-    ok('the demo manager on 98% playoffs shows BYE, not PLAYOFF', sure.length > 0 && sure.every((r) => r.pickKind === 'bye'),
+    // Tim's first example on real numbers: everyone at 90%+ playoffs shows BYE
+    // (Jonas 98%, and Nolan 94% with only a 6% bye), and everyone at 10% or
+    // less shows LOSER (Autumn 5%, Nick <1%).
+    const po = (r) => sim8.byName.get(r.name).pPlayoffs;
+    const sure = fresh.rows.filter((r) => po(r) >= 0.9);
+    ok('every demo manager at 90%+ playoffs shows BYE, not PLAYOFF', sure.length >= 3 && sure.every((r) => r.pickKind === 'bye'),
       JSON.stringify(sure.map((r) => [r.name, r.pickKind])));
+    ok('Nolan (94% playoffs, 6% bye) shows BYE 6%', fresh.rows.some((r) => r.name === 'Nolan' && r.pickText === 'BYE 6%'),
+      JSON.stringify(fresh.rows.find((r) => r.name === 'Nolan')));
+    const out = fresh.rows.filter((r) => po(r) <= 0.1);
+    ok('every demo manager at 10% or less shows LOSER', out.length >= 2 && out.every((r) => r.pickKind === 'last'),
+      JSON.stringify(out.map((r) => [r.name, r.pickKind])));
+    const mid = fresh.rows.filter((r) => po(r) > 0.1 && po(r) < 0.9);
+    ok('and everyone in between shows PLAYOFF', mid.length >= 2 && mid.every((r) => r.pickKind === 'playoffs'),
+      JSON.stringify(mid.map((r) => [r.name, r.pickKind])));
   }
 
   // Tim, 2026-10-22: 12% title / 1% loser goes above 13% / 4%. The rows come
@@ -953,7 +962,7 @@ if (!fresh.boot) {
       eq(cols(r.name)[4], r.pickText, `${r.name}: the text copy carries the same Chance cell (${r.pickText})`);
     }
     ok('the text copy says what Chance is',
-      /Chance = Bye\/Playoff\/Loser % nearest to 50%/.test(fresh.cardText), fresh.cardText.slice(-600));
+      /Chance: BYE ≥90% playoff, LOSER ≤10%/.test(fresh.cardText), fresh.cardText.slice(-600));
     // THE ORDER, re-derived without playoff % at all.
     const standing = (n) => sim8.byName.get(n).pTitle - sim8.byName.get(n).pLast;
     const wantOrder = demo.teams.map((t) => t.name).sort((a, b) =>
@@ -1051,9 +1060,9 @@ if (!fresh.boot) {
     fresh.rows.every((r) => r.title !== null && r.pickV !== null),
     JSON.stringify(fresh.rows.map((r) => [r.title, r.pickV])));
   // The note says what Chance is, in one sentence, with the rule and its ties.
-  ok('the note explains the Chance column (closest to 50%, ties Playoff, Bye, Loser)',
-    /Chance shows whichever of Bye %/.test(fresh.note) && /closest to 50%/.test(fresh.note) &&
-    /ties going Playoff, then Bye, then Loser/.test(fresh.note), fresh.note.slice(0, 900));
+  ok('the note explains the Chance column (Bye at 90%+, Loser at 10% or less, else Playoff)',
+    /Chance shows Bye %/.test(fresh.note) && /90% or more/.test(fresh.note) &&
+    /Loser % for one at 10% or less, and Playoff % otherwise/.test(fresh.note), fresh.note.slice(0, 900));
 
   // ---- A PERCENTAGE IS NOT POINTS: the flat-column guard ------------------
   //

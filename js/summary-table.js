@@ -74,16 +74,19 @@ export const PCT_MIN_SPREAD = 0.005;
  * BYE will be shown. if you have 5% playoff and 29% loser, loser will be
  * shown.").
  *
- * Read as: the most relevant of the three is the LEAST SETTLED one, the one
- * closest to 50%. 98% playoffs is nearly settled, so the bye is the live
- * question; 5% playoffs is nearly settled, so 29% loser is. Ties go Playoff,
- * then Bye, then Loser (`PICK_ORDER`). A figure that is missing (null: no
- * bracket, or a bracket with no byes) is skipped. Once every figure there is
- * is settled (0 or 100%, a finished regular season or a clinched spot), the
- * OUTCOME is shown instead: Bye if they got one, else Playoff if they made it,
- * else Loser if they finished last, else Playoff (0%).
+ * The rule is a threshold on Playoff %: at 90% or more, show Bye; at 10% or
+ * less, show Loser; otherwise show Playoff (`PICK_HIGH` / `PICK_LOW`). (A
+ * closest-to-50% rule was tried first and dropped the same day: it showed
+ * PLAYOFF for 94% playoffs with a 6% bye, against Tim's 98% → BYE example.)
+ * A missing Bye or Loser figure (null: a bracket with no byes, say) falls back
+ * to Playoff; with no Playoff % at all (no bracket) Loser % is the only figure.
+ * Once every figure there is is settled (0 or 100%: a finished regular season
+ * or a clinched spot), the OUTCOME is shown instead: Bye if they got one, else
+ * Playoff if they made it, else Loser if they finished last, else Playoff (0%).
  */
 export const PICK_ORDER = ['playoffs', 'bye', 'last'];
+export const PICK_HIGH = 0.9;
+export const PICK_LOW = 0.1;
 export const PICK_KINDS = {
   playoffs: { tag: 'PLAYOFF', label: 'Playoff %', counted: 'Seasons in the playoffs' },
   bye: { tag: 'BYE', label: 'Bye %', counted: 'Seasons with a bye' },
@@ -103,13 +106,17 @@ export function relevantChance(r) {
     const k = ['bye', 'playoffs', 'last'].find((x) => have.includes(x) && fig[x] >= 1) ?? have[0];
     return { kind: k, p: fig[k] };
   }
-  let best = null;
-  for (const k of have) {
-    const d = Math.abs(fig[k] - 0.5);
-    // Strictly closer wins; a tie (to float noise) keeps the earlier kind.
-    if (best === null || d < best.d - 1e-12) best = { k, d };
+  const has = (k) => have.includes(k);
+  if (!has('playoffs')) {
+    // No bracket: nothing to threshold on, so whichever figure there is.
+    const k = has('last') ? 'last' : 'bye';
+    return { kind: k, p: fig[k] };
   }
-  return { kind: best.k, p: fig[best.k] };
+  const po = fig.playoffs;
+  const k = po >= PICK_HIGH && has('bye') ? 'bye'
+    : po <= PICK_LOW && has('last') ? 'last'
+      : 'playoffs';
+  return { kind: k, p: fig[k] };
 }
 
 /**

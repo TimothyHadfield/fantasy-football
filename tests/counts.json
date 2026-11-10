@@ -168,10 +168,10 @@
       "scenarios": 34
     },
     "test-summary.mjs": {
-      "assertions": 666
+      "assertions": 669
     },
     "summary-pick-check.mjs": {
-      "assertions": 40
+      "assertions": 44
     },
     "touch-check.mjs": {
       "assertions": 353,

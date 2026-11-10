@@ -9,9 +9,9 @@
 // for playoffs, BYE will be shown. if you have 5% playoff and 29% loser, loser
 // will be shown."
 //
-// Rule (js/summary-table.js `relevantChance`): the least settled figure, the
-// one closest to 50%; ties Playoff, then Bye, then Loser; a missing figure is
-// skipped; once every figure is settled (0/100%), the outcome is shown.
+// Rule (js/summary-table.js `relevantChance`): Playoff % ≥ 90 -> Bye; ≤ 10 ->
+// Loser; otherwise Playoff; a missing Bye/Loser falls back to Playoff; once
+// every figure is settled (0/100%), the outcome is shown.
 //
 // Part 2 draws rows with `summaryRowsHtml(..., { pick: true })` and checks the
 // cells: column order, the tag, data-pick, and that `pick` off leaves Loser %.
@@ -36,24 +36,27 @@ ok('and PICK_KINDS with a tag per kind',
 const pick = (r) => (typeof relevantChance === 'function' ? relevantChance(r) : undefined);
 const kind = (r) => pick(r)?.kind ?? null;
 
-// ---- Tim's two examples ------------------------------------------------------
+// ---- Tim's two examples (rule: Playoff ≥ 90% -> Bye, ≤ 10% -> Loser, else Playoff)
 eq(kind({ playoffs: 0.98, bye: 0.61, last: 0 }), 'bye', "Tim's example 1: 98% playoffs shows BYE");
-eq(kind({ playoffs: 0.98, bye: 0.20, last: 0.001 }), 'bye', '98% playoffs with a long-shot bye still shows BYE');
+eq(kind({ playoffs: 0.98, bye: 0.02, last: 0.001 }), 'bye', '98% playoffs with a 2% bye still shows BYE');
+eq(pick({ playoffs: 0.98, bye: 0.02, last: 0.001 })?.p, 0.02, 'and the figure shown is the bye chance itself');
+eq(kind({ playoffs: 0.94, bye: 0.06, last: 0 }), 'bye', '94% playoffs with a 6% bye shows BYE (the demo Nolan case)');
 eq(kind({ playoffs: 0.05, bye: 0.001, last: 0.29 }), 'last', "Tim's example 2: 5% playoffs and 29% loser shows LOSER");
 eq(pick({ playoffs: 0.05, bye: 0.001, last: 0.29 })?.p, 0.29, 'and the figure shown is the loser chance itself');
+eq(kind({ playoffs: 0.05, bye: 0, last: 0.01 }), 'last', '5% playoffs with only a 1% loser still shows LOSER');
 eq(kind({ playoffs: 0.55, bye: 0.12, last: 0.02 }), 'playoffs', 'a bubble team shows PLAYOFF');
-eq(kind({ playoffs: 0.30, bye: 0.01, last: 0.10 }), 'playoffs', '30% playoffs beats 10% loser (closer to 50)');
+eq(kind({ playoffs: 0.30, bye: 0.01, last: 0.45 }), 'playoffs', '30% playoffs shows PLAYOFF however high the loser chance');
 
-// ---- ties: Playoff, then Bye, then Loser --------------------------------------
-eq(kind({ playoffs: 0.40, bye: 0.60, last: 0.05 }), 'playoffs', 'tie Playoff vs Bye (both 10 from 50) -> Playoff');
-eq(kind({ playoffs: 0.90, bye: 0.40, last: 0.60 }), 'bye', 'tie Bye vs Loser -> Bye');
-eq(kind({ playoffs: 0.30, bye: 0.01, last: 0.70 }), 'playoffs', 'tie Playoff vs Loser -> Playoff');
-eq(kind({ playoffs: 0.5, bye: 0.5, last: 0.5 }), 'playoffs', 'three-way tie -> Playoff');
-// Float noise must not break a tie: 0.1 + 0.2 style.
-eq(kind({ playoffs: 0.7, bye: 0.1 + 0.2, last: 0 }), 'playoffs', 'a tie off by float noise still goes to Playoff');
+// ---- the 90 / 10 edges ------------------------------------------------------------
+eq(kind({ playoffs: 0.90, bye: 0.40, last: 0 }), 'bye', 'exactly 90% playoffs -> BYE');
+eq(kind({ playoffs: 0.8999, bye: 0.40, last: 0 }), 'playoffs', 'just under 90% -> PLAYOFF');
+eq(kind({ playoffs: 0.10, bye: 0, last: 0.2 }), 'last', 'exactly 10% playoffs -> LOSER');
+eq(kind({ playoffs: 0.1001, bye: 0, last: 0.2 }), 'playoffs', 'just over 10% -> PLAYOFF');
+eq(kind({ playoffs: 0.995, bye: 0.5, last: 0 }), 'bye', '99.5% (prints 100%) -> BYE');
 
-// ---- missing figures are skipped ------------------------------------------------
+// ---- missing figures fall back to Playoff ---------------------------------------------
 eq(kind({ playoffs: 0.98, bye: null, last: 0 }), 'playoffs', 'no Bye % (no byes): 98% playoffs shows PLAYOFF');
+eq(kind({ playoffs: 0.04, bye: 0, last: null }), 'playoffs', 'no Loser %: 4% playoffs shows PLAYOFF');
 eq(kind({ playoffs: null, bye: null, last: 0.3 }), 'last', 'no bracket: only Loser % is left');
 eq(kind({ playoffs: 0.95, last: 0.01 }), 'playoffs', 'an absent key counts as missing');
 eq(kind({ playoffs: NaN, bye: undefined, last: 0.2 }), 'last', 'NaN and undefined count as missing');
@@ -70,7 +73,7 @@ eq(out?.kind, 'playoffs', 'season over, missed out but not last -> PLAYOFF');
 eq(out?.p, 0, 'at 0%');
 eq(kind({ playoffs: null, bye: null, last: 1 }), 'last', 'no bracket, finished last -> LOSER');
 eq(kind({ playoffs: null, bye: null, last: 0 }), 'last', 'no bracket, not last -> LOSER 0% (the only figure)');
-// Not all settled: the closest-to-50 rule still runs.
+// Not all settled: the 90/10 rule still runs.
 eq(kind({ playoffs: 1, bye: 0.97, last: 0 }), 'bye', 'clinched playoffs, bye nearly sure -> BYE');
 
 // ---- the rows ------------------------------------------------------------------

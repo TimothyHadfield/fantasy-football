@@ -168,7 +168,7 @@ const SUITES = [
   ['draft-review-check.mjs', 'the Draft page’s "Our draft": the board, a team’s steals and misses, the previews, and what it asks of ESPN — nothing on the phone’s copy'],
   ['draft-whatif-check.mjs', 'the Draft page’s what if: a pick clicked, the men after it, the swap and the board’s slide, the box under the board, Undo and Back to normal'],
   ['test-summary.mjs', 'the weekly summary page: LUCK, title %, the Chance column, and the image that gets sent'],
-  ['summary-pick-check.mjs', 'the Summary Chance column: the least settled of Bye / Playoff / Loser %, ties, missing figures, the outcome once settled'],
+  ['summary-pick-check.mjs', 'the Summary Chance column: Bye at 90%+ playoffs, Loser at 10% or less, else Playoff; the edges, missing figures, the outcome once settled'],
   ['test-week-summary.mjs', 'the week recap: only finished weeks offered, missed points, booms and busts, new injuries and how long, the standings move'],
   ['recap-cloud-check.mjs', 'the week recap and the injury report on Home, as the phone’s synced copy serves them: every block filled, Est. return and Up while out, nothing asked of ESPN'],
   ['recap-previews-check.mjs', 'the week recap’s previews: every player opens his player card, every manager and score a stat card; hover beside, tap = sheet'],
