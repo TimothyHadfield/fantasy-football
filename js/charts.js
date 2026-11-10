@@ -1267,11 +1267,12 @@ export function leastSquares(points) {
 }
 
 /**
- * How far the fitted line sits from the perfect one, y = x, in the units of
- * the axes (points): the mean of |(slope * x + intercept) - x| taken at every
- * point's x. It is averaged over the POINTS, not along the axis, so it answers
- * "for the projections that were actually made, how far off perfect was the
- * line on average". 0 means the two lines coincide wherever there is a dot.
+ * How far the fitted line's SLOPE is from the perfect line's, 1: |slope - 1|.
+ * Tim, 2026-11-10: "the "off perfect" should be a measure of slope, not any y
+ * axis change or whatnot. Basically what is the slope of the graph, and how far
+ * away is that from 1". A shift up or down (the intercept) does not count.
+ * 0 means the solid line runs parallel to y = x. (Until 11-10 this was the mean
+ * up-and-down gap to y = x, in points.)
  *
  * @param {Array} points  [{ x, y }] - the same points the line was fitted to
  * @param {Object|null} [fit]  a leastSquares() result; fitted here if omitted
@@ -1280,14 +1281,8 @@ export function leastSquares(points) {
 export function offPerfect(points, fit) {
   if (!Array.isArray(points)) return null;
   const f = fit === undefined ? leastSquares(points) : fit;
-  if (!f || !isNum(f.slope) || !isNum(f.intercept)) return null;
-  let n = 0, sum = 0;
-  for (const p of points) {
-    if (!p || !isNum(p.x) || !isNum(p.y)) continue;
-    sum += Math.abs(f.slope * p.x + f.intercept - p.x);
-    n++;
-  }
-  return n ? sum / n : null;
+  if (!f || !isNum(f.slope)) return null;
+  return Math.abs(f.slope - 1);
 }
 
 /** The part of y = slope*x + intercept that lies inside the square [lo, hi]². */

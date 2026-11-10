@@ -181,3 +181,9 @@ Older sessions (before 2026-09-21) are recorded as dated sections in `docs/archi
 - **Verified how:** new tests/tr-them-check.mjs 60/60 (30 fail on 36c3f5a). Updated word/position checks, all green: tr-test 1223/1223 (twoGoals, row shape, previews; their chance re-derived from the engine), tr-yes 46, tr-thisweek 69 (69 on old too), test-notify-trades 76, an-test 2706, wv-test 1290, touch 359, taken 448, cmp 134, pages-done 181, tr-fit 26, test-accept 35, test-trade-cards 82, test-ask-ai 39, test-heat 226, hot 51, test-outlook-mark 78, test-floor-ros 26; text-audit 12/12. test-trade-progress 41/44 = same 3 fails on old code. phone-view WebKit 393 + desktop on the demo league: "You +4% 6% → 10% / Them −7% 28% → 21%", no console errors, no overflow, "Them" label fits.
 - **Open:** Tim's call on the "Them" wording/card/pop-up text and on dropping the other-goal preview; not seen on 1241838 live (finder did not finish ranking within 4 min headless).
 - **Merge (manager):** merged onto main after value-change; 3 code conflicts were word-only (kept the Change column/notes, in they/them); value-change.js strings + its test switched to they/them.
+
+## 2026-11-10 — "the "off perfect" should be a measure of slope" (manager, on main)
+- **Asked:** Off perfect on the projected-vs-actual graphs = how far the graph's slope is from 1, not any up/down gap.
+- **Built:** charts.js `offPerfect` = |slope − 1|; stats-page tile 2 places, preview "Slope s, d from 1", note; tests scatter-check 230, stats-fit 155.
+- **Verified how:** scatter-check 6 fail with the old charts.js; both suites + text-audit 12 green; phone-view WebKit 393 on 1241838: teams 0.56 (slope 0.44, matches the drawn line), players 0.02, no overflow.
+- **Open:** wording of the preview/note is Claude's.

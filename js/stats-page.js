@@ -1863,13 +1863,15 @@ function scheduleSpec() {
 /** The two numbers over each scatter, in one plain line each. */
 const FIT_LINES = {
   R2: ['R²', 'How closely scores follow projections: 1 is exactly, 0 is not at all.'],
-  Gap: ['Off perfect', 'How far the scores sit from their projections, in points. 0 is spot on.'],
+  Gap: ['Off perfect', 'How far the solid line’s slope is from 1, the slope of a perfect projection. 0 is spot on.'],
 };
 function fitSpec(el) {
   const v = el.querySelector('.v');
   const kind = v && /R2$/.test(v.id) ? 'R2' : 'Gap';
   if (!v || v.textContent.trim() === '—') return null;
-  return { title: FIT_LINES[kind][0], sub: v.textContent.trim(), foot: FIT_LINES[kind][1] };
+  const sub = kind === 'Gap' && v.dataset.slope
+    ? `Slope ${v.dataset.slope}, ${v.textContent.trim()} from 1` : v.textContent.trim();
+  return { title: FIT_LINES[kind][0], sub, foot: FIT_LINES[kind][1] };
 }
 
 /** One bar of Score distribution: the scores in it, highest first. */
@@ -2307,9 +2309,9 @@ const FIT_PERFECT_ZOOMED = `${FIT_PERFECT_LINE} Each axis is fitted to its own n
 const FIT_NUMBERS =
   '<strong>R²</strong> = how closely the dots follow the solid line: r squared, the share of ' +
   'the differences in score that line accounts for. 1 = every dot on it, 0 = no relation. ' +
-  '<strong>Off perfect</strong> = how far the solid line sits from the dotted one: the ' +
-  'up-and-down gap between the two, in points, averaged over every dot&rsquo;s projection. ' +
-  '0 = the lines coincide. Both use the dots the solid line is fitted to.';
+  '<strong>Off perfect</strong> = how far the solid line&rsquo;s slope is from 1, the ' +
+  'dotted line&rsquo;s slope: |slope &minus; 1|. A shift up or down does not count. ' +
+  '0 = the lines are parallel. Both use the dots the solid line is fitted to.';
 
 const FIT_GROUPS =
   '<strong>Colour by</strong> colours the dots by group. Press a group under the graph to ' +
@@ -2412,7 +2414,10 @@ function paintFitStats(prefix, svg) {
   const r2 = $(`${prefix}R2`);
   const off = $(`${prefix}Gap`);
   if (r2) r2.textContent = fit && Number.isFinite(fit.r2) ? fit.r2.toFixed(2) : '—';
-  if (off) off.textContent = Number.isFinite(gap) ? `${gap.toFixed(1)} pts` : '—';
+  if (off) {
+    off.textContent = Number.isFinite(gap) ? gap.toFixed(2) : '—';
+    off.dataset.slope = Number.isFinite(gap) && fit && Number.isFinite(fit.slope) ? fit.slope.toFixed(2) : '';
+  }
 }
 
 function paintFitBy() {

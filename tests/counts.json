@@ -274,10 +274,10 @@
       "assertions": 44
     },
     "scatter-check.mjs": {
-      "assertions": 229
+      "assertions": 230
     },
     "stats-fit.mjs": {
-      "assertions": 153
+      "assertions": 155
     },
     "roster-link-check.mjs": {
       "assertions": 107,

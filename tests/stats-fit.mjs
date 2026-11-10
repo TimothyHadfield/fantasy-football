@@ -289,7 +289,8 @@ const onScreen = (el) => {
 const prefsNow = () => JSON.parse(localStorage.getItem('ff.prefs') || '{}');
 const stat = (id) => (($(id) || {}).textContent || '').trim();
 const r2Of = (pairs) => leastSquares(pairs).r2.toFixed(2);
-const gapOf = (pairs) => `${offPerfect(pairs).toFixed(1)} pts`;
+// Off perfect = |slope − 1| (Tim, 2026-11-10), to two places.
+const gapOf = (pairs) => Math.abs(leastSquares(pairs).slope - 1).toFixed(2);
 const positionOf = new Map();
 const ownerOf = new Map();
 for (const w of weeks) {
@@ -312,7 +313,8 @@ for (const w of weeks) {
   for (const id of ['fitTeamsNote', 'fitPlayersNote']) {
     const note = $(id).textContent;
     ok(/R²/.test(note) && /Off perfect/.test(note), `${id} says what the two numbers are (rule 7)`);
-    ok(/0 = the lines coincide/.test(note), `${id} says what 0 off perfect means`);
+    ok(/0 = the lines are parallel/.test(note), `${id} says what 0 off perfect means`);
+    ok(/slope is from 1/.test(note) && !/in points/.test(note), `${id} says Off perfect is the slope's distance from 1`);
   }
 
   // The control: None by default, and None is the graph as it was.

@@ -135,24 +135,23 @@ const open = (c) => { const t = tipOf(c); return !!t && !t.hasAttribute('hidden'
 
 // ============================================================ offPerfect
 {
-  // BY HAND. The four points above fit actual = 1.5 + 0.8 × projected. The gap
-  // to y = x at each point's x is |1.5 + 0.8x − x| = |1.5 − 0.2x|:
-  //   x = 1: 1.3   x = 2: 1.1   x = 3: 0.9   x = 4: 0.7      mean 4.0 / 4 = 1.0
+  // BY HAND. Tim, 2026-11-10: Off perfect = how far the line's SLOPE is from 1.
+  // The four points above fit actual = 1.5 + 0.8 × projected: |0.8 − 1| = 0.2.
   const four = [{ x: 1, y: 2 }, { x: 2, y: 3 }, { x: 3, y: 5 }, { x: 4, y: 4 }];
   eq(typeof offPerfect, 'function', 'offPerfect is exported');
-  close(offPerfect(four), 1.0, 1e-12, 'the mean gap to the perfect line, by hand');
-  close(offPerfect(four, leastSquares(four)), 1.0, 1e-12, 'the same when handed the fit');
+  close(offPerfect(four), 0.2, 1e-12, 'the slope 0.8 is 0.2 from 1, by hand');
+  close(offPerfect(four, leastSquares(four)), 0.2, 1e-12, 'the same when handed the fit');
   close(offPerfect([{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 4, y: 4 }]), 0, 1e-12,
     'a fit that IS y = x is 0 off perfect');
-  // A line that CROSSES y = x: on y = 10 + 0.5x the gap is |10 − 0.5x|, which
-  // is +10 at x = 0, −10 at x = 40 and −40 at x = 100. As distances that is
-  // (10 + 10 + 40) / 3 = 20; signed they would cancel to −13.3, and a line
-  // through the middle of the perfect one would read as "close".
-  close(offPerfect([{ x: 0, y: 10 }, { x: 40, y: 30 }, { x: 100, y: 60 }]), 20, 1e-9,
-    'gaps either side of the perfect line add up, they do not cancel');
-  // Averaged over the DOTS: two more dots at x = 0 pull it to (10×3 + 10 + 40) / 5.
-  close(offPerfect([{ x: 0, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 10 }, { x: 40, y: 30 }, { x: 100, y: 60 }]),
-    16, 1e-9, 'and it is averaged over the dots, not along the axis');
+  // A shift up or down does NOT count ("not any y axis change"): y = x + 20 is
+  // parallel to the perfect line, so 0.
+  close(offPerfect([{ x: 0, y: 20 }, { x: 40, y: 60 }, { x: 100, y: 120 }]), 0, 1e-9,
+    'a line shifted up but parallel to y = x is 0 off perfect');
+  // Too steep and too flat both count as distance: slopes 1.5 and 0.5 are both 0.5.
+  close(offPerfect([{ x: 0, y: 10 }, { x: 40, y: 30 }, { x: 100, y: 60 }]), 0.5, 1e-9,
+    'slope 0.5 is 0.5 off');
+  close(offPerfect([{ x: 0, y: 0 }, { x: 40, y: 60 }, { x: 100, y: 150 }]), 0.5, 1e-9,
+    'and slope 1.5 is 0.5 off too');
   eq(offPerfect([]), null, 'no points: null, never NaN');
   eq(offPerfect([{ x: 3, y: 4 }]), null, 'one point: no line, so null');
   eq(offPerfect([{ x: 3, y: 1 }, { x: 3, y: 9 }]), null, 'no slope: null');
@@ -562,8 +561,8 @@ const xy = (el) => ({ x: num(el, 'cx'), y: num(el, 'cy') });
   eq(chips(c).filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.getAttribute('data-group')).join(','),
     'QB', 'one group is focused at a time');
   close(c.querySelector('svg').__ffFit.slope, 2, 1e-12, 'and the line follows it (QB sit on y = 2x)');
-  // (20,40) and (40,80) on y = 2x: gap to y = x is x itself, mean 30.
-  close(c.querySelector('svg').__ffGap, 30, 1e-9, 'as does the gap to perfect, by hand');
+  // (20,40) and (40,80) on y = 2x: slope 2 is 1 from 1.
+  close(c.querySelector('svg').__ffGap, 1, 1e-9, 'as does the slope off perfect, by hand');
 
   // A focus the caller passes in is honoured; one that names no group is not.
   const pre = draw(host(), { points: GPOINTS, groups: GROUPS, focus: 'WR' });
